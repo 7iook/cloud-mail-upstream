@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:test';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import shareAuthService from '../src/service/share-auth-service';
 import shareResult from '../src/model/share-result';
 import { isDel } from '../src/const/entity-const';
@@ -13,6 +13,7 @@ const ACCOUNT_ID = 800042;
 const MAILBOX = 't08-share@example.com';
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 function authEnv(overrides = {}) {
 	return {
@@ -25,7 +26,7 @@ function authEnv(overrides = {}) {
 		SHARE_SESSION_SIGNING_KID: 'v2',
 		SHARE_SESSION_SIGNING_KEY_PREV: SIGN_V1,
 		SHARE_SESSION_SIGNING_KID_PREV: 'v1',
-		SHARE_SESSION_TTL: '86400',
+		SHARE_SESSION_TTL: '900',
 		SHARE_ENABLED: '1',
 		...overrides
 	};
@@ -71,6 +72,15 @@ function randomSec() {
 	const bytes = new Uint8Array(32);
 	crypto.getRandomValues(bytes);
 	return btoa(String.fromCharCode(...bytes)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function decodeTokenPayload(token) {
+	const parts = String(token).split('.');
+	let padded = parts[2].replace(/-/g, '+').replace(/_/g, '/');
+	while (padded.length % 4) {
+		padded += '=';
+	}
+	return JSON.parse(decoder.decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0))));
 }
 
 const seededLids = [];
@@ -289,6 +299,41 @@ describe('shareAuthService', () => {
 		} finally {
 			console.log = log;
 			console.error = error;
+		}
+	});
+
+	it('bounds the default session to 15 minutes and re-establishes with lid and sec after expiry (AC-VISIT-11, AC-VISIT-12, AC-LIFE-01)', async () => {
+		await ensureAccount();
+		const lid = randomLid('ttl-reest');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const c = ctx({ SHARE_SESSION_TTL: '' });
+		const t0 = 1_700_000_000_000;
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+		try {
+			const first = await shareAuthService.establishSession(c, lid, sec);
+			const payload = decodeTokenPayload(first.sessionToken);
+			expect(payload.exp - payload.iat).toBe(900);
+			expect(payload.lid).toBe(lid);
+
+			const live = await shareAuthService.resolveSession(c, first.sessionToken);
+			expect(live.shareId).toBe(shareId);
+
+			nowSpy.mockReturnValue(t0 + 900_000 + 1_000);
+			const expired = await catchFail(shareAuthService.resolveSession(c, first.sessionToken));
+			expect(expired).toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+
+			const second = await shareAuthService.establishSession(c, lid, sec);
+			expect(second.sessionToken).toEqual(expect.any(String));
+			expect(second.sessionToken).not.toBe(first.sessionToken);
+			const restored = await shareAuthService.resolveSession(c, second.sessionToken);
+			expect(restored.shareId).toBe(shareId);
+			expect(restored.effectiveStatus).toBe('ACTIVE');
+
+			const stillDead = await catchFail(shareAuthService.resolveSession(c, first.sessionToken));
+			expect(stillDead).toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+		} finally {
+			nowSpy.mockRestore();
 		}
 	});
 });
