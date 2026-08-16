@@ -107,6 +107,7 @@ import {getTextWidth} from "@/utils/text.js";
 import dayjs from "dayjs";
 import {tzDayjs} from "@/utils/day.js";
 import {useI18n} from "vue-i18n";
+import {useCopyWithFallback} from "@/composables/useCopyWithFallback.js"
 
 defineOptions({
   name: 'reg-key'
@@ -119,6 +120,7 @@ const params = reactive({
 })
 
 const {t} = useI18n()
+const {copy} = useCopyWithFallback()
 const roleList = reactive([])
 const addLoading = ref(false)
 const showAdd = ref(false)
@@ -260,16 +262,18 @@ function getList(showLoading = false) {
 
 async function copyCode(code) {
   try {
-    await navigator.clipboard.writeText(code);
-    ElMessage({
-      message: t('copySuccessMsg'),
-      type: 'success',
-      plain: true,
-    })
+    const result = await copy(code)
+    if (result.copied) {
+      ElMessage({
+        message: t('copySuccessMsg'),
+        type: 'success',
+        plain: true,
+      })
+    }
   } catch (err) {
-    console.error('复制失败:', err);
+    console.error(`${t('copyFailMsg')}:`, err);
     ElMessage({
-      message: '复制失败',
+      message: t('copyFailMsg'),
       type: 'error',
       plain: true,
     })

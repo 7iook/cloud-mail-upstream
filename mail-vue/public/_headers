@@ -4,3 +4,14 @@
   Cache-Control: public, max-age=604800, immutable
 /image/*
   Cache-Control: public, max-age=604800, immutable
+
+# /s/<lid> share shell (AC-LEAK-02 / AC-LEAK-03 / AC-LEAK-04).
+# Splat matches the request path, including SPA fallback to index.html.
+# http(s) on img/style/font/media: srcdoc iframes inherit this policy
+# (CSP3 7.8). Design's img-src 'self' would block remote email images.
+# frame-src 'none' still allows srcdoc (no src fetch).
+/s/*
+  Cache-Control: no-store
+  Referrer-Policy: no-referrer
+  X-Robots-Tag: noindex, nofollow
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' http: https:; img-src 'self' data: blob: http: https:; font-src 'self' data: http: https:; media-src data: blob: http: https:; connect-src 'self'; frame-src 'none'; object-src 'none'

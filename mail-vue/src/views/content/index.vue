@@ -35,8 +35,12 @@
             <el-alert v-if="email.status === 5" :closable="false" :title="$t('delayed')" class="email-msg" type="warning" show-icon />
           </div>
           <el-scrollbar class="htm-scrollbar" :class="email.attList.length === 0 ? 'bottom-distance' : ''">
-            <ShadowHtml class="shadow-html" :html="formatImage(email.content)" v-if="email.content" />
-            <pre v-else class="email-text" >{{email.text}}</pre>
+            <SafeMailRenderer
+              class="safe-mail-body"
+              default-mode="html"
+              :html="formatImage(email.content)"
+              :text="email.text || ''"
+            />
           </el-scrollbar>
           <div class="att" v-if="email.attList.length > 0">
             <div class="att-title">
@@ -74,7 +78,7 @@
   </div>
 </template>
 <script setup>
-import ShadowHtml from '@/components/shadow-html/index.vue'
+import SafeMailRenderer from '@/components/safe-mail/index.vue'
 import {reactive, ref, watch, onMounted, onUnmounted} from "vue";
 import {useRouter} from 'vue-router'
 import {ElMessage, ElMessageBox} from 'element-plus'
@@ -402,22 +406,9 @@ const handleDelete = () => {
   }
 }
 
-.shadow-html::after  {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: var(--message-block-color); /* 半透明黑色蒙层 */
-  pointer-events: none; /* 不影响点击 */
-}
-
-.email-text {
-  font-family: inherit;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 0;
+.safe-mail-body {
+  width: 100%;
+  min-width: 0;
 }
 
 .bottom-distance {

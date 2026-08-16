@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SafeMailRenderer harness</title>
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    .row { margin: 16px 0; }
+    iframe { width: 100%; height: 180px; border: 1px solid #ccc; }
+    #long { height: 220px; }
+    .pass { color: #0a0; }
+    .fail { color: #c00; }
+    pre { background: #f6f6f6; padding: 8px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>SafeMailRenderer sandbox harness</h1>
+  <p>Throwaway page for T-17. Not wired into the app.</p>
+  <div id="results">running...</div>
+
+  <div class="row">
+    <h2>1. script tag</h2>
+    <iframe id="script-frame"></iframe>
+  </div>
+  <div class="row">
+    <h2>2. onerror / onload</h2>
+    <iframe id="handler-frame"></iframe>
+  </div>
+  <div class="row">
+    <h2>3. parent localStorage</h2>
+    <iframe id="storage-frame"></iframe>
+  </div>
+  <div class="row">
+    <h2>4. long mail inner scroll</h2>
+    <div id="long-wrap" style="border: 2px dashed #888; height: 240px; overflow: hidden;">
+      <iframe id="long"></iframe>
+    </div>
+  </div>
+
+  <script type="module">
+    import {
+      IFRAME_SANDBOX,
+      buildSrcdoc,
+      isSafeSandbox
+    } from './srcdoc.js'
+
+    window.__scriptRan = false
+    window.__onerrorRan = false
+    window.__onloadRan = false
+    window.__storageWrote = false
+    localStorage.setItem('safe-mail-probe', 'parent-only')
+    localStorage.removeItem('pwn')
+
+    const SANDBOX = IFRAME_SANDBOX
+
+    function mount(id, html) {
+      const frame = document.getElementById(id)
+      frame.setAttribute('sandbox', SANDBOX)
+      frame.srcdoc = buildSrcdoc(html)
+      return frame
+    }
+
+    mount('script-frame', '<script>window.top.__scriptRan=true;parent.__scriptRan=true<\/script><p>script payload</p>')
+    mount(
+      'handler-frame',
+      '<img src="https://invalid.invalid/x.png" onerror="window.top.__onerrorRan=true" onload="window.top.__onloadRan=true"><p>handler payload</p>'
+    )
+    mount(
+      'storage-frame',
+      '<script>try{parent.localStorage.setItem("pwn","1");parent.__storageWrote=true}catch(e){}<\/script><p>storage payload</p>'
+    )
+
+    const longHtml = Array.from({ length: 80 }, (_, i) => `<p>Line ${i + 1} of a long email.</p>`).join('')
+    const longFrame = mount('long', longHtml)
+
+    setTimeout(() => {
+      const probe = localStorage.getItem('safe-mail-probe')
+      const pwn = localStorage.getItem('pwn')
+      let frameStorage = 'blocked-or-threw'
+      try {
+        frameStorage = longFrame.contentWindow.localStorage.getItem('safe-mail-probe')
+      } catch (err) {
+        frameStorage = 'threw:' + err.name
+      }
+      let frameDoc = null
+      try {
+        frameDoc = longFrame.contentDocument
+      } catch (err) {
+        frameDoc = 'threw:' + err.name
+      }
+
+      const longRect = longFrame.getBoundingClientRect()
+      const wrapRect = document.getElementById('long-wrap').getBoundingClientRect()
+      const pageGrew = document.documentElement.scrollHeight > 4000
+
+      const rows = [
+        ['sandbox omits scripts/same-origin', isSafeSandbox(SANDBOX) && !SANDBOX.includes('allow-scripts')],
+        ['script did not set window.__scriptRan', window.__scriptRan === false],
+        ['onerror did not set window.__onerrorRan', window.__onerrorRan === false],
+        ['onload did not set window.__onloadRan', window.__onloadRan === false],
+        ['parent localStorage probe unchanged', probe === 'parent-only' && !pwn && window.__storageWrote === false],
+        ['frame cannot read parent localStorage', frameStorage !== 'parent-only'],
+        ['frame contentDocument is not readable', frameDoc == null || String(frameDoc).startsWith('threw')],
+        ['long frame stays inside 240px wrap', longRect.height <= wrapRect.height + 2],
+        ['page layout did not grow to 4000px', pageGrew === false]
+      ]
+
+      const html = rows.map(([name, ok]) => {
+        return `<div class="${ok ? 'pass' : 'fail'}">${ok ? 'PASS' : 'FAIL'} ${name}</div>`
+      }).join('')
+      document.getElementById('results').innerHTML = html + `<pre>${JSON.stringify({
+        sandbox: SANDBOX,
+        scriptRan: window.__scriptRan,
+        onerrorRan: window.__onerrorRan,
+        onloadRan: window.__onloadRan,
+        probe,
+        pwn,
+        frameStorage,
+        frameDoc: String(frameDoc),
+        longHeight: longRect.height,
+        wrapHeight: wrapRect.height,
+        pageScrollHeight: document.documentElement.scrollHeight
+      }, null, 2)}</pre>`
+    }, 1200)
+  </script>
+</body>
+</html>

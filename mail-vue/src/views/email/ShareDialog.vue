@@ -1,0 +1,291 @@
+<template>
+  <el-dialog
+      :model-value="modelValue"
+      :title="t('shareDialogTitle')"
+      width="680px"
+      @update:model-value="onOpenChange"
+  >
+    <p class="share-warning" data-test="create-warning">{{ t('shareCreateWarning') }}</p>
+    <div class="share-form">
+      <el-input v-model="form.name" :placeholder="t('shareNamePlaceholder')" maxlength="64"/>
+      <el-input v-model="form.remark" :placeholder="t('shareRemarkPlaceholder')" maxlength="200"/>
+      <el-select v-model="form.durationSeconds">
+        <el-option
+            v-for="item in durationOptions"
+            :key="item.value"
+            :label="t(item.labelKey)"
+            :value="item.value"
+        />
+      </el-select>
+      <el-button type="primary" data-test="create-share" :disabled="creating" @click="submitCreate">
+        {{ t('shareCreate') }}
+      </el-button>
+    </div>
+
+    <div v-if="created" class="share-created">
+      <p data-test="secret-once">{{ t('shareSecretOnce') }}</p>
+      <p v-if="replayWithoutSecret" data-test="share-replay">{{ t('shareReplayNoSecret') }}</p>
+      <div v-if="createdShareUrl" class="share-url-row">
+        <input
+            ref="selectableRef"
+            data-test="share-url"
+            class="share-url-input"
+            type="text"
+            readonly
+            :value="createdShareUrl"
+        />
+        <el-button data-test="copy-share-url" @click="copyCreatedLink">{{ t('shareCopyLink') }}</el-button>
+      </div>
+    </div>
+
+    <p v-if="listError" class="share-list-error">{{ t('shareListError') }}</p>
+    <div v-else-if="shares.length === 0" class="share-empty">{{ t('shareEmpty') }}</div>
+    <div v-else class="share-list">
+      <div
+          v-for="row in shares"
+          :key="row.shareId"
+          class="share-row"
+          data-test="share-row"
+          :data-status="row.effectiveStatus"
+      >
+        <div class="share-row-main">
+          <div class="share-row-title">{{ row.name || row.mailbox || row.shareId }}</div>
+          <div class="share-row-meta">
+            <span>{{ t('shareMailbox') }}: {{ row.mailbox }}</span>
+            <span data-test="share-status">{{ statusLabel(row.effectiveStatus) }}</span>
+            <span>{{ t('shareCreatedAt') }}: {{ row.createTime }}</span>
+            <span>{{ t('shareExpiresAt') }}: {{ row.expiresAt }}</span>
+          </div>
+          <div class="share-row-access">
+            <span data-test="access-label">{{ t('shareAccessCount') }}</span>
+            <span>{{ row.accessCount }}</span>
+            <span>{{ t('shareLastAccess') }}: {{ row.lastAccessAt || '-' }}</span>
+            <span class="share-access-hint">{{ t('shareAccessHint') }}</span>
+          </div>
+        </div>
+        <el-button
+            v-if="row.effectiveStatus !== 'REVOKED'"
+            data-test="revoke-share"
+            @click="askRevoke(row)"
+        >
+          {{ t('shareRevoke') }}
+        </el-button>
+      </div>
+    </div>
+  </el-dialog>
+</template>
+<script setup>
+import { computed, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useCopyWithFallback } from '@/composables/useCopyWithFallback.js'
+import { createMailShare, listMailShares, newIdempotencyKey, revokeMailShare } from '@/request/mail-share.js'
+import { buildShareUrl } from './build-share-url.js'
+
+const props = defineProps({
+  modelValue: { type: Boolean, default: false },
+  accountId: { type: Number, default: 0 }
+})
+const emit = defineEmits(['update:modelValue', 'changed'])
+const { t } = useI18n()
+const { copy, selectableRef } = useCopyWithFallback()
+const durationOptions = [
+  { value: 3600, labelKey: 'shareDuration1h' },
+  { value: 21600, labelKey: 'shareDuration6h' },
+  { value: 86400, labelKey: 'shareDuration1d' },
+  { value: 604800, labelKey: 'shareDuration7d' }
+]
+const form = reactive({
+  name: '',
+  remark: '',
+  durationSeconds: 3600
+})
+const idempotencyKey = ref(newIdempotencyKey())
+const creating = ref(false)
+const created = ref(null)
+const shares = ref([])
+const listError = ref(false)
+
+const createdShareUrl = computed(() => {
+  const data = created.value
+  if (!data) {
+    return ''
+  }
+  if (data.shareUrl) {
+    return data.shareUrl
+  }
+  if (data.lid && data.sec && typeof window !== 'undefined') {
+    return buildShareUrl(window.location.origin, data.lid, data.sec)
+  }
+  return ''
+})
+
+const replayWithoutSecret = computed(() => {
+  const data = created.value
+  return Boolean(data && data.idempotentReplay && !data.sec && !data.shareUrl)
+})
+
+function statusLabel(status) {
+  const keys = {
+    ACTIVE: 'shareStatusActive',
+    EXPIRED: 'shareStatusExpired',
+    REVOKED: 'shareStatusRevoked'
+  }
+  return keys[status] ? t(keys[status]) : status
+}
+
+function rotateIdempotencyKey() {
+  idempotencyKey.value = newIdempotencyKey()
+}
+
+async function loadList() {
+  listError.value = false
+  try {
+    const data = await listMailShares()
+    shares.value = Array.isArray(data && data.list) ? data.list : []
+  } catch (err) {
+    listError.value = true
+    console.error('mail share list failed', { code: err && err.code })
+  }
+}
+
+function onOpenChange(value) {
+  emit('update:modelValue', value)
+  if (value) {
+    loadList()
+    return
+  }
+  created.value = null
+}
+
+async function submitCreate() {
+  if (!props.accountId) {
+    ElMessage({ message: t('shareAccountRequired'), type: 'warning', plain: true })
+    return
+  }
+  if (!form.durationSeconds || form.durationSeconds <= 0) {
+    ElMessage({ message: t('shareDurationRequired'), type: 'warning', plain: true })
+    return
+  }
+  creating.value = true
+  try {
+    const data = await createMailShare({
+      accountId: props.accountId,
+      durationSeconds: form.durationSeconds,
+      name: form.name,
+      remark: form.remark
+    }, idempotencyKey.value)
+    created.value = data || null
+    emit('changed')
+    await loadList()
+    if (data && !data.idempotentReplay) {
+      rotateIdempotencyKey()
+    }
+  } catch (err) {
+    console.error('mail share create failed', { code: err && err.code })
+  } finally {
+    creating.value = false
+  }
+}
+
+function askRevoke(row) {
+  ElMessageBox.confirm(t('shareRevokeConfirm'), {
+    confirmButtonText: t('confirm'),
+    cancelButtonText: t('cancel'),
+    type: 'warning'
+  }).then(() => {
+    return revokeMailShare(row.shareId)
+  }).then(() => {
+    ElMessage({ message: t('shareRevokeSuccess'), type: 'success', plain: true })
+    emit('changed')
+    return loadList()
+  }).catch((err) => {
+    if (err === 'cancel' || err === 'close') {
+      return
+    }
+    console.error('mail share revoke failed', { shareId: row.shareId, code: err && err.code })
+  })
+}
+
+async function copyCreatedLink() {
+  const result = await copy(createdShareUrl.value)
+  if (result.copied) {
+    ElMessage({ message: t('copySuccessMsg'), type: 'success', plain: true })
+  }
+}
+
+watch(() => [form.name, form.remark, form.durationSeconds, props.accountId], () => {
+  rotateIdempotencyKey()
+})
+
+watch(() => props.modelValue, (open) => {
+  if (open) {
+    loadList()
+  }
+}, { immediate: true })
+</script>
+<style scoped>
+.share-warning {
+  margin: 0 0 12px;
+  color: #b88230;
+  line-height: 1.5;
+}
+
+.share-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.share-created {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #fdf6ec;
+  border-radius: 6px;
+}
+
+.share-url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.share-url-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+}
+
+.share-list-error,
+.share-empty {
+  color: #909399;
+}
+
+.share-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid #ebeef5;
+}
+
+.share-row-title {
+  font-weight: 600;
+}
+
+.share-row-meta,
+.share-row-access {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: #606266;
+  font-size: 13px;
+}
+
+.share-access-hint {
+  width: 100%;
+  color: #909399;
+}
+</style>

@@ -3,6 +3,7 @@ import NProgress from 'nprogress';
 import {useUiStore} from "@/store/ui.js";
 import {useSettingStore} from "@/store/setting.js";
 import {cvtR2Url} from "@/utils/convert.js";
+import {captureShareSecret, clearOtherShareSessions, clearShareSession} from "@/views/share/session.js";
 
 const routes = [
     {
@@ -65,6 +66,11 @@ const routes = [
         component: () => import('@/views/test/index.vue')
     },
     {
+        path: '/s/:lid',
+        name: 'share',
+        component: () => import('@/views/share/index.vue')
+    },
+    {
         path: '/:pathMatch(.*)*',
         name: '404',
         component: () => import('@/views/404/index.vue')
@@ -72,54 +78,22 @@ const routes = [
 ]
 
 
-const router = createRouter({
-    history: createWebHistory(import.meta.env.BASE_URL),
-    routes
-})
-
 NProgress.configure({
     showSpinner: false,   // 不显示旋转图标
     trickleSpeed: 50,    // 自动递增速度
     minimum: 0.1          // 最小百分比
 });
 
-let timer
-let first = true
-
-router.beforeEach((to, from, next) => {
-
-    if (timer) {
-        clearTimeout(timer)
-    }
-
-    if (!first) {
-        timer = setTimeout(() => {
-            NProgress.start()
-        }, 100)
-    }
-
-    const token = localStorage.getItem('token')
-
-    if (!token && to.name !== 'login') {
-        return next({name: 'login'})
-    }
-
-    if (!token && to.name === 'login') {
-        loadBackground(next)
-        return
-    }
-
-    if (token && to.name === 'login') {
-        return next(from.path)
-    }
-
-    next()
-
-})
-
 function loadBackground(next) {
-
     const settingStore = useSettingStore();
+    let released = false
+    const release = () => {
+        if (released) {
+            return
+        }
+        released = true
+        next()
+    }
 
     if (settingStore.settings.background) {
 
@@ -129,49 +103,24 @@ function loadBackground(next) {
         img.src = src;
 
         img.onload = () => {
-            next()
+            release()
         };
 
         img.onerror = () => {
             console.warn("背景图片加载失败:", img.src);
-            next()
+            release()
         };
 
         setTimeout(() => {
             console.warn("背景加载超时，已放行");
-            next()
+            release()
         }, 3000)
 
     } else {
-        next()
+        release()
     }
 
 }
-
-router.afterEach((to) => {
-
-    clearTimeout(timer)
-    if (first) {
-        removeLoading()
-    } else {
-        NProgress.done();
-    }
-
-    const uiStore = useUiStore()
-    if (to.meta.menu) {
-        if (['content', 'email', 'send'].includes(to.meta.name)) {
-            uiStore.accountShow = window.innerWidth > 767;
-        } else {
-            uiStore.accountShow = false
-        }
-    }
-
-    if (window.innerWidth < 1025) {
-        uiStore.asideShow = false
-    }
-
-    first = false
-})
 
 function removeLoading() {
     const doc = document.getElementById('loading-first');
@@ -181,5 +130,86 @@ function removeLoading() {
 
     doc.remove()
 }
+
+export function createAppRouter(history) {
+    const router = createRouter({
+        history: history || createWebHistory(import.meta.env.BASE_URL),
+        routes
+    })
+
+    let timer
+    let first = true
+
+    router.beforeEach((to, from, next) => {
+
+        if (timer) {
+            clearTimeout(timer)
+        }
+
+        if (!first) {
+            timer = setTimeout(() => {
+                NProgress.start()
+            }, 100)
+        }
+
+        const token = localStorage.getItem('token')
+
+        if (to.name === 'share') {
+            captureShareSecret(to.params.lid)
+            clearOtherShareSessions(to.params.lid)
+            return next()
+        }
+
+        if (!token && to.name !== 'login') {
+            return next({name: 'login'})
+        }
+
+        if (!token && to.name === 'login') {
+            loadBackground(next)
+            return
+        }
+
+        if (token && to.name === 'login') {
+            return next(from.path)
+        }
+
+        next()
+
+    })
+
+    router.afterEach((to, from) => {
+        if (from && from.name === 'share' && to.name !== 'share') {
+            clearShareSession(from.params.lid)
+        }
+
+        clearTimeout(timer)
+        if (first) {
+            removeLoading()
+        } else {
+            NProgress.done();
+        }
+
+        const uiStore = useUiStore()
+        if (to.meta.menu) {
+            if (['content', 'email', 'send'].includes(to.meta.name)) {
+                uiStore.accountShow = window.innerWidth > 767;
+            } else {
+                uiStore.accountShow = false
+            }
+        }
+
+        if (window.innerWidth < 1025) {
+            uiStore.asideShow = false
+        }
+
+        first = false
+    })
+
+    return router
+}
+
+// Vitest imports this module for createAppRouter(). Creating web history
+// at import time starts a navigation that calls useUiStore before Pinia exists.
+const router = import.meta.env.MODE === 'test' ? null : createAppRouter()
 
 export default router

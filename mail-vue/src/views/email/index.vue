@@ -17,9 +17,19 @@
             v-if="params.timeSort === 0" width="28" height="28"/>
       <Icon class="icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-up-outline" v-else
             width="28" height="28"/>
+      <ShareIndicator
+          ref="shareIndicator"
+          :account-id="accountStore.currentAccountId"
+          @open="shareDialogOpen = true"
+      />
     </template>
 
   </emailScroll>
+  <ShareDialog
+      v-model="shareDialogOpen"
+      :account-id="accountStore.currentAccountId"
+      @changed="onShareChanged"
+  />
 </template>
 
 <script setup>
@@ -34,6 +44,8 @@ import {sleep} from "@/utils/time-utils.js";
 import router from "@/router/index.js";
 import {Icon} from "@iconify/vue";
 import { useRoute } from 'vue-router'
+import ShareDialog from './ShareDialog.vue'
+import ShareIndicator from './ShareIndicator.vue'
 
 defineOptions({
   name: 'email'
@@ -44,6 +56,8 @@ const emailStore = useEmailStore();
 const accountStore = useAccountStore();
 const settingStore = useSettingStore();
 const scroll = ref({})
+const shareIndicator = ref(null)
+const shareDialogOpen = ref(false)
 const params = reactive({
   timeSort: 0,
 })
@@ -61,6 +75,10 @@ watch(() => accountStore.currentAccountId, () => {
 function changeTimeSort() {
   params.timeSort = params.timeSort ? 0 : 1
   scroll.value.refreshList();
+}
+
+function onShareChanged() {
+  shareIndicator.value?.refresh?.()
 }
 
 function jumpContent(email) {

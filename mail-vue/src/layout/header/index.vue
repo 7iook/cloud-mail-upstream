@@ -85,8 +85,10 @@ import {useSettingStore} from "@/store/setting.js";
 import {hasPerm} from "@/perm/perm.js"
 import {useI18n} from "vue-i18n";
 import {setExtend} from "@/utils/day.js"
+import {useCopyWithFallback} from "@/composables/useCopyWithFallback.js"
 
 const {t} = useI18n();
+const {copy} = useCopyWithFallback()
 const route = useRoute();
 const settingStore = useSettingStore();
 const userStore = useUserStore();
@@ -166,12 +168,14 @@ function userInfoHide(e) {
 
 async function copyEmail(email) {
   try {
-    await navigator.clipboard.writeText(email);
-    ElMessage({
-      message: t('copySuccessMsg'),
-      type: 'success',
-      plain: true,
-    })
+    const result = await copy(email)
+    if (result.copied) {
+      ElMessage({
+        message: t('copySuccessMsg'),
+        type: 'success',
+        plain: true,
+      })
+    }
   } catch (err) {
     console.error(`${t('copyFailMsg')}:`, err);
     ElMessage({

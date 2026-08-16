@@ -243,6 +243,7 @@ import {useSettingStore} from "@/store/setting.js";
 import {sleep} from "@/utils/time-utils.js"
 import {fromNow} from "@/utils/day.js";
 import {useI18n} from "vue-i18n";
+import {useCopyWithFallback} from "@/composables/useCopyWithFallback.js"
 import {EmailUnreadEnum} from "@/enums/email-enum.js";
 import { UseVirtualList } from '@vueuse/components'
 import { useScroll } from '@vueuse/core'
@@ -299,6 +300,7 @@ const props = defineProps({
 
 const emit = defineEmits(['jump', 'refresh-before', 'delete-draft', 'right-search'])
 const {t} = useI18n()
+const {copy} = useCopyWithFallback()
 const settingStore = useSettingStore()
 const uiStore = useUiStore();
 const emailStore = useEmailStore();
@@ -669,12 +671,14 @@ function handleSearch(type, value) {
 
 async function copyCode(code) {
   try {
-    await navigator.clipboard.writeText(code);
-    ElMessage({
-      message: t('copySuccessMsg'),
-      type: 'success',
-      plain: true
-    })
+    const result = await copy(code)
+    if (result.copied) {
+      ElMessage({
+        message: t('copySuccessMsg'),
+        type: 'success',
+        plain: true
+      })
+    }
   } catch (err) {
     console.error(`${t('copyFailMsg')}:`, err);
     ElMessage({
