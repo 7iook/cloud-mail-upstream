@@ -1,0 +1,35 @@
+name = "cloud-mail-e2e"
+main = "harness/worker-entry.js"
+compatibility_date = "2025-03-10"
+compatibility_flags = ["nodejs_compat"]
+
+# Isolated local D1. database_id is a placeholder — never set remote = true.
+[[d1_databases]]
+binding = "db"
+database_name = "e2e-local-email"
+database_id = "00000000-0000-0000-0000-0000000000e2"
+preview_database_id = "e2e-local-d1"
+
+[[kv_namespaces]]
+binding = "kv"
+id = "00000000-0000-0000-0000-0000000000e3"
+
+[assets]
+binding = "assets"
+directory = "../../mail-worker/dist"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[vars]
+jwt_secret = "e2e-local-jwt-secret"
+domain = ["example.com"]
+admin = "e2e-owner@example.com"
+orm_log = false
+analysis_cache = false
+SHARE_ENABLED = "1"
+SHARE_SEC_PEPPER = "e2e-share-sec-pepper"
+SHARE_SEC_PEPPER_KID = "v1"
+SHARE_SESSION_SIGNING_KEY = "e2e-share-session-signing-key"
+SHARE_SESSION_SIGNING_KID = "v1"
+SHARE_MAX_DURATION_SECONDS = "86400"
+E2E_CONTROL_SECRET = "e2e-local-control-secret"
