@@ -29,8 +29,95 @@ const dbInit = {
 		await this.v2_8DB(c);
 		await this.v2_9DB(c);
 		await this.v3_0DB(c);
+		await this.v3_1DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+	async v3_1DB(c) {
+		await c.env.db.prepare(`
+      CREATE TABLE IF NOT EXISTS mail_share (
+				share_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				lid TEXT NOT NULL,
+				sec_hmac TEXT NOT NULL,
+				pepper_kid TEXT NOT NULL,
+				user_id INTEGER NOT NULL,
+				account_id INTEGER NOT NULL,
+				name TEXT NOT NULL DEFAULT '',
+				remark TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT 'ACTIVE',
+				window_start_email_id INTEGER NOT NULL DEFAULT 0,
+				expires_at TEXT NOT NULL,
+				delete_at TEXT NOT NULL,
+				access_count INTEGER NOT NULL DEFAULT 0,
+				last_access_at TEXT,
+				revoked_at TEXT,
+				create_time TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+      )
+    `).run();
+
+		await c.env.db.prepare(`
+      CREATE TABLE IF NOT EXISTS share_idempotency (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				idempotency_key TEXT NOT NULL,
+				operation TEXT NOT NULL,
+				request_fingerprint TEXT NOT NULL,
+				share_id INTEGER,
+				response_fingerprint TEXT,
+				created_at TEXT DEFAULT CURRENT_TIMESTAMP NOT NULL
+      )
+    `).run();
+
+		const INDEX_SQL_LIST = [
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_share_lid ON mail_share(lid)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_share_user_id_status ON mail_share(user_id, status)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_share_account_id_status ON mail_share(account_id, status)`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_share_delete_at ON mail_share(delete_at)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_share_idempotency_user_key_op ON share_idempotency(user_id, idempotency_key, operation)`,
+			`CREATE INDEX IF NOT EXISTS idx_email_account_id_email_id ON email(account_id, email_id)`
+		];
+
+		const indexPromises = INDEX_SQL_LIST.map(async (sql) => {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过创建索引：${e.message}`);
+			}
+		});
+		await Promise.all(indexPromises);
+
+		try {
+			await c.env.db.prepare(`
+        INSERT INTO perm (perm_id, name, perm_key, pid, type, sort)
+        SELECT 37, '分享管理', 'share:manage', 0, 2, 7
+        WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_key = 'share:manage')
+          AND NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 37)`).run();
+		} catch (e) {
+			console.warn(`跳过数据：${e.message}`);
+		}
+
+		try {
+			await c.env.db.prepare(`
+        INSERT INTO perm (name, perm_key, pid, type, sort)
+        SELECT '分享管理', 'share:manage', 0, 2, 7
+        WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_key = 'share:manage')`).run();
+		} catch (e) {
+			console.warn(`跳过数据：${e.message}`);
+		}
+
+		try {
+			await c.env.db.prepare(`
+				INSERT INTO role_perm (role_id, perm_id)
+				SELECT 1, perm_id
+				FROM perm
+				WHERE perm_key = 'share:manage'
+				AND NOT EXISTS (
+					SELECT 1 FROM role_perm WHERE role_id = 1 AND perm_id = perm.perm_id
+				)`).run();
+		} catch (e) {
+			console.warn(`跳过数据：${e.message}`);
+		}
 	},
 
 	async v3_0DB(c) {

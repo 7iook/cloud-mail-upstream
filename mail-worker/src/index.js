@@ -6,6 +6,7 @@ import emailService from './service/email-service';
 import kvObjService from './service/kv-obj-service';
 import oauthService from "./service/oauth-service";
 import analysisService from './service/analysis-service';
+import mailShareCleanupService from './service/mail-share-cleanup-service';
 export default {
 	 async fetch(req, env, ctx) {
 
@@ -35,5 +36,6 @@ export default {
 		await emailService.completeReceiveAll({ env })
 		await oauthService.clearNoBindOathUser({ env })
 		await analysisService.refreshEchartsCache({ env })
+		await mailShareCleanupService.cleanupExpired({ env })
 	},
 };

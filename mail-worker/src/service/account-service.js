@@ -12,6 +12,7 @@ import turnstileService from './turnstile-service';
 import roleService from './role-service';
 import { t } from '../i18n/i18n';
 import verifyRecordService from './verify-record-service';
+import mailShareService from './mail-share-service';
 
 const accountService = {
 
@@ -155,6 +156,8 @@ const accountService = {
 			throw new BizError(t('noUserAccount'));
 		}
 
+		await mailShareService.revokeByAccountId(c, accountId);
+
 		await orm(c).update(account).set({ isDel: isDel.DELETE }).where(
 			and(eq(account.userId, userId),
 				eq(account.accountId, accountId)))
@@ -177,6 +180,8 @@ const accountService = {
 	},
 
 	async physicsDeleteByUserIds(c, userIds) {
+		const rows = await orm(c).select({ accountId: account.accountId }).from(account).where(inArray(account.userId, userIds)).all();
+		await mailShareService.revokeByAccountIds(c, rows.map((row) => row.accountId));
 		await emailService.physicsDeleteUserIds(c, userIds);
 		await orm(c).delete(account).where(inArray(account.userId,userIds)).run();
 	},
@@ -242,6 +247,7 @@ const accountService = {
 
 	async physicsDelete(c, params) {
 		const { accountId } = params
+		await mailShareService.revokeByAccountId(c, accountId);
 		await emailService.physicsDeleteByAccountId(c, accountId)
 		await orm(c).delete(account).where(eq(account.accountId, accountId)).run();
 	},

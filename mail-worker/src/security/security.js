@@ -8,17 +8,24 @@ import permService from '../service/perm-service';
 import { t } from '../i18n/i18n'
 import app from '../hono/hono';
 
-const exclude = [
+const excludePrefixes = [
 	'/login',
 	'/register',
 	'/oss',
-	'/setting/websiteConfig',
 	'/webhooks',
 	'/init',
 	'/public/genToken',
 	'/telegram',
 	'/test',
 	'/oauth'
+];
+
+const excludeExact = [
+	{ method: 'GET', path: '/setting/websiteConfig' },
+	{ method: 'POST', path: '/share/session' },
+	{ method: 'GET', path: '/share/mails' },
+	{ method: 'GET', path: '/share/mail' },
+	{ method: 'GET', path: '/share/attachment' }
 ];
 
 const requirePerms = [
@@ -61,6 +68,12 @@ const requirePerms = [
 	'/regKey/history'
 ];
 
+const requirePermsExact = [
+	{ method: 'POST', path: '/mailShare/create' },
+	{ method: 'GET', path: '/mailShare/list' },
+	{ method: 'DELETE', path: '/mailShare/revoke' }
+];
+
 const premKey = {
 	'email:delete': ['/email/delete'],
 	'email:send': ['/email/send'],
@@ -87,17 +100,15 @@ const premKey = {
 	'reg-key:add': ['/regKey/add'],
 	'reg-key:query': ['/regKey/list','/regKey/history'],
 	'reg-key:delete': ['/regKey/delete','/regKey/clearNotUse'],
+	'share:manage': ['/mailShare/create', '/mailShare/list', '/mailShare/revoke']
 };
 
 app.use('*', async (c, next) => {
 
 	const path = c.req.path;
+	const method = c.req.method;
 
-	const index = exclude.findIndex(item => {
-		return path.startsWith(item);
-	});
-
-	if (index > -1) {
+	if (matchesExact(method, path, excludeExact) || matchesPrefix(path, excludePrefixes)) {
 		return await next();
 	}
 
@@ -131,21 +142,28 @@ app.use('*', async (c, next) => {
 		throw new BizError(t('authExpired'), 401);
 	}
 
+	const shareOwner = matchesExact(method, path, requirePermsExact);
 	const permIndex = requirePerms.findIndex(item => {
 		return path.startsWith(item);
 	});
 
-	if (permIndex > -1) {
+	if (permIndex > -1 || shareOwner) {
 
 		const permKeys = await permService.userPermKeys(c, authInfo.user.userId);
 
 		const userPaths = permKeyToPaths(permKeys);
 
 		const userPermIndex = userPaths.findIndex(item => {
+			if (shareOwner) {
+				return path === item;
+			}
 			return path.startsWith(item);
 		});
 
 		if (userPermIndex === -1 && authInfo.user.email !== c.env.admin) {
+			if (shareOwner) {
+				throw new BizError('SHARE_FORBIDDEN', 403);
+			}
 			throw new BizError(t('unauthorized'), 403);
 		}
 
@@ -164,6 +182,14 @@ app.use('*', async (c, next) => {
 
 	return await next();
 });
+
+function matchesExact(method, path, rules) {
+	return rules.some(rule => rule.method === method && rule.path === path);
+}
+
+function matchesPrefix(path, prefixes) {
+	return prefixes.some(item => path.startsWith(item));
+}
 
 function permKeyToPaths(permKeys) {
 
