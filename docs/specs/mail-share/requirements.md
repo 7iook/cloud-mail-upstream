@@ -40,7 +40,7 @@ Verified once by：在一个全新的浏览器上下文（无 localStorage、无
 - **Share Lookup Id (`lid`)**：分享链接中用于定位记录的公开半，128-bit CSPRNG，base64url，明文存于 `mail_share.lid` 并建唯一索引。它不是秘密。
 - **Share Secret (`sec`)**：分享链接中的秘密半，256-bit CSPRNG，base64url。**只以 `HMAC-SHA256(sec, PEPPER[kid])` 存库**，并记录 **`pepper_kid`** 标识所用 PEPPER 版本；明文仅在创建时返回一次。PEPPER 轮换采用与 Session 签名密钥相同的 **`kid` + 新旧双 key 验证窗口**（默认 ≤7 天）；轮换期间须能验证旧 PEPPER 签名的存量链接，**不得**因正常轮换使全部存量链接瞬间失效。密钥丢失或紧急吊销行为见 design.md「Share Secret 密钥生命周期」。
 - **Share URL**：`https://<host>/s/<lid>#<sec>`。`sec` 位于 URL fragment，浏览器不会将其发往服务器。
-- **Share Session**：Visitor 用 `lid` + `sec` 换取的短期凭据，用于后续拉取邮件列表与轮询新邮件，避免 `sec` 反复出现在请求中。`sessionToken` 以 **`share:session:<lid>`** 为键写入 `sessionStorage`（见 AC-VISIT-12、AC-VISIT-13）；清理契约见 AC-VISIT-14~15。
+- **Share Session**：Visitor 用 `lid` + `sec` 换取的短期凭据，用于后续拉取邮件列表与轮询新邮件，避免 `sec` 反复出现在请求中。`sessionToken` 以 **`share:session:<lid>`** 为键写入 `sessionStorage`（见 AC-VISIT-12、AC-VISIT-13）；清理契约见 AC-VISIT-14~15。令牌无状态、带绝对 `exp`，默认 **15 分钟**（`SHARE_SESSION_TTL`，只减不续），且每次请求回源重算 Share `effectiveStatus`（AC-LIFE-01）。
 - **OTP**：邮件中的一次性验证码。现有链路把 LLM 抽取结果存于 `email.code`（`mail-worker/src/entity/email.js:10`）；分享页**只读**该字段，不在投影链重新推断。
 - **Safe Mail Renderer**：全站唯一的邮件正文安全渲染器。用沙箱 iframe（`sandbox` 不含 `allow-scripts` / `allow-same-origin`）+ `srcdoc` 内层 CSP `script-src 'none'` 原样承载邮件 HTML，取代现有 `mail-vue/src/components/shadow-html/index.vue:33` 的裸 `shadowRoot.innerHTML` 写入。登录态详情页与分享页共用。
 - **Share Status（持久化）**：MailShare 的可操作生命周期状态，**仅持久化** `ACTIVE` / `REVOKED` 两值。
@@ -92,10 +92,12 @@ Verified once by：在一个全新的浏览器上下文（无 localStorage、无
 - [AC-VISIT-08] THE ShareMailService SHALL 拒绝一切写操作请求，包括删除邮件、标记已读、发送邮件、修改邮箱与修改 MailShare 自身。
 - [AC-VISIT-09] IF Visitor 请求的 `emailId` 不在 Visible Window 内, THEN THE ShareMailService SHALL 返回 `SHARE_UNAVAILABLE`，SHALL NOT 返回该邮件是否存在的信息。
 - [AC-VISIT-10] THE MailShareApp SHALL 在分享页 SHALL NOT 加载任何第三方来源的脚本。
-- [AC-VISIT-12] WHEN Share Session 建立成功, THE MailShareApp SHALL 将 `sessionToken` 写入 `sessionStorage` 键 **`share:session:<lid>`**；刷新同一标签页且仍停留在分享路由 SHALL 可凭该 token 恢复会话；关闭标签页后 SHALL 失效；SHALL NOT 跨 tab 共享；fragment 中的 `sec` 读取后 SHALL 立即清除（见 design.md Fragment 清除段）。
+- [AC-VISIT-12] WHEN Share Session 建立成功, THE MailShareApp SHALL 将 `sessionToken` 写入 `sessionStorage` 键 **`share:session:<lid>`**；刷新同一标签页且仍停留在分享路由 SHALL 可凭该 token 恢复会话（fragment 已在首次读取后清除，刷新只能靠该 token）；关闭标签页后 SHALL 失效；SHALL NOT 跨 tab 共享；fragment 中的 `sec` 读取后 SHALL 立即清除（见 design.md Fragment 清除段）。token 受绝对 TTL 约束（默认 15 分钟）；TTL 内刷新可恢复，TTL 后须再次提交 `lid`+`sec` 重建会话。
 - [AC-VISIT-13] THE MailShareApp SHALL 按 `lid` 隔离 `sessionStorage` 键；WHEN 同一 tab 先后打开不同 `lid` 的分享链接, THE MailShareApp SHALL NOT 误用另一 `lid` 的 token，并 SHALL 清除已不再使用的旧 `lid` 存储项。
 - [AC-VISIT-14] THE MailShareApp SHALL 在以下时机清除当前 `lid` 的 `share:session:<lid>`：**(a)** `POST /share/session` 鉴权失败；**(b)** 任意分享 API 返回 `SHARE_UNAVAILABLE`（含 Share 已撤销或已过期）；**(c)** Visitor 显式退出。清理属于**安全契约**（同源页面脚本可读 `sessionStorage`），不是纯 UX 细节。
-- [AC-VISIT-15] WHEN Visitor **离开分享路由**（Vue 路由 `name !== 'share'`，含导航至 `/login`、layout 内页面或外部同源页), THE MailShareApp SHALL **立即清除**当前 `lid` 的 `share:session:<lid>`；理由：分享凭据不得在同 tab 的其他同源页面继续暴露；若需再次访问须重新打开含 `#<sec>` 的完整链接（fragment 已在首次读取后清除）。
+- [AC-VISIT-15] WHEN Visitor **离开分享路由**（Vue 路由 `name !== 'share'`，含导航至 `/login`、layout 内页面), THE MailShareApp SHALL **立即清除**当前 `lid` 的 `share:session:<lid>`；理由：分享凭据不得在同 tab 的其他同源页面继续暴露；若需再次访问须重新打开含 `#<sec>` 的完整链接（fragment 已在首次读取后清除）。本条由 SPA 路由守卫兑现。硬导航（地址栏输入、外链、任何非 SPA 跳转）不跑该守卫，token 可能残留于同 tab `sessionStorage`，直至 Session TTL 或关 tab（见下方已知限制）。
+
+**已知限制（AC-VISIT-12 与 AC-VISIT-15 冲突 · 用户 2026-08-17 裁决）**：AC-VISIT-15 要求离开分享上下文即销毁 token；AC-VISIT-12 要求分享路由内刷新仍能恢复会话。`pagehide` 不能用来补硬导航清理——它在刷新时也会触发，而刷新时 fragment 已经清掉，只剩 `sessionStorage` 里的 token 能让 AC-VISIT-12 成立。两则 AC 在 `sessionStorage` 方案下无法同时被干净满足。本期接受该残留暴露：仅同 tab、同源，且被 Session 绝对 TTL（默认 15 分钟）封顶；token 只授予访问者已经用完整链接换到的只读能力，不含写权限。过期 token **不得**用来续期。Share 行仍为 `ACTIVE` 时，访问者可再次 `POST /share/session` 提交 `lid`+`sec` 建立新会话（页面内存中保留的 `sec`，或重新打开含 `#<sec>` 的原链接）；该路径 SHALL NOT 因 fragment 已从 URL 清除而死结。
 
 ### Requirement 3: 生命周期与状态
 

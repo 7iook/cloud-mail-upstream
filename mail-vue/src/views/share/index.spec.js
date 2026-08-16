@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import axios from 'axios'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,6 +30,51 @@ vi.mock('@/request/share.js', async (importOriginal) => {
 })
 
 const wrappers = []
+
+function flattenLogged(args) {
+    const parts = []
+    const seen = new WeakSet()
+    function walk(value) {
+        if (value == null) {
+            return
+        }
+        const type = typeof value
+        if (type === 'string' || type === 'number' || type === 'boolean' || type === 'bigint') {
+            parts.push(String(value))
+            return
+        }
+        if (type !== 'object' && type !== 'function') {
+            return
+        }
+        if (seen.has(value)) {
+            return
+        }
+        seen.add(value)
+        if (value instanceof Error) {
+            parts.push(value.name || '', value.message || '', value.stack || '')
+        }
+        try {
+            parts.push(JSON.stringify(value))
+        } catch {
+            // AxiosError / circular objects still get walked by key below
+        }
+        const keys = new Set([
+            ...Object.keys(value),
+            ...Object.getOwnPropertyNames(value)
+        ])
+        for (const key of keys) {
+            try {
+                walk(value[key])
+            } catch {
+                // skip throwing getters
+            }
+        }
+    }
+    for (const arg of args) {
+        walk(arg)
+    }
+    return parts.join('\n')
+}
 
 const elementStubs = {
     'el-button': {
@@ -135,6 +181,51 @@ describe('share view session shell', () => {
         expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
     })
 
+    it('does not write sec to console when session establish fails (AC-LEAK-05)', async () => {
+        const secret = 'sec-capability-secret-9f3a'
+        const axiosError = new axios.AxiosError(
+            'Request failed with status code 403',
+            axios.AxiosError.ERR_BAD_RESPONSE,
+            {
+                url: '/share/session',
+                method: 'post',
+                data: { lid: 'lid-a', sec: secret }
+            },
+            {},
+            {
+                status: 403,
+                statusText: 'Forbidden',
+                data: { code: 501, message: 'SHARE_UNAVAILABLE' },
+                config: {
+                    url: '/share/session',
+                    method: 'post',
+                    data: { lid: 'lid-a', sec: secret }
+                }
+            }
+        )
+        createShareSession.mockRejectedValue(axiosError)
+        const lines = []
+        const capture = (...args) => {
+            lines.push(flattenLogged(args))
+        }
+        const log = vi.spyOn(console, 'log').mockImplementation(capture)
+        const error = vi.spyOn(console, 'error').mockImplementation(capture)
+        const warn = vi.spyOn(console, 'warn').mockImplementation(capture)
+        const info = vi.spyOn(console, 'info').mockImplementation(capture)
+        try {
+            const wrapper = await mountShare('lid-a', secret)
+            expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
+            const joined = lines.join('\n')
+            expect(joined).not.toContain(secret)
+            expect(joined).not.toMatch(/"sec"\s*:/)
+        } finally {
+            log.mockRestore()
+            error.mockRestore()
+            warn.mockRestore()
+            info.mockRestore()
+        }
+    })
+
     it('clears the lid token when session establish fails', async () => {
         writeShareSession('lid-a', 'stale')
         createShareSession.mockRejectedValue({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' })
@@ -147,7 +238,7 @@ describe('share view session shell', () => {
         expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
     })
 
-    it('clears the lid token when a later share call reports SHARE_UNAVAILABLE', async () => {
+    it('shows timed-out, not a dead link, when a later share call fails after a working session and the secret is gone (AC-VISIT-12, AC-VISIT-14)', async () => {
         writeShareSession('lid-a', 'sess-a')
         const wrapper = await mountShare('lid-a')
 
@@ -155,7 +246,10 @@ describe('share view session shell', () => {
         await flushPromises()
 
         expect(readShareSession('lid-a')).toBe('')
-        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('timedout')
+        expect(wrapper.text()).toMatch(/timed out/i)
+        expect(wrapper.text()).toMatch(/original link/i)
+        expect(wrapper.text()).not.toMatch(/no longer available/i)
     })
 
     it('clears the lid token on explicit exit', async () => {
@@ -294,6 +388,59 @@ describe('share view visitor mailbox', () => {
         expect(wrapper.find('[data-share-wait]').exists()).toBe(true)
         expect(wrapper.get('[data-share-wait]').text()).toMatch(/wait/i)
         expect(wrapper.text()).not.toMatch(/no longer available/i)
+    })
+
+    it('re-establishes from the in-memory secret when polling hits SHARE_UNAVAILABLE and does not claim the share is gone (AC-VISIT-12, AC-RT-14, AC-RT-16)', async () => {
+        vi.useFakeTimers()
+        createShareSession
+            .mockResolvedValueOnce({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+            .mockResolvedValueOnce({ sessionToken: 'sess-b', mailbox: 'otp@example.com' })
+        listShareMails
+            .mockResolvedValueOnce({
+                list: [mail({ mailId: 1, subject: 'Wait for code', code: '111111' })],
+                nextCursor: '1'
+            })
+            .mockRejectedValueOnce({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' })
+            .mockResolvedValue({
+                list: [mail({ mailId: 2, subject: 'After recover', code: '222222' })],
+                nextCursor: '2'
+            })
+
+        const wrapper = await mountShare('lid-a', 'sec-keep')
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(createShareSession).toHaveBeenCalledTimes(1)
+        expect(createShareSession).toHaveBeenCalledWith('lid-a', 'sec-keep')
+        expect(window.location.hash).toBe('')
+        expect(window.location.href).not.toContain('sec-keep')
+        expect(JSON.stringify(sessionStorage)).not.toContain('sec-keep')
+        expect(readShareSession('lid-a')).toBe('sess-a')
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(wrapper.text()).not.toMatch(/no longer available/i)
+        expect(wrapper.text()).not.toMatch(/timed out/i)
+        expect(createShareSession).toHaveBeenCalledTimes(2)
+        expect(createShareSession).toHaveBeenLastCalledWith('lid-a', 'sec-keep')
+        expect(readShareSession('lid-a')).toBe('sess-b')
+        expect(JSON.stringify(sessionStorage)).not.toContain('sec-keep')
+        expect(wrapper.get('[data-share-mail-list]').text()).toContain('After recover')
+    })
+
+    it('shows timed-out, not unavailable, when a stored token dies after reload with no in-memory secret (AC-VISIT-12, AC-VISIT-14)', async () => {
+        writeShareSession('lid-a', 'sess-dead')
+        listShareMails.mockRejectedValue({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' })
+
+        const wrapper = await mountShare('lid-a')
+
+        expect(createShareSession).not.toHaveBeenCalled()
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('timedout')
+        expect(wrapper.text()).toMatch(/timed out/i)
+        expect(wrapper.text()).toMatch(/original link/i)
+        expect(wrapper.text()).not.toMatch(/no longer available/i)
+        expect(readShareSession('lid-a')).toBe('')
+        expect(wrapper.find('[data-share-mail-list]').exists()).toBe(false)
     })
 
     it('appends newly polled mail without a click (AC-RT-14)', async () => {

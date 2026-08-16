@@ -38,9 +38,7 @@ export default defineConfig(async () => {
                 include: ['src/**/*.{test,spec}.{js,ts}'],
                 exclude: [
                     '**/node_modules/**',
-                    '**/dist/**',
-                    // srcdoc.spec.js uses node:test; Vue specs in this dir use vitest
-                    'src/components/safe-mail/srcdoc.spec.js'
+                    '**/dist/**'
                 ],
                 server: {
                     deps: {

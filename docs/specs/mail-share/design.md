@@ -135,7 +135,7 @@ mail-worker/src/entity/mail-share.js
 | **入口拆分** | 分享页通过 **独立 async chunk** 加载（`() => import('./views/share/index.vue')`）；该 chunk 的静态导入图 SHALL NOT 含 `db.js`、`layout/**`、`axios/index.js`、`init/init.js` 的 `websiteConfig()` |
 | **最小 bootstrap** | 分享页自行调用精简版 `locale` 探测（复用 `init.js` 中的纯函数，不 await 阻塞性配置接口）；`websiteConfig()` 失败不得白屏 |
 | **Fragment 清除** | 客户端从 `location.hash` 读取 `sec` 后 **立即** `history.replaceState` 清除 fragment（在任何网络请求与其他模块初始化之前） |
-| **Session 存储（R2-F1 · R3-F3 定稿）** | 键名 **`share:session:<lid>`**（按 `lid` 隔离，AC-VISIT-13）。同 tab 刷新且**仍处分享路由**可恢复；关闭 tab 失效；不跨 tab。**必须清除**（AC-VISIT-14）：鉴权失败、`SHARE_UNAVAILABLE`（撤销/过期/凭据错等）、Visitor 显式退出。**离开分享路由必须清除**（AC-VISIT-15）：`name !== 'share'` 时立即删键——因 SPA 与 `/login`/layout **同源**，其脚本可读 `sessionStorage`，残留 token 等于把匿名邮件读权限泄漏给其他页面；故离开分享上下文即销毁凭据（须重新打开含 `#<sec>` 的完整链接才能再进）。切换不同 `lid` 时清除旧 `lid` 键、不得误用。fragment 清除后凭 token 继续访问，不能再凭 URL 中 `sec` 重建 |
+| **Session 存储（R2-F1 · R3-F3 定稿 · 2026-08-17 TTL 裁决）** | 键名 **`share:session:<lid>`**（按 `lid` 隔离，AC-VISIT-13）。同 tab 刷新且**仍处分享路由**可恢复；关闭 tab 失效；不跨 tab。**必须清除**（AC-VISIT-14）：鉴权失败、`SHARE_UNAVAILABLE`（撤销/过期/凭据错等）、Visitor 显式退出。**离开分享路由必须清除**（AC-VISIT-15）：SPA `name !== 'share'` 时立即删键——因 SPA 与 `/login`/layout **同源**，其脚本可读 `sessionStorage`。**硬导航不跑守卫**，token 可残留于同 tab 下一个同源页；`pagehide` 不能补这一刀（刷新也会触发，会打破 AC-VISIT-12）。本期接受该残留：仅同 tab、同源、被 Session TTL（默认 15 分钟）封顶；token 只授予访问者已经换到的只读能力。切换不同 `lid` 时清除旧 `lid` 键、不得误用。fragment 清除后凭 token 继续访问；TTL 过期后须再次提交 `lid`+`sec`（页面内存保留 `sec`，或重开含 `#<sec>` 的原链接），**不得**用过期 token 续期 |
 | **CSP** | 分享页**外层** CSP（`mail-vue/public/_headers` 按路径匹配 `/s/*`）：`Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' http: https:; img-src 'self' data: blob: http: https:; font-src 'self' data: http: https:; media-src data: blob: http: https:; connect-src 'self'; frame-src 'none'; object-src 'none'` —— **约束分享壳主文档，且被 `srcdoc` iframe 继承**（CSP3 §7.8）。T-21 将 `img`/`style`/`font`/`media` 放宽至 `http:`/`https:`：设计初稿的 `img-src 'self'` 会阻断沙箱 iframe 内远程邮件图片（与 AC-SEC-23 冲突）；完整 HTML 邮件含远程资源为显式产品决策。**unverified**：`run_worker_first = true` 且响应经 `env.assets.fetch` 时，Cloudflare 文档警告 `_headers` **可能不**作用于 Worker 生成的响应——须真实部署确认（AC-LEAK-02~04）。内层 `srcdoc` 文档仍设 CSP `script-src 'none'`（P-SEC-04） |
 | **第三方脚本** | 分享页及 `/share/*` 接口 **零** 第三方脚本/遥测（W3C capability URL 硬约束：脚本能读完整 URL 含 fragment） |
 | **错误上报** | 分享页不接入 Sentry/GA 等外联；错误仅 `console.error` 本地输出 |
@@ -182,13 +182,15 @@ Visitor 侧（公开，精确路径）：
 | **签发** | `POST /share/session` 验证 `lid`+`sec` 成功后，由 `share-auth-service` 签发 |
 | **格式** | 无状态 HMAC 签名令牌（非 JWT 以避免额外依赖）；payload 含 `shareId`, `lid`, `iat`, `exp`, `kid` |
 | **承载位置** | `Authorization: Bearer <sessionToken>` 请求头。理由：① 后续请求不携带 `sec`；② 比 Cookie 少 CSRF 面（公开 API 无登录态 cookie）；③ 不进 URL/日志 |
-| **绝对有效期** | `exp = min(share.expires_at, iat + SESSION_TTL)`；`SESSION_TTL` 默认 24h，只减不续 |
+| **绝对有效期** | `exp = min(share.expires_at, iat + SESSION_TTL)`；`SESSION_TTL` 默认 **15 分钟（900s）**，环境变量 `SHARE_SESSION_TTL` 可覆盖，只减不续。选 15 分钟是因为核心场景是等待验证码邮件到达并复制：常见延迟 5–10 分钟，OTP 本身也多在该量级过期；短于 24h 以封顶硬导航残留，长于 5 分钟以避免延迟邮件把访问者卡死 |
 | **与 Share 生命周期** | **从属关系**：Share 被销毁、`effectiveStatus` 变为非 ACTIVE、或 account 失效 → 旧 sessionToken **下一次请求即失效**（逐请求回源查库） |
 | **验证** | 每请求：验签 → 查 `mail_share` 行 → 重算 `effectiveStatus` → 校验 account 仍有效 → 构建 `ShareContext` |
-| **重放** | 无 refresh；过期后须重新 `POST /share/session`（再次提交 `sec`，故 fragment 清除后用户需保留链接） |
+| **重放** | 无 refresh；过期 token **不得**换新 token。过期后须重新 `POST /share/session` 提交 `lid`+`sec`。fragment 已从 URL 清除，故客户端须在**页面内存**保留 `sec`（不得写入 `sessionStorage`），或访问者重新打开含 `#<sec>` 的原链接。Share 行仍 `ACTIVE` 时该路径必须能建立新会话，不得因 fragment 已清而死结 |
 | **撤销** | 无服务端 session 表；撤销由 Share 行状态驱动，验签后立即查库即可 |
 | **失败响应** | 鉴权/过期/销毁/凭据错/超窗/功能关：统一 `SHARE_UNAVAILABLE` + JSON 形状（P-AUTH-01）。**HTTP 429 + `Retry-After`** 为独立运输层错误（P-TRANS-01），不属于 P-AUTH-01 集合 |
 | **密钥轮换** | 环境变量 `SHARE_SESSION_SIGNING_KEY` + `kid`；支持双 key 验签窗口（新旧并行 ≤7 天） |
+
+**已知限制（AC-VISIT-12 与 AC-VISIT-15）**：硬导航不跑 Vue 守卫，`sessionStorage` token 会留给同 tab 下一个同源页。`pagehide` 不是修复——刷新也会触发，而 AC-VISIT-12 依赖刷新后仍能读到该 token（fragment 已清）。用户 2026-08-17 裁决：接受该残留，用 15 分钟绝对 TTL 封顶窗口。残留范围 = 同 tab + 同源 + ≤TTL；token 只授予访问者已经用完整链接换到的只读能力。
 
 错误码（稳定注册表）：`SHARE_UNAVAILABLE`（Visitor 不可区分：不存在/过期/销毁/凭据错/超窗/功能关）、`SHARE_ACCOUNT_FORBIDDEN`、`SHARE_DURATION_EXCEEDED`、`SHARE_LIMIT_EXCEEDED`、`SHARE_IDEMPOTENCY_CONFLICT`（同 Key 异请求体）、`SHARE_NOT_FOUND`（仅 Owner 侧）、`SHARE_FORBIDDEN`（缺 `share:manage`）、`SHARE_DISABLED`（Owner 创建时功能关闭）。**HTTP 429** 为运输层响应，**不**映射为 `SHARE_UNAVAILABLE`。
 
@@ -404,10 +406,10 @@ effectiveStatus(row, now) =
 | AC-VISIT-09 | 请求窗口外 `emailId` → 与不存在 `emailId` 响应相同 | P |
 | AC-VISIT-10 | 分享页 HTML 中无任何跨域 script 源（构建产物断言） | M |
 | AC-VISIT-11 | 后续请求 Authorization Bearer 含 sessionToken；无 sec 查询参数 | I |
-| AC-VISIT-12 | 建会话后 `sessionStorage['share:session:<lid>']` 含 token；分享路由内刷新恢复；关 tab 清除；sec 已从 URL 清除 | E |
+| AC-VISIT-12 | 建会话后 `sessionStorage['share:session:<lid>']` 含 token；分享路由内刷新恢复；关 tab 清除；sec 已从 URL 清除；默认 Session TTL 15 分钟 | E |
 | AC-VISIT-13 | 同 tab 先后打开 lid A/B：不得用 A 的 token 访问 B；切换时清除旧 lid 键 | E |
 | AC-VISIT-14 | 鉴权失败 / SHARE_UNAVAILABLE / 显式退出后键被清除 | E |
-| AC-VISIT-15 | 导航至非 share 路由（如 login）后键被清除 | E |
+| AC-VISIT-15 | SPA 导航至非 share 路由（如 login）后键被清除；硬导航残留为已知限制，由 Session TTL 封顶 | E |
 | AC-VISIT-16 | 收件中间态（`status=SAVING` 或非 NORMAL `is_del`）不出现在列表/详情 | I |
 | AC-LIFE-01 | 把 `expires_at` 改为过去且不跑 cron，立即访问 → 拒绝（P-LIFE-01） | I |
 | AC-LIFE-02 | 销毁后断言 `status='REVOKED'` 且 `revoked_at` 非空 | I |
@@ -754,6 +756,7 @@ For any 时刻 T 与任意 MailShare，IF `expires_at ≤ T`，THEN THE ShareAut
 8. **R3-F1**：AC-RT-09 改为稳定排序/不重复/不跳过，不承诺内容恒等。
 9. **R3-F2**：Account 转移永久撤销（AC-LIFE-12）；功能开关临时冻结、重开恢复（AC-LIFE-13）。
 10. **R3-F3**：Session 按 `lid` 键隔离（AC-VISIT-13）；鉴权失败/SHARE_UNAVAILABLE/显式退出清除（AC-VISIT-14）；**离开分享路由必须清除**（AC-VISIT-15）——同源脚本可读 sessionStorage，属安全契约非 UX。
+11. **2026-08-17 Session TTL 裁决**：默认 `SESSION_TTL` 从 24h 改为 **15 分钟**；接受 AC-VISIT-12 与 AC-VISIT-15 在硬导航下无法同时干净满足（`pagehide` 会打断刷新）。残留 = 同 tab + 同源 + ≤TTL；过期后须再提交 `lid`+`sec`，不得用过期 token 续期。
 
 **权限与范围：**
 - 三份 `share:*` 合并为 `share:manage`（AC-MGMT-09）；废弃 AC-MGMT-08。

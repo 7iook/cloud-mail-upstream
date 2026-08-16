@@ -8,6 +8,7 @@
       <p v-if="state === 'loading'">{{ tx('shareVisitLoading', 'Opening shared mailbox...') }}</p>
       <p v-else-if="state === 'ready'">{{ tx('shareVisitReady', 'Shared mailbox') }}{{ mailbox ? `: ${mailbox}` : '' }}</p>
       <p v-else-if="state === 'unavailable'">{{ tx('shareVisitUnavailable', 'This link is no longer available.') }}</p>
+      <p v-else-if="state === 'timedout'">{{ tx('shareVisitTimedOut', 'Your session timed out. Open your original link again.') }}</p>
       <p v-else-if="state === 'limited'">{{ tx('shareVisitLimited', 'Too many attempts. Please wait a moment and try again.') }}</p>
       <p v-else-if="state === 'exited'">{{ tx('shareVisitExited', 'You have left this share.') }}</p>
       <button
@@ -124,7 +125,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import SafeMailRenderer from '@/components/safe-mail/index.vue'
@@ -159,10 +160,12 @@ const { copy, selectableRef } = useCopyWithFallback()
 const state = ref('loading')
 const mailbox = ref('')
 const sessionToken = ref('')
+const pageSecret = ref('')
 const mails = ref([])
 const selectedId = ref('')
 const rateLimited = ref(false)
 const copyResult = ref('')
+let justRecovered = false
 
 function hasShareCode(code) {
     return code != null && String(code) !== ''
@@ -214,6 +217,7 @@ async function fetchMails(args) {
     try {
         const result = await listShareMails(args)
         rateLimited.value = false
+        justRecovered = false
         return result
     } catch (err) {
         if (isShareRateLimited(err)) {
@@ -233,7 +237,9 @@ const polling = useSharePolling({
     limit: PAGE_LIMIT,
     listShareMails: fetchMails,
     onMails: onPolledMails,
-    onUnavailable: (err) => noteShareFailure(err)
+    onUnavailable: (err) => {
+        void noteShareFailure(err)
+    }
 })
 polling.stop()
 
@@ -270,38 +276,137 @@ function bindSelectable(el) {
     selectableRef.value = el
 }
 
-function noteShareFailure(err, fromSession = false) {
+function logShareFailure(err) {
+    const status = (err && ((err.response && err.response.status) || err.status)) || null
+    let code = 'SHARE_REQUEST_FAILED'
+    if (err && (err.code === 'SHARE_UNAVAILABLE' || err.message === 'SHARE_UNAVAILABLE')) {
+        code = 'SHARE_UNAVAILABLE'
+    } else if (isShareRateLimited(err)) {
+        code = 'RATE_LIMITED'
+    } else if (status) {
+        code = `SHARE_HTTP_${status}`
+    }
+    console.error('[share]', code, status)
+}
+
+function hadWorkingSession() {
+    return Boolean(sessionToken.value || (currentLid() && readShareSession(currentLid())))
+}
+
+function clearMailboxView() {
+    const lid = currentLid()
+    if (lid) {
+        clearShareSession(lid)
+    }
+    sessionToken.value = ''
+    mailbox.value = ''
+    mails.value = []
+    selectedId.value = ''
+    rateLimited.value = false
+    copyResult.value = ''
+}
+
+function showDeadShare(err) {
+    polling.stop()
+    clearMailboxView()
+    state.value = 'unavailable'
+    if (err) {
+        logShareFailure(err)
+    }
+}
+
+function showTimedOut(err) {
+    polling.stop()
+    clearMailboxView()
+    state.value = 'timedout'
+    if (err) {
+        logShareFailure(err)
+    }
+}
+
+async function reestablishSession() {
+    const lid = currentLid()
+    const sec = pageSecret.value
+    if (!lid || !sec) {
+        return false
+    }
+    const data = await createShareSession(lid, sec)
+    const token = data && data.sessionToken
+    if (!token) {
+        return false
+    }
+    writeShareSession(lid, token)
+    sessionToken.value = token
+    if (data.mailbox) {
+        mailbox.value = data.mailbox
+    }
+    return true
+}
+
+async function recoverFromUnavailable(err, fromSession = false) {
     if (isShareRateLimited(err)) {
         rateLimited.value = true
         if (state.value !== 'ready') {
             state.value = 'limited'
         }
-        return
+        return false
     }
-    if (fromSession || isShareUnavailable(err) || !err) {
-        polling.stop()
-        const lid = currentLid()
-        if (lid) {
-            clearShareSession(lid)
-        }
-        sessionToken.value = ''
-        mailbox.value = ''
-        mails.value = []
-        selectedId.value = ''
-        rateLimited.value = false
-        copyResult.value = ''
-        state.value = 'unavailable'
-        if (err) {
-            console.error(err)
-        }
-        return
+    if (!(fromSession || isShareUnavailable(err) || !err)) {
+        rateLimited.value = true
+        logShareFailure(err)
+        return false
     }
-    rateLimited.value = true
-    console.error(err)
+    if (fromSession) {
+        showDeadShare(err)
+        return false
+    }
+    if (justRecovered) {
+        justRecovered = false
+        showDeadShare(err)
+        return false
+    }
+    if (pageSecret.value) {
+        try {
+            const ok = await reestablishSession()
+            if (!ok) {
+                showDeadShare(err)
+                return false
+            }
+            justRecovered = true
+            polling.unavailable.value = false
+            state.value = 'ready'
+            return true
+        } catch (reErr) {
+            if (isShareRateLimited(reErr)) {
+                rateLimited.value = true
+                if (state.value !== 'ready') {
+                    state.value = 'limited'
+                }
+                return false
+            }
+            showDeadShare(reErr)
+            return false
+        }
+    }
+    if (hadWorkingSession()) {
+        showTimedOut(err)
+        return false
+    }
+    showDeadShare(err)
+    return false
+}
+
+async function noteShareFailure(err, fromSession = false) {
+    const recovered = await recoverFromUnavailable(err, fromSession)
+    if (recovered) {
+        await beginMailbox()
+    }
 }
 
 function exitShare() {
     polling.stop()
+    pageSecret.value = ''
+    justRecovered = false
     const lid = currentLid()
     if (lid) {
         clearShareSession(lid)
@@ -358,6 +463,7 @@ async function beginMailbox() {
         if (!selectedId.value && mails.value.length) {
             selectedId.value = mailKey(mails.value[mails.value.length - 1])
         }
+        justRecovered = false
         rateLimited.value = false
         polling.start()
     } catch (err) {
@@ -366,7 +472,7 @@ async function beginMailbox() {
             polling.start()
             return
         }
-        noteShareFailure(err)
+        await noteShareFailure(err)
     }
 }
 
@@ -401,7 +507,7 @@ async function downloadAttachment(item, attachment) {
         link.remove()
         URL.revokeObjectURL(url)
     } catch (err) {
-        noteShareFailure(err)
+        await noteShareFailure(err)
     }
 }
 
@@ -416,8 +522,11 @@ async function bootstrap() {
         return
     }
     clearOtherShareSessions(lid)
+    pageSecret.value = ''
+    justRecovered = false
     const sec = consumeShareSecret(lid)
     if (sec) {
+        pageSecret.value = sec
         try {
             const data = await createShareSession(lid, sec)
             const token = data && data.sessionToken
@@ -432,7 +541,7 @@ async function bootstrap() {
             state.value = 'ready'
             await beginMailbox()
         } catch (err) {
-            noteShareFailure(err, true)
+            await noteShareFailure(err, true)
         }
         return
     }
@@ -447,6 +556,11 @@ async function bootstrap() {
 }
 
 watch(() => route.params.lid, bootstrap, { immediate: true })
+
+onUnmounted(() => {
+    pageSecret.value = ''
+    justRecovered = false
+})
 
 defineExpose({
     noteShareFailure,

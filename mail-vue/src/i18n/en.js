@@ -369,6 +369,7 @@ const en = {
     shareVisitLoading: 'Opening shared mailbox...',
     shareVisitReady: 'Shared mailbox',
     shareVisitUnavailable: 'This link is no longer available.',
+    shareVisitTimedOut: 'Your session timed out. Open your original link again.',
     shareVisitLimited: 'Too many attempts. Please wait a moment and try again.',
     shareVisitExited: 'You have left this share.',
     shareVisitExit: 'Leave',

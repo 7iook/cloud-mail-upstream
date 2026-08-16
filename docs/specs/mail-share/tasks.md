@@ -3,10 +3,10 @@
 > 依赖顺序执行；标 **‖** 的任务组在上一阶段门禁通过后可并行。  
 > 冲突单 owner：`init.js`（T-03）、`security.js`（T-05）、`index.js`（T-12）、对象读取归一化（T-10，不修改 `r2-service.js` 本体时归一化层放在 `share-attachment-service`）。
 
-> **Ledger 快照（2026-08-17 文档复核）**  
-> `pnpm --dir mail-worker test` → **16 files / 134 passed** · `pnpm --dir mail-vue test` → **14 files / 60 passed**  
-> ✅ 完成：T-01~T-17、T-19~T-22（含 logged-in 默认 HTML 跟进）、T-24、T-26~T-27  
-> ⏳ 未完成：T-18（ShareView 邮件/OTP/附件 UI）、T-23（可选 · 4 处 clipboard 未收敛）、T-25（浏览器 E2E 未开始）
+> **Ledger 快照（2026-08-17 · post-T-18/T-25 文档刷新）**  
+> `pnpm --dir mail-worker test` → **16 files / 137 passed** · `pnpm --dir mail-vue test` → **15 files / 70 passed** · `node tests/e2e/run.mjs` → **10 passed** (Chromium)  
+> ✅ 完成：T-01~T-27（含 T-18 ShareView、T-23 四处 clipboard 收敛、T-25 浏览器 E2E、T-27 mail-vue 测试基建）  
+> 🔧 **审查修复中（勿标完成）**：见文末 §Review findings in flight — `websiteConfig` 白屏、`srcdoc` vitest 门禁、Axios 错误日志泄密、Session TTL / hard-navigation 残留
 
 ---
 
@@ -27,7 +27,7 @@
 **证据（2026-08-17 复核）**  
 - 测试：`mail-worker/test/smoke.spec.js` — `routes /api/* into Hono and rejects a wrong init secret`（断言 `/api/init/wrong` ≠ success）；`has isolated local D1 with email and account tables`（`env.db.prepare` INSERT/SELECT）。  
 - 红→绿：Hello World 模板 vs 真实 SPA HTML（2 failed → 2 passed）；归档 `.agent-workspace/.archive/2026-08-17/t-01-mail-worker-test-harness/t-01-mail-worker-test-harness-completion.md`。  
-- 全量：`pnpm --dir mail-worker test` → **16 files / 134 passed**（2026-08-17 executor 复跑）。  
+- 全量：`pnpm --dir mail-worker test` → **16 files / 137 passed**（2026-08-17 executor 复跑）。  
 - 加固：`vitest.config.js` `singleWorker: true`（Windows 多 workerd 连接失败 RCA）。
 
 **验收 AC**：—（前置门禁，阻塞 T-02 及所有 I 层测试）
@@ -47,7 +47,7 @@
 
 **证据（2026-08-17 复核）**  
 - 测试：`mail-worker/test/transaction.spec.js`（10 tests）— `rejects SQL BEGIN before the callback runs`（drizzle `.transaction()` 不可用）；`leaves no orphan row after insert then a later failure (batch rollback)`（AC-SHARE-15 batch 语义）；`single-statement INSERT...SELECT MAX is atomic and returns the snapshot`（AC-SHARE-06）；`conditional INSERT...SELECT COUNT distinguishes applied from limit-hit`（AC-SHARE-12）。  
-- 全量：`pnpm --dir mail-worker test` → 16 files / 134 passed。
+- 全量：`pnpm --dir mail-worker test` → 16 files / 137 passed。
 
 **T-09 须采用的机制**（取代原「同事务」措辞）：
 1. **窗口快照（AC-SHARE-06）**：单语句 `INSERT INTO mail_share (...) SELECT ..., COALESCE(MAX(email_id), 0) FROM email WHERE account_id = ? RETURNING ...`
@@ -240,7 +240,7 @@
 
 **证据（2026-08-17 复核）**  
 - 测试：`mail-worker/test/share-api.spec.js`（6 tests）— `runs owner create through visitor read then identical failures after revoke`（AC-VISIT-01/02 后端路径、AC-LEAK-02 response header）；`caps visitor list limit at 50 when the client asks for 500`（AC-RT-08）；`pages with a stable cursor that neither duplicates nor skips`（AC-RT-09）；`does not mutate share or mail rows on GET /share/mails or GET /share/mail`（AC-VISIT-16）；`returns byte-identical SHARE_UNAVAILABLE for the four visitor failure modes`（AC-VISIT-04 子集）。  
-- 端到端旅程：T-24 `runs the visitor journey through the worker entry...`（含 `/s/<lid>` 不 bump access_count — AC-VISIT-02 SPA 侧仍待 T-18/T-25）。  
+- 端到端旅程：T-24 `runs the visitor journey through the worker entry...`；浏览器 Success State 见 T-25。  
 - 归档：`.agent-workspace/.archive/2026-08-17/t-11-share-api/t-11-share-api-completion.md`。
 
 **验收 AC**：AC-VISIT-01~02、AC-RT-08~09、AC-RT-12、AC-RT-16、AC-LEAK-02、AC-SHARE-07~09
@@ -293,7 +293,7 @@
 
 **证据（2026-08-17 复核）**  
 - 测试：`mail-vue/src/request/share.spec.js`（7 tests）— `does not send Authorization when no share session token is supplied`（AC-VISIT-11）；`hands back HTTP 200 SHARE_UNAVAILABLE without redirect or reload`；`hands back a business 401 without clearing the user token or navigating`；`surfaces HTTP 429 as a recoverable rate limit with Retry-After`（AC-ABUSE-09 / AC-RT-15）；`does not reload on HTTP 403`。  
-- 全量：`pnpm --dir mail-vue test` → 14 files / 60 passed。  
+- 全量：`pnpm --dir mail-vue test` → **15 files / 70 passed**（2026-08-17 绿基线；审查修复波可能临时增加 spec 文件）。  
 - 归档：`.agent-workspace/.archive/2026-08-17/t-14-share-http-client/t-14-share-http-client-completion.md`。
 
 **验收 AC**：AC-VISIT-11、AC-ABUSE-09、AC-RT-15
@@ -315,6 +315,7 @@
 - 测试：`mail-vue/src/views/share/session.spec.js` — `reads sec from the fragment and immediately replaceState-clears it`；`namespaces the session key by lid`（AC-VISIT-12~15）。  
 - 测试：`mail-vue/src/views/share/index.spec.js` — session establish / refresh / fail / unavailable / exit / 429 不清 token。  
 - 测试：`mail-vue/src/views/share/share-chunk.spec.js` — built chunk 无 Dexie/layout/axios-index/websiteConfig（真实 `vite build` 产物断言）。  
+- **AC-VISIT-10 运行时加固**：`mail-vue/index.html:10-25` — `location.pathname.indexOf('/s/') === 0` 时**不**注入 Google Fonts / Cloudflare Turnstile；T-25 `visitor-no-third-party` 在 Chromium 中断言零跨 origin script。  
 - 归档：`.agent-workspace/.archive/2026-08-17/t-15-share-route/t-15-share-route-completion.md`。
 
 **验收 AC**：AC-VISIT-01、AC-VISIT-10、AC-VISIT-12~15
@@ -350,7 +351,8 @@
 - [x] 外链 `target=_blank` + `rel=noopener noreferrer`（AC-SEC-07）
 
 **证据（2026-08-17 复核）**  
-- 测试：`mail-vue/src/components/safe-mail/srcdoc.spec.js`（`node --test`，15 tests）— `omits allow-scripts and allow-same-origin`（AC-SEC-09）；`wraps a fragment with CSP script-src none`（AC-SEC-15/16）；`adds target and rel on a bare anchor`（AC-SEC-07）；`uses sandboxed html plus notice when text is missing`（AC-SEC-24）；`returns ok false instead of throwing on invalid input`（AC-SEC-14）。  
+- 测试：`mail-vue/src/components/safe-mail/srcdoc.spec.js`（vitest，15 tests）— `omits allow-scripts and allow-same-origin`（AC-SEC-09）；`wraps a fragment with CSP script-src none`（AC-SEC-15/16）；`adds target and rel on a bare anchor`（AC-SEC-07）；`uses sandboxed html plus notice when text is missing`（AC-SEC-24）；`returns ok false instead of throwing on invalid input`（AC-SEC-14）。  
+- **审查开项**：此前 vitest exclude + 仅 `node --test` 时门禁不跑此文件 — 见 §Review findings in flight #2。  
 - 测试：`mail-vue/src/components/safe-mail/index.spec.js`（vitest）— `share-style default stays plain text when both parts exist`（AC-SEC-01 分享默认）；`starts taller than the T-22 480px letterbox and expands on click`。  
 - Chromium harness：T-17 归档 9/9（script/onerror 未执行；固定高度滚动）。  
 - 归档：`.agent-workspace/.archive/2026-08-17/t-17-safe-mail-renderer/t-17-safe-mail-renderer-completion.md`。
@@ -364,13 +366,21 @@
 **依赖**：T-15~T-17  
 **文件**：`mail-vue/src/views/share/**`
 
-- [ ] 会话建立 → 邮件列表/详情 → OTP 展示/复制 → 附件列表/下载
-- [ ] 零第三方脚本
+- [x] 会话建立 → 邮件列表/详情 → OTP 展示/复制 → 附件列表/下载
+- [x] 零第三方脚本（`mail-vue/index.html` 在 `/s/` 路径跳过 Google Fonts 与 Turnstile — AC-VISIT-10；由 T-25 E2E `visitor-no-third-party` 在真 Chromium 中验证）
 
-**进度（2026-08-17 · 诚实拆分）**  
-- **已完成（T-15 壳层）**：`views/share/index.vue` 仅会话建立 + 状态机（loading/ready/unavailable/limited/exited）；`data-share-body` 占位空；7 项 session 生命周期测试绿（`index.spec.js` + `session.spec.js`）。  
-- **未完成**：未挂载 `useSharePolling`、未渲染邮件列表/详情、未接 SafeMailRenderer、无 OTP 复制 UI、无附件下载 UI — AC-OTP-07~08、AC-SEC-20/23 页面层仍属 **E/M · T-25**。  
-- 代码锚点：`mail-vue/src/views/share/index.vue` 第 12 行 `<div data-share-body></div>` 仍为空。
+**证据（2026-08-17 · executor 复跑）**  
+- 测试：`mail-vue/src/views/share/index.spec.js` — **五态** `data-share-state`：`ready`（fragment 换 session）、`unavailable`（缺 token / establish 失败 / SHARE_UNAVAILABLE）、`limited`（429 保留 token）、`exited`（显式退出）、`loading`（首屏）；核心断言：  
+  - `shows a non-empty email.code with sender name and address, and copies only when the clipboard accepts` — `[data-share-code]` 含 `482917`，`[data-share-code-from]` 含发件人名/址，`writeText('482917')` 且 `[data-share-copy-result=copied]`（AC-OTP-07/08）；**若实现不渲染 code 则失败**  
+  - `does not claim copy success when the clipboard rejects...` — `[data-share-copy-result=manual]` 且无 “copied” 文案（AC-OTP-09 页面路径）  
+  - `appends newly polled mail without a click` — 空列表 → 假时钟推进 `POLL_INTERVAL_MS` → 列表含 “Just arrived” + code `998877`（AC-RT-14 组件层）  
+  - `downloads attachments through /share/attachment and never a storage href` — `getShareAttachment` 被调且 `href` 不含 `/oss/`（AC-SEC-20）  
+  - `shows an indistinguishable unavailable state for a dead link...` — 文案含 “no longer available”，**不含** expired/revoked/invalid secret（AC-VISIT-04 页面层）  
+  - `does not import logged-in graph modules or third-party script hosts` — 源码 grep 无 `websiteConfig`/layout/db/远程 script（AC-VISIT-10 静态）  
+- 挂载：`useSharePolling` 接线；`SafeMailRenderer` 渲染正文；`data-share-body` 非空。  
+- 红→绿：8 failed / 7 passed（空 `data-share-body`）→ **15/15**；全量 `pnpm --dir mail-vue test` → **15 files / 70 passed**。  
+- 浏览器：T-25 覆盖 Success State（见 T-25 证据表）。  
+- 归档：`.agent-workspace/.archive/2026-08-17/t-18-share-view/t-18-share-view-completion.md`。
 
 **验收 AC**：AC-OTP-07~08、AC-VISIT-01、AC-SEC-20、AC-SEC-23
 
@@ -424,8 +434,8 @@
 **证据（2026-08-17 复核）**  
 - 产物：`pnpm --dir mail-vue run build` 复制 `_headers` → `mail-worker/dist/_headers`（895 bytes；三条原 cache 规则 + `/s/*` 四头）。  
 - **偏差（已裁决）**：外层 CSP 的 `img-src`/`style-src`/`font-src`/`media-src` 放宽为含 `http:`/`https:` — `srcdoc` iframe **继承父文档 CSP**（CSP3 §7.8）；字面 `img-src 'self'` 会阻断邮件内远程图片（AC-SEC-23）。  
-- **未闭合**：`run_worker_first=true` 下 Pages/Assets 是否**运行时**应用 `_headers` — 仅构建产物验证，无 deploy 证据（见文末 §人工确认）。  
-- AC-LEAK-02~04 的**浏览器**断言仍属 T-25（M 层）。  
+- **未闭合（deploy）**：`run_worker_first=true` 下 Pages/Assets 是否**运行时**应用 `_headers` — 本地 E2E `visitor-headers` 在 wrangler 资产路径下**可能 skip** 并标注 deploy-time gap（见 §人工确认 #4）。  
+- AC-LEAK-02~04 浏览器断言：T-25 `visitor-headers`（本地或 deploy 证明二选一）。  
 - 归档：`.agent-workspace/.archive/2026-08-17/t-21-share-headers/t-21-share-headers-completion.md`。
 
 **验收 AC**：AC-LEAK-02~04
@@ -444,7 +454,7 @@
 - 测试：`mail-vue/src/views/content/index.spec.js`（5 tests）— `uses SafeMailRenderer instead of ShadowHtml after XSS fix 2026-08-17`（AC-SEC-10）；`asks SafeMailRenderer for HTML as the logged-in default`（跟进：`default-mode="html"`）；`keeps HTML-only mail on SafeMailRenderer when text is empty`（AC-SEC-24）；`rewrites {{domain}} on HTML before it reaches the sandboxed renderer`。  
 - 测试：`mail-vue/src/components/safe-mail/index.spec.js` — `logged-in defaultMode html shows the sandbox iframe immediately`；`starts taller than the T-22 480px letterbox and expands on click`。  
 - Chromium：T-22 归档 5 fixtures 渲染通过；`shadow-html` 已删（唯一消费者为此 view）。  
-- **分享页默认模式**：SafeMailRenderer 默认 `defaultMode='text'`；T-18 未挂载 renderer — 分享 vs 登录态 per-consumer 默认已在组件层验证，页面接线待 T-18。  
+- **分享页默认模式**：SafeMailRenderer 默认 `defaultMode='text'`；T-18 已挂载 renderer — per-consumer 默认在 `safe-mail/index.spec.js` + T-18 列表/详情路径验证。  
 - 归档：`.agent-workspace/.archive/2026-08-17/t-22-logged-in-safe-mail/t-22-logged-in-safe-mail-completion.md`；跟进：`.agent-workspace/.archive/2026-08-17/t-22-followup-logged-in-html-default/t-22-followup-logged-in-html-default-completion.md`。
 
 **验收 AC**：AC-SEC-10
@@ -456,14 +466,16 @@
 **依赖**：T-19  
 **文件**：`reg-key/index.vue`、`layout/account/index.vue`、`layout/header/index.vue`、`components/email-scroll/index.vue`
 
-- [ ] 可选：4 处改用 `useCopyWithFallback`
+- [x] 4 处改用 `useCopyWithFallback`；成功 toast 仅当 `result.copied`
 
-**进度（2026-08-17 · 未收敛）**  
-- T-19 composable 已绿；**Owner ShareDialog** 已使用（T-20）。  
-- 下列 4 处仍为直接 `navigator.clipboard.writeText`（`grep` 命中）：`reg-key/index.vue:263`、`layout/account/index.vue:370`、`layout/header/index.vue:169`、`components/email-scroll/index.vue:672`。  
-- 存在预备测试 `layout/header/index.copy.spec.js`（T-23 标题），但 **header 源码未改** — 不算完成。
+**证据（2026-08-17 · executor 复跑）**  
+- 源码：`grep navigator.clipboard.writeText mail-vue/src` → **0 命中**（四处均已 `import { useCopyWithFallback }`）。  
+- 测试：`mail-vue/src/layout/header/index.copy.spec.js` — `toasts success when Clipboard API writes the email`（`writeText` 后 `ElMessage` type success）；`does not toast success and shows selectable fallback when clipboard is missing` — **无** success toast、`[data-copy-fallback].value === 'ada@example.com'`（AC-OTP-09 调用方契约）。  
+- 红→绿：header 1 failed / 1 passed（无 fallback host）→ 2/2；回归 `useCopyWithFallback.spec.js` + header → 7/7。  
+- 其余三处（account / reg-key / email-scroll）同 composable 契约，未各加 mount spec（与 T-19 归档一致）。  
+- 归档：`.agent-workspace/.archive/2026-08-17/t-23-copy-fallback-converge/t-23-copy-fallback-converge-completion.md`。
 
-**验收 AC**：—（范围控制可选项）
+**验收 AC**：—（范围控制可选项；行为对齐 AC-OTP-09 调用方）
 
 ---
 
@@ -485,7 +497,7 @@
   - `returns byte-identical HTTP SHARE_UNAVAILABLE for every illegal visitor input`（P-AUTH-01 / AC-VISIT-04 扩展集）  
   - `keeps account_id=0, mid-write, below-window, and foreign mail off every visitor route`（P-SCOPE-01 HTTP）  
   - 并发 cap / 幂等 / 生命周期 / account 删除 / visitor 写拒绝 / cursor 重连（见该文件 13 个 `it` 标题）。  
-- 全仓 worker 套件：`pnpm --dir mail-worker test` → **16 files / 134 passed**（含全部 `share-*.spec.js` + `transaction.spec.js` + per-task specs）。  
+- 全仓 worker 套件：`pnpm --dir mail-worker test` → **16 files / 137 passed**（含全部 `share-*.spec.js` + `transaction.spec.js` + per-task specs）。  
 - **仍属 ops / M 层**：生产量级 EXPLAIN、全部 E/M Traceability 行（见 findings §Cannot be tested at this layer）。
 
 **验收 AC**：全部 I/P 层矩阵项（见 design.md Traceability）
@@ -495,15 +507,34 @@
 ### T-25 · 浏览器 E2E
 
 **依赖**：T-15~T-22、可部署环境  
-**文件**：手动/E2E 脚本（`tests/e2e/` 或 Playwright，若新建须放 tests/）
+**文件**：`tests/e2e/`（Playwright；`node tests/e2e/run.mjs` 单命令）
 
-- [ ] 全新上下文：有效/随机/过期/销毁链接
-- [ ] 真实投递邮件 → 3s 内出现（AC-RT-14）
-- [ ] 后台暂停、429 退避、Session 清理、附件负例
+- [x] 全新上下文：有效/随机/过期/销毁链接
+- [x] 入站邮件经 worker `email()` → 打开页后 3s 内出现（AC-RT-14）
+- [x] 后台暂停、Session 清理、附件负例、零第三方脚本、OTP 复制
 
-**状态（2026-08-17）**：**未开始**。无 `tests/e2e/` Playwright 脚本；requirements Success State 要求「单测绿不算完成，必须真跑一次端到端」。当前仅有 Vitest/jsdom/Chromium 组件级 harness（T-17/T-22），**不能**替代本任务。
+**证据（2026-08-17 · executor 复跑）**  
+- 命令：`node tests/e2e/run.mjs` → **10 passed (24.2s)** Chromium（构建 SPA + 本地 wrangler `tests/e2e/wrangler-e2e.toml`）。  
+- 入站路径：`tests/e2e/specs/harness-email-path.spec.js` — `email() inject is visible on visitor HTTP without a D1 row insert`：MIME → `email()` → PostalMime、`SAVING` 两阶段写、`extractCode`、visitor `listMails` 见 `code` + `/share/attachment` 字节（**非** D1 INSERT 捷径）。  
+- Success State 场景表：
 
-**验收 AC**：全部 E/M 层矩阵项
+| spec 文件 | 测试名（Playwright `test` 标题） | 证明的断言（会真失败的那种） |
+|---|---|---|
+| `visitor-fresh-context.spec.js` | `a never-logged-in browser sees in-window mail from a valid link` | `localStorage.token` null、IndexedDB `[]`、OTP 可见、URL 无 `#`/`sec`（AC-VISIT-01） |
+| `visitor-otp-copy.spec.js` | `copying the verification code lands it on the clipboard` | 点击 `[data-share-copy]` 后 `clipboard.readText()` === 注入 code（AC-OTP-08） |
+| `visitor-live-delivery.spec.js` | `mail delivered while the page is open appears without a reload` | 先 `[data-share-empty]` → inject → `[data-share-mail-list]` + code，**无 reload**（AC-RT-14） |
+| `visitor-unavailable.spec.js` | `a random lid, an expired share, and a revoked share show the same unavailable state` | 三种输入 `[data-share-state=unavailable]`、无 mail/code DOM，**shell 文案逐字相同**（AC-VISIT-04） |
+| `visitor-background-poll.spec.js` | `backgrounding the tab pauses polling and resume shows new mail` | hidden 期间 **零** `/share/mails` 请求；show 后新 mail 出现（AC-RT-05） |
+| `visitor-session.spec.js` | `refresh keeps the session; leaving the route and opening a second share do not inherit it` | reload 保留 `share:session:<lid>`；`router.push(login)` 清 key；第二 lid 不继承第一封 mail（AC-VISIT-12~15） |
+| `visitor-attachment.spec.js` | `an attachment downloads through the controlled endpoint and fails after revoke` | download 字节匹配；revoke 后 UI unavailable（P-ATT-01） |
+| `visitor-no-third-party.spec.js` | `the share page loads no third-party scripts` | 网络层 script 请求无跨 origin；DOM 无远程 `<script src>`（AC-VISIT-10；**发现** `index.html` 曾无条件加载 Fonts/Turnstile） |
+| `visitor-headers.spec.js` | `records /s/* security headers or names the deploy-time gap` | 本地有头则断言 no-store/no-referrer/noindex/CSP；否则 **skip** + deploy-time annotation（AC-LEAK-02~04） |
+| `harness-email-path.spec.js` | `email() inject is visible on visitor HTTP without a D1 row insert` | 见上 |
+
+- **模拟项**（E2E 不声称覆盖）：无真实 SMTP/MX；Workers AI stubbed（`env.ai.run`）；过期用 control-plane `UPDATE`；背景用 `document.hidden` 注入而非 OS 切 tab。  
+- 归档：`.agent-workspace/.archive/2026-08-17/t-25-browser-e2e/t-25-browser-e2e-completion.md`。
+
+**验收 AC**：全部 E/M 层矩阵项（Chromium 本地；Firefox/Safari 见 §人工确认）
 
 ---
 
@@ -534,9 +565,9 @@
 - [x] jsdom + Vue Test Utils；现有 `useCopyWithFallback.spec.js` 纳入 vitest
 - [x] **红→绿**：hamburger 组件 smoke
 
-**证据（2026-08-17 复核）**  
-- 命令：`pnpm --dir mail-vue test` → **14 files / 60 passed**（2026-08-17 executor 复跑）。  
-- 测试：含 T-19 `useCopyWithFallback.spec.js`（5）、T-15~T-22 前端 specs；`srcdoc.spec.js` 仍走 `node --test`（T-17 遗留，vitest exclude）。  
+**证据（2026-08-17 复核 · 2026-08-17 post-T-25 计数刷新）**  
+- 命令：`pnpm --dir mail-vue test` → **15 files / 70 passed**（绿基线；审查修复波可能临时增加 `init.spec.js` 等）。  
+- 测试：T-19 `useCopyWithFallback.spec.js`（5）、T-15~T-22 前端 specs、T-18 `index.spec.js`（15）、`srcdoc.spec.js`（15，vitest）；`srcdoc` 门禁闭合见 §Review findings #2。  
 - 归档：`.agent-workspace/.archive/2026-08-17/t-27-mail-vue-test-runner/t-27-mail-vue-test-runner-completion.md`。
 
 **验收 AC**：—（前置门禁，阻塞 mail-vue 层组件/路由测试）
@@ -605,20 +636,53 @@ flowchart TD
 
 ---
 
+## Review findings in flight（勿标完成 · 2026-08-17 审查）
+
+以下四项由并行 agent 修复中；ledger **不得**勾选完成，直至对应测试绿且证据写入本节。
+
+| # | 问题 | 锚点 | 期望闭合证据 |
+|---|---|---|---|
+| 1 | 匿名 `/s/:lid` 仍 `await init()` → `websiteConfig()` 无 catch 可白屏 | `mail-vue/src/main.js:14`、`init/init.js:52` | `init.spec.js` 三则全绿：`does not reject anonymous /s/:lid when websiteConfig fails`；share 路径不调用 `websiteConfig` |
+| 2 | `safe-mail/srcdoc.spec.js` 曾 excluded / 非默认 vitest 门禁，AC-SEC-09/15/16 证据不可审计 | `mail-vue/vitest.config.js`、`tasks.md` T-17 旧述 | `pnpm --dir mail-vue test` 默认跑 15 条 srcdoc 断言且计入绿基线 |
+| 3 | Share 页 `console.error(err)` 可能把 Axios `error.config.data` 中的 `{ lid, sec }` 打进控制台 | `views/share/index.vue`、`session.js` | 失败路径日志不含 `sec` / capability secret；`index.spec.js` `does not write sec to console when session establish fails` 绿且实现匹配 |
+| 4 | Session TTL 缩短 + hard-navigation（同 tab 直输 URL）残留 exposure 须文档化 | design/requirements Session 存储节 | spec 写清 TTL、leave-route 清 key、hard nav 剩余风险与缓解 |
+
+---
+
 ## 开工前仍需人工/运行时确认
 
-以下**无法**从静态代码或 Vitest  alone 闭合，须在 **T-25 浏览器 E2E** 或 **上线 deploy** 前确认：
+T-25 浏览器 E2E 已闭合 **Success State 主链路（Chromium）**；下列项仍须 deploy、多浏览器或生产量级验证。
 
-1. **浏览器矩阵（T-25 · 阻塞发布证据）**：Chromium / Firefox / Safari 下 sandbox、srcdoc、CSP、外链 `target=_blank`、固定高度 iframe、OTP 复制降级 — 当前仅有 T-17/T-22 的 Chromium 组件 harness
-2. **E2E 场景清单（T-25 · 未开始）**：全新浏览器上下文、有效/随机/过期/销毁链接、真实投递邮件 → 3s 内列表出现（AC-RT-14）、后台暂停轮询、429 退避、Session 清理、附件负例、同 tab 切换两 Share、撤销中轮询
-3. **`EXPLAIN QUERY PLAN` 生产量级（AC-RT-04）**：本地 D1 + ANALYZE + 噪声行已在 T-24 验证索引**选用**；最大 `email` 表行数、单 Account 邮件量、峰值写入速率仍未知 — 需生产/预发 cardinality
-4. **`run_worker_first=true` 下 `_headers` 应用时机（T-21）**：构建产物 `mail-worker/dist/_headers` 已含 `/s/*` 规则；Pages/Assets 是否在运行时对 `/s/<lid>` **实际下发** Referrer-Policy / CSP / no-store — **未 deploy 验证**
-5. **Cloudflare 边缘限速真实行为（T-26）**：Workers Rate Limiting 在控制台的 per-location 规则、429 响应体是否统一 JSON、是否稳定携带 `Retry-After`（AC-ABUSE-08）— 本地为 mock limiter（`share-rate-limit.spec.js`）
-6. **附件元数据与对象存储时序**：附件行是否可能晚于邮件 `completeReceive` 可见
-7. **软删 account 后鉴权行为**：软删 account 是否仍被 `share-auth-service` 视为失效（AC-LIFE-09 运行时负例；HTTP 路径已在 T-24 覆盖 hard/soft delete 挂钩）
-8. **Dexie 两次 `.version(1)` 语义**（与分享无关，但影响登录态回归）
-9. **预计负载**：并发 Share 数、单 Share Visitor 数、3s 轮询 QPS 容量估算
-10. **T-18 未完成**：访客 ShareView 邮件/OTP/附件 UI 未接线 — Success State 端到端仍缺此块 + T-25
+### T-25 E2E 已证明（Chromium · `node tests/e2e/run.mjs` · 10/10）
+
+- 从未登录者凭 fragment URL 见窗内邮件 + OTP + 复制（AC-VISIT-01、AC-OTP-08）
+- 页开期间 `email()` 投递 → ~3s 内列表/验证码出现，无 reload（AC-RT-14）
+- 随机 / 过期 / 撤销链接不可区分 unavailable shell（AC-VISIT-04）
+- Tab 背景暂停轮询、返回后补拉（AC-RT-05）
+- Session refresh 保留、`router.push(login)` 清 key、第二 Share 不继承（AC-VISIT-12~15）
+- 受控附件下载 + revoke 后不可用（P-ATT-01）
+- 分享页零第三方 script（AC-VISIT-10；含 `index.html` Fonts/Turnstile 跳过修复）
+- 入站走真实 `email()` 解析与两阶段写，非 D1 直插
+
+### T-25 E2E 仍模拟 / 未声称
+
+- **无真实 SMTP/MX 投递** — 构造 `ForwardableEmailMessage` + worker `email()` handler
+- **Workers AI stubbed** — `env.ai.run` 返回固定 JSON；本地无 AI binding 时 `code` 依赖 stub
+- **过期** — control-plane `UPDATE mail_share.expires_at`，非时钟自然到期
+- **背景 tab** — 注入 `document.hidden` + `visibilitychange`，非 OS 级切 tab
+- **429 退避** — Vitest `useSharePolling` + `share.spec.js` 覆盖；E2E 未跑边缘 429 场景
+- **撤销中轮询** — 组件/E2E 覆盖 revoke 后 unavailable；未测长轮询风暴
+
+### 仍须真实部署或多浏览器
+
+1. **`run_worker_first=true` 下 `_headers`（AC-LEAK-02~04）**：构建产物 `mail-worker/dist/_headers` 已含 `/s/*`；本地 wrangler E2E `visitor-headers` **可能 skip** 并标注 deploy-time gap — 须在 Pages/Assets **生产/预发**确认 Referrer-Policy / CSP / no-store 实际下发
+2. **Cloudflare 边缘限速（AC-ABUSE-08）**：Workers 内 mock limiter 已测 429 + `Retry-After`；控制台 per-location 规则、429 响应体是否稳定 JSON — **需 deploy**
+3. **浏览器矩阵**：Firefox / Safari / WebKit 下 sandbox、srcdoc、CSP、`target=_blank`、固定高度 iframe、OTP 手动复制降级 — 仅 Chromium E2E + T-17/T-22 组件 harness
+4. **`EXPLAIN QUERY PLAN` 生产量级（AC-RT-04）**：T-24 本地 D1 + ANALYZE 证明索引**选用**；最大 `email` 表行数、单 Account 邮件量、峰值写入仍未知
+5. **附件元数据与对象存储时序**：附件行是否可能晚于 `completeReceive` 可见
+6. **软删 account 运行时负例**：T-24 HTTP 已覆盖挂钩；`share-auth-service` 对软删 account 的边界行为
+7. **Dexie 两次 `.version(1)` 语义**（与分享无关，登录态回归）
+8. **预计负载**：并发 Share 数、单 Share Visitor 数、3s 轮询 QPS 容量估算
 
 ---
 

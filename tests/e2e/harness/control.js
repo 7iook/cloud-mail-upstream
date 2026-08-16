@@ -81,6 +81,16 @@ export function control(request, baseURL) {
 			}
 			return out.json
 		},
+		async setSessionTtl(seconds) {
+			const out = await call('/__e2e__/session-ttl', {
+				method: 'POST',
+				body: { seconds }
+			})
+			if (!out.json || !out.json.ok) {
+				throw new Error(`e2e session ttl failed: ${out.text}`)
+			}
+			return out.json
+		},
 		async expireShare(lid) {
 			const out = await call('/__e2e__/expire', { method: 'POST', body: { lid } })
 			if (!out.json || !out.json.ok) {

@@ -7,7 +7,9 @@ import orm from '../entity/orm';
 import BizError from '../error/biz-error';
 
 const SHARE_UNAVAILABLE = 'SHARE_UNAVAILABLE';
-const DEFAULT_SESSION_TTL = 86400;
+// 15 minutes: long enough to wait for and copy an OTP, short enough to bound
+// the same-tab sessionStorage residual after a hard navigation (AC-VISIT-12 vs 15).
+const DEFAULT_SESSION_TTL = 900;
 const TOKEN_VER = 's1';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

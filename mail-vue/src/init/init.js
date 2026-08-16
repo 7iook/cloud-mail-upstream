@@ -7,6 +7,18 @@ import router from "@/router";
 import {websiteConfig} from "@/request/setting.js";
 import i18n from "@/i18n/index.js";
 
+export function detectPreferredLang(storedLang, navigatorLanguage = '') {
+    if (storedLang) {
+        return storedLang
+    }
+    const lang = String(navigatorLanguage || '').split('-')[0]
+    return lang === 'zh' ? 'zh' : 'en'
+}
+
+export function isAnonymousShareVisit(pathname = '', token = '') {
+    return !token && /(?:^|\/)s\/[^/]+/.test(String(pathname || ''))
+}
+
 export async function init() {
     document.title = '\u200B'
 
@@ -15,13 +27,13 @@ export async function init() {
     const accountStore = useAccountStore();
 
     const token = localStorage.getItem('token');
-    if (!settingStore.lang) {
-        let lang = navigator.language.split('-')[0]
-        lang = lang === 'zh' ? lang : 'en'
-        settingStore.lang = lang
-    }
+    settingStore.lang = detectPreferredLang(settingStore.lang, navigator.language)
 
     i18n.global.locale.value = settingStore.lang
+
+    if (isAnonymousShareVisit(window.location.pathname, token)) {
+        return
+    }
 
     let setting = null;
 

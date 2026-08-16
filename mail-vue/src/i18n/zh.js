@@ -369,6 +369,7 @@ const zh = {
     shareVisitLoading: '正在打开分享邮箱...',
     shareVisitReady: '分享邮箱',
     shareVisitUnavailable: '此链接已不可用。',
+    shareVisitTimedOut: '会话已超时，请重新打开原来的链接。',
     shareVisitLimited: '尝试次数过多，请稍后再试。',
     shareVisitExited: '你已离开此分享。',
     shareVisitExit: '离开',

@@ -1,6 +1,6 @@
 # Mail Share · 执行跟踪
 
-> 主 AI 每轮维护本文件。任务定义在 `tasks.md`（T-01~T-26），本文件只记**执行状态、决策与偏差**。
+> 主 AI 每轮维护本文件。任务定义在 `tasks.md`（T-01~T-27），本文件只记**执行状态、决策与偏差**。
 
 ## 本轮用户原始需求
 
@@ -17,9 +17,9 @@
 
 ## 本轮需要完成什么
 
-按 `tasks.md` 的 26 个任务交付可上线的 Mail Share 首版，并满足 88 条 active AC。
+按 `tasks.md` 的 27 个任务交付可上线的 Mail Share 首版，并满足 88 条 active AC。
 
-**完成的定义**（来自 requirements.md Success State）：一个从未登录本系统的人，只凭所有者给的一条链接，就能在浏览器里看到该邮箱在授权时间窗内收到的邮件和其中的验证码并复制走；链接到期或被销毁后立即不再显示任何邮件内容。**单测绿不算完成，必须真跑一次端到端。**
+**完成的定义**（来自 requirements.md Success State）：一个从未登录本系统的人，只凭所有者给的一条链接，就能在浏览器里看到该邮箱在授权时间窗内收到的邮件和其中的验证码并复制走；链接到期或被销毁后立即不再显示任何邮件内容。**T-25 浏览器 E2E（Chromium · `node tests/e2e/run.mjs` · 10/10）已闭合此句；合并前仍须 §Review findings in flight 四项 + deploy 确认项。**
 
 ## 执行方式
 
@@ -60,7 +60,29 @@ T-01 交付物：改 `vitest.config.js`（configPath 指向新建的 `wrangler-v
 - **Wave 3**：‖-1 组 T-05 / T-06 / T-08 / T-12 / T-21
 - **Wave 4**：‖-2 组 T-07 / T-09 / T-10 → 阶段 Review
 - **Wave 5**：前端 ‖-3 组 T-14~T-16 / T-20 / T-26
-- **Wave 6**：T-18 / T-22 → T-24 集成 → T-25 E2E
+- **Wave 6**：T-18 / T-22 → T-24 集成 → T-25 E2E — ✅ **完成**（2026-08-17）
+
+### Wave 6 交付摘要（2026-08-17）
+
+| 任务 | 状态 | 证据摘要 |
+|---|---|---|
+| T-18 ShareView | ✅ | `index.spec.js` 15/15（五态 + OTP/附件/轮询）；`node tests/e2e/run.mjs` Success State |
+| T-23 clipboard 收敛 | ✅ | 4 处 `useCopyWithFallback`；`header/index.copy.spec.js` 2/2；`grep writeText` → 0 |
+| T-25 浏览器 E2E | ✅ | `tests/e2e/` 10 Playwright 场景；`email()` 入站非 D1 直插 |
+| T-27 mail-vue 测试 | ✅ | 绿基线 **15 files / 70 tests** |
+
+**测试绿基线（executor 2026-08-17）**：`pnpm --dir mail-worker test` → 16 / 137 · `pnpm --dir mail-vue test` → 15 / 70 · `node tests/e2e/run.mjs` → 10 passed
+
+**AC-VISIT-10 运行时发现**：`mail-vue/index.html` 曾无条件加载 Google Fonts + Turnstile；已改为 `/s/` 路径跳过 — 仅真浏览器 E2E 捕获。
+
+## 合并门禁 · Review findings in flight（2026-08-17 · 勿标完成）
+
+审查判定 **not merge-ready** 直至下列四项闭合（并行 agent 修复中；详见 `tasks.md` §Review findings in flight）：
+
+1. **`websiteConfig` 白屏** — 匿名 share 仍阻塞在 `init()` → `websiteConfig()`（`init.spec.js` 红）
+2. **`srcdoc.spec.js` vitest 门禁** — sandbox/CSP 断言须为默认 `pnpm --dir mail-vue test` 一部分
+3. **Axios 错误日志泄密** — 失败 session 请求 `{ lid, sec }` 可能经 `console.error(err)` 泄漏
+4. **Session TTL + hard-navigation 文档** — TTL 缩短与 residual exposure 须写入 spec
 
 ## 决策与偏差记录
 
@@ -84,32 +106,17 @@ T-01 交付物：改 `vitest.config.js`（configPath 指向新建的 `wrangler-v
 
 T-06 对账：已按三参落地，与 `share-attachment-service.js:150` 一致。`getById(ctx, mailId)` / `list(ctx, cursor, limit)` 在 live spec/code 零命中。
 
-## 进度快照（2026-08-17 02:10 · 主 AI 独立复核）
+## 进度快照（2026-08-17 · post-T-25 文档刷新）
 
-**测试基线**：`pnpm --dir mail-worker test` → 12 files / 103 tests 全绿；`pnpm --dir mail-vue test` → 2 files / 7 tests 全绿。均由主 AI 亲自复跑。
+**测试绿基线（executor 复跑）**：`pnpm --dir mail-worker test` → **16 files / 137 passed**；`pnpm --dir mail-vue test` → **15 files / 70 passed**；`node tests/e2e/run.mjs` → **10 passed** (Chromium, 24.2s)。
 
 | 任务 | 状态 |
 |---|---|
-| T-01 测试基线 / T-27 前端测试基线 | ✅ 完成（并加固了并发运行） |
-| T-02 D1 事务验证 | ✅ 完成 · **产出推翻 spec 的结论**（见下） |
-| T-03 迁移 + 索引 + 权限种子 | ✅ 完成 · critical 缺陷已修（按 `perm_key` 而非硬编码 id） |
-| T-04 实体 + 响应封装 | ✅ 完成 |
-| T-05 鉴权放行（混合匹配器） | ✅ 完成 · 27/27 |
-| T-06 scoped repository | ✅ 完成 |
-| T-07 访客投影 | ✅ 完成 |
-| T-08 share-auth-service | ✅ 完成 · 六种非法输入响应逐字节相同 |
-| T-09 所有者写路径 | ✅ 完成 · 单语句 `INSERT…SELECT` + `batch()` |
-| T-10 附件受控下载 | ✅ 完成 |
-| T-12 定时清理 | ✅ 完成 |
-| T-17 沙箱渲染器 / T-19 剪贴板 / T-21 安全头 | ✅ 完成 |
-| T-11 路由注册 | ✅ 完成 · 后端链路打通 |
-| T-13 account 删除挂钩 | ✅ 完成 · 撤销收敛为唯一 `applyRevoke` 路径 |
-| T-14 匿名 HTTP 客户端 | ✅ 完成 |
-| T-16 useSharePolling | ✅ 完成 · 四条「现有内联轮询的真实缺陷」红测试全覆盖 |
-| T-22 登录态渲染器迁移 | ✅ 代码已落盘（`content/index.vue` 改用 SafeMailRenderer）· 待回归证据 |
-| T-26 边缘限速 | ✅ 完成 · 429 + `Retry-After` 不被全局 200 处理器改写 |
-| T-15 分享路由 / T-20 所有者 UI / T-24 集成补齐 | 🔄 进行中 |
-| T-18 ShareView（等 T-15）· T-25 浏览器 E2E（需可部署环境）· T-23（可选） | ⏳ 待派 |
+| T-01~T-17、T-19~T-24、T-26~T-27 | ✅ 完成（证据见 `tasks.md` 各节） |
+| T-18 ShareView 邮件/OTP/附件 UI | ✅ 完成 · 15 mount tests + E2E Success State |
+| T-23 四处 clipboard 收敛（可选） | ✅ 完成 |
+| T-25 浏览器 E2E | ✅ 完成 · `tests/e2e/` 10 场景 |
+| **合并阻塞** | 🔧 四项 review finding in flight（见上节） |
 
 ### 关键结论：drizzle `.transaction()` 在 D1 上不可用
 
@@ -155,8 +162,9 @@ T-02 实测：drizzle-orm 0.42 的 D1 驱动发 SQL `BEGIN`，D1 在回调执行
 | 测试基线完全不可用，所有真 D1 断言被阻塞 | ✅ Wave 1 T-01 已闭合 |
 | drizzle D1 `.transaction()` 不可用；T-09 须单语句 + `batch()` | ✅ T-02 已探测并回填 spec（2026-08-17） |
 | 登录态详情页换渲染器 → 正文排版回归 | T-22，最可能拖慢上线 |
-| Safari/WebKit 下 sandbox + srcdoc 行为差异 | 需浏览器矩阵，T-25 |
-| 生产量级下新索引是否真命中 | 需 `EXPLAIN QUERY PLAN` 实测，T-24 |
+| Safari/WebKit 下 sandbox + srcdoc 行为差异 | T-25 仅 Chromium；Firefox/Safari 待矩阵 |
+| 生产量级下新索引是否真命中 | T-24 本地 EXPLAIN 已绿；生产 cardinality 待测 |
+| 合并前 review findings（websiteConfig / srcdoc 门禁 / 日志泄密 / Session TTL 文档） | 🔧 并行修复中 |
 
 ## Wave 2 侦察结论（2026-08-17）
 
@@ -189,3 +197,4 @@ T-02 实测：drizzle-orm 0.42 的 D1 驱动发 SQL `BEGIN`，D1 在回调执行
 - 2026-08-17 executor T-23: swapped 4 leftover `navigator.clipboard.writeText` sites onto `useCopyWithFallback` (header / account / reg-key / email-scroll). Success toast only when `copied`. Red: header mount 1 fail / 1 pass (no fallback host). Green: 2/2; composable+header 7/7. Exercised header; reasoned the other three. Report: `.agent-workspace/.archive/2026-08-17/t-23-copy-fallback-converge/t-23-copy-fallback-converge-completion.md`.
 - 2026-08-17 executor T-18: assembled visitor ShareView on T-15 shell — list/detail, `email.code` OTP+sender+copy-with-fallback, `/share/attachment` blob download, 3s poll, dead vs 429. Red: 8 failed / 7 passed (empty `data-share-body`). Green: 15/15 then 14 files / 69 passed (excluded chunk spec). `node scripts/assert-share-chunk.js` → violations []. Report: `.agent-workspace/.archive/2026-08-17/t-18-share-view/t-18-share-view-completion.md`.
 - 2026-08-17 executor T-18 close-out: `pnpm --dir mail-vue test` first two full runs timed out on router `open /s/:lid` (5s, first ShareView import under suite load). Isolated that test passed (2.36s). Stubbed ShareView in `router/index.spec.js` (guard tests do not need the mailbox page). Third full run: 15 files / 70 passed. `node mail-vue/scripts/assert-share-chunk.js` → `violations: []` marker `assets\\index-D5y-HPRP.js`.
+- 2026-08-17 executor (doc ledger refresh): reconciled `tasks.md` + `EXECUTION-TRACKER.md` post T-18/T-23/T-25 landing. Marked T-18/T-23/T-25 done with auditable test names + run output (worker 16/137, vue 15/70, e2e 10/10). Added §Review findings in flight (4 open). Refreshed §人工确认 for E2E proved vs simulated vs deploy. AC-VISIT-10 index.html third-party skip documented. `spec_coherence.py` blocking=0 (executor run).

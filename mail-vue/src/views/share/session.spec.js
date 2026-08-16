@@ -75,6 +75,7 @@ describe('share session fragment and storage', () => {
         expect(window.location.href).not.toContain('sec-secret')
         expect(window.location.href).not.toContain('#')
         expect(readShareSecretFromFragment()).toBe('')
+        expect(JSON.stringify(sessionStorage)).not.toContain('sec-secret')
     })
 
     it('clears a leftover hash even when capture runs twice', () => {

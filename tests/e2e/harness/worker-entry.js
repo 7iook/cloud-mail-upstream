@@ -17,6 +17,22 @@ import {
 
 const CONTROL_PREFIX = '/__e2e__/'
 let schemaReady = false
+let sessionTtlOverride = null
+
+function envWithSessionTtl(env) {
+	if (sessionTtlOverride == null) {
+		return env
+	}
+	return new Proxy(env, {
+		get(target, prop, receiver) {
+			if (prop === 'SHARE_SESSION_TTL') {
+				return sessionTtlOverride
+			}
+			const value = Reflect.get(target, prop, receiver)
+			return typeof value === 'function' ? value.bind(target) : value
+		}
+	})
+}
 
 function json(data, status = 200) {
 	return new Response(JSON.stringify(data), {
@@ -145,8 +161,20 @@ async function handleControl(req, env, ctx, url) {
 	await ensureSchema(env, ctx)
 
 	if (req.method === 'POST' && route === '/seed') {
+		sessionTtlOverride = null
 		const seeded = await seedOwner(env)
 		return json({ ok: true, ...seeded })
+	}
+
+	if (req.method === 'POST' && route === '/session-ttl') {
+		const body = await req.json()
+		const seconds = Number(body && body.seconds)
+		if (!Number.isFinite(seconds) || seconds <= 0) {
+			sessionTtlOverride = null
+			return json({ ok: true, seconds: null })
+		}
+		sessionTtlOverride = String(Math.floor(seconds))
+		return json({ ok: true, seconds: Number(sessionTtlOverride) })
 	}
 
 	if (req.method === 'POST' && route === '/email') {
@@ -237,7 +265,7 @@ export default {
 				return json({ ok: false, error: detail }, 500)
 			}
 		}
-		return worker.fetch(req, env, ctx)
+		return worker.fetch(req, envWithSessionTtl(env), ctx)
 	},
 	email: worker.email,
 	scheduled: worker.scheduled
