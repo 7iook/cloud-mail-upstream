@@ -1,0 +1,39 @@
+name = "cloud-mail-vitest"
+main = "src/index.js"
+compatibility_date = "2025-03-10"
+compatibility_flags = ["nodejs_compat"]
+
+# No [[ratelimits]] here: share-rate-limit fail-opens when the binding is
+# missing so existing share tests stay green. T-26 injects a mock limiter.
+
+# Local/in-memory D1 for vitest-pool-workers (Miniflare).
+# database_id is a placeholder only — do not use a real remote D1 id.
+# Never set remote = true here.
+[[d1_databases]]
+binding = "db"
+database_name = "vitest-local-email"
+database_id = "00000000-0000-0000-0000-000000000001"
+preview_database_id = "vitest-local-d1"
+
+[[kv_namespaces]]
+binding = "kv"
+id = "00000000-0000-0000-0000-000000000002"
+
+[assets]
+binding = "assets"
+directory = "./dist"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[vars]
+jwt_secret = "vitest-local-jwt-secret"
+domain = ["example.com"]
+admin = "admin@example.com"
+orm_log = false
+analysis_cache = false
+SHARE_ENABLED = "1"
+SHARE_SEC_PEPPER = "vitest-share-sec-pepper"
+SHARE_SEC_PEPPER_KID = "v1"
+SHARE_SESSION_SIGNING_KEY = "vitest-share-session-signing-key"
+SHARE_SESSION_SIGNING_KID = "v1"
+SHARE_MAX_DURATION_SECONDS = "86400"
