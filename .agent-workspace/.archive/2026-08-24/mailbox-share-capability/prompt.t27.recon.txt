@@ -1,0 +1,64 @@
+T-27 recon · E2E new visitor scenarios (W6 first bar)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD: 6e8bc10 plus this recon prompt (T-26 closeout docs may land in the same push).
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files.
+Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t27-e2e.md
+
+T-26 is APPROVED (review-t26.md p0=0). T-27 is now the sole writer of tests/e2e/** (specs + harness/control/seed as needed).
+Do NOT edit mail-vue production sources or mail-worker production sources unless recon proves a harness-only file must change.
+Existing 13 e2e specs must stay byte-stable except adding new spec files / fixture helpers.
+
+Read first:
+1. ponytail(lite)
+2. docs/specs/mailbox-share-capability/tasks.md T-27 / T-27.1 / T-27.2 / T-27.3
+3. design.md E2E 新场景 + AC-OTP-04 / AC-SEC-01 / AC-SESS-04 / AC-SESS-07 / AC-SESS-10 / AC-EDGE-03 / AC-AUTH-01 / AC-LIFE-10 / AC-LIFE-11 / AC-SEC-09
+4. exec-t26-note.md §5 R5 (isLostResponse real loss injection is T-27.2) and §6 frozen hooks
+5. recon-t26-session.md §12 (do not reopen Fog-3 / T26-STATUS)
+6. Current e2e:
+   - tests/e2e/README.md
+   - tests/e2e/run.mjs
+   - tests/e2e/wrangler-e2e.toml (NO SHARE_CAPABILITY_V2 var today → missing = false)
+   - tests/e2e/harness/worker-entry.js / control.js / start.mjs / constants.js
+   - tests/e2e/fixtures/share.js (openShare / waitShareState / sessionKeys)
+   - tests/e2e/specs/*.spec.js (13 existing; do not rewrite)
+7. Frozen visitor hooks from T-26:
+   [data-share-auth] [data-share-auth-input] [data-share-auth-submit] [data-share-auth-error]
+   [data-share-refresh] [data-share-expires]
+   plus prior: [data-share-state] [data-share-code] tablist hooks from T-25
+8. How Owner create currently looks: control.createShare always sends accountId (singular) + durationSeconds.
+   Multi / AuthKey / maxSessions all require SHARE_CAPABILITY_V2=true (AC-LIFE-11).
+
+Success state:
+NOT "more e2e files exist", BUT:
+- a never-logged-in browser opens a multi-mailbox share, switches native tabs, receives a real injected OTP mail, copies the code, sees then consumes a badge
+- a second incognito after max_sessions is exhausted cannot establish
+- max_sessions=1 + a lost POST /share/session response retries the same Idempotency-Key and used_sessions stays 1
+- mid-browse revoke stops polling, clears share:session:/share:est-key:, shows the same unavailable shell
+- AuthKey wrong→right uses the frozen data-share-auth* hooks
+- SHARE_CAPABILITY_V2=false rejects the four restricted writes; headers never leak sec/authKey/token
+Negative: do not rewrite the existing 13 specs; do not silently set SHARE_CAPABILITY_V2 true in wrangler.toml production; do not touch vue/worker production to make e2e easier; do not invent a second polling path.
+
+Hard constraints already decided (do not reopen):
+- T-26 frozen hooks and postSession / enterReady / pollTick semantics
+- Fog-3 stored-token config degradation is a known T-29 limitation, not an e2e fail
+- P1-4 HOLD: foreign bindingId stays empty page
+- SHARE_CAPABILITY_V2 production default stays false
+- Baseline 13 e2e only-increase
+
+Fog the recon MUST return (≤3, with evidence, not preference):
+- Fog-1: how T-27.1 (needs V2=true for multi/AuthKey/quota) and T-27.3 V2=false four-path live in ONE `node tests/e2e/run.mjs` without flipping production wrangler.toml. Options + recommendation.
+- Fog-2: how to inject "response lost AFTER server commit" for AC-SESS-10 (page.route abort-before-server is the wrong layer). What harness hook is the smallest correct injection.
+- Fog-3: whether AC-LIFE-10 "random route old/new worker" is actually an e2e job or already covered by worker integration and should be a thin V2=false reject plus a pointer. Do not invent a second worker binary.
+
+Also return:
+- executable file list with cut lines (new spec names, fixture helpers, harness endpoints)
+- what seed must gain (second mailbox / accountId) without breaking existing 13
+- how used_sessions is observed from the visitor page or a control probe
+- i18n: T-27 must not write zh.js/en.js
+- what T-28/T-29 must not steal
+
+Reply to user in Chinese.

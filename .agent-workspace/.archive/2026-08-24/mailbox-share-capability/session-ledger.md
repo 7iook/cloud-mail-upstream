@@ -80,8 +80,9 @@
 | W5 | T-24 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t24.md` |
 | W5 | T-25 多邮箱 Tab | ✅ `2e6754d` / `33213e9` / `16f705b` | generalPurpose≈executor | 主 AI 独立 vue 22/221 · worker 18/626 · E2E 13 |
 | W5 | T-25 审查 | ✅ R3 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t25-r3.md` · P1-4 HOLD |
-| W5 | T-26 session UX | ⏳ 已实现待审查 | generalPurpose≈executor | vue 22/250 · worker 18/626 · E2E 13 · worker 零 diff |
-| W5 | T-26 审查 | ⏳ 已派 | gpt-5.6-sol-xhigh-fast | `prompt.t26.review.txt` → `review-t26.md` |
+| W5 | T-26 session UX | ✅ 已提交 `6e8bc10` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 13 · worker 零 diff |
+| W5 | T-26 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t26.md` |
+| W6 | T-27 E2E | ⏳ 侦察中 | explore≈plan-reality-recon | 等 `recon-t27-e2e.md` |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -195,14 +196,16 @@
 | `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
 | `mail-vue/src/views/email/ShareDialog.*` | T-23 已收口 `4f4cc65` | 其后 T-29 才清 PENDING_COPY |
-| `mail-vue/src/views/share/index.vue` | **T-26 当前写者** | T-25 已收口 `16f705b` |
-| `mail-vue/src/views/share/session.js` | **T-26 当前写者** | T-24/T-25 0 行 |
-| `useSharePolling.js` | T-26 只注入 `intervalMs` | T-25 零改；禁止改 poll 语义 |
-| `mail-vue/src/request/share.js` | **T-26 当前写者** | authKey 走 body + Idempotency-Key 头；status/`bindingId` 已收口 |
+| `mail-vue/src/views/share/index.vue` | T-26 已收口 `6e8bc10` | 其后只读；T-27 只消费 `[data-share-*]` 钩子 |
+| `mail-vue/src/views/share/session.js` | T-26 已收口 `6e8bc10` | 其后只读 |
+| `useSharePolling.js` | T-26 已收口 `6e8bc10` | `toValue(intervalMs)`；禁止 `autoStart`/`listStatus`/`mode` |
+| `mail-vue/src/request/share.js` | T-26 已收口 `6e8bc10` | 其后只读 |
+| `tests/e2e/**` | **T-27 当前写者** | 现存 13 条只增不改 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-26 APPROVED p0=0（`review-t26.md`）。勾选 T-26。热区 `index.vue` / `session.js` / `request/share.js` / `useSharePolling.js` 收口只读。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 实现待审查（worker 零 diff）。主 AI 独立复跑 vue 定点 5/88 · 全量 22/250；worker 18/626；E2E 13。三处偏离 CHANGE 接受。未勾选。未勾选尾：T-26 审查 / T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 侦察已裁 Fog-1/2/3。派实现。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 R3 APPROVED p0=0（`review-t25-r3.md`）。勾选 T-25。热区 `index.vue` / `session.js` / `request/share.js` 现为 T-26 写者。未勾选尾：T-26 → T-29。
