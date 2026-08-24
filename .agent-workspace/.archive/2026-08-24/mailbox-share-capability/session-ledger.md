@@ -83,7 +83,7 @@
 | W5 | T-26 session UX | ✅ 已提交 `6e8bc10` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 13 · worker 零 diff |
 | W5 | T-26 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t26.md` |
 | W6 | T-27 E2E | ✅ 已提交 `190f704` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 |
-| W6 | T-27 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t27.md` · P2-1 HOLD |
+| W6 | T-28 Checkpoint | ✅ 三套全绿（无代码改动） | 主 AI | vue 22/250 · worker 18/626 · E2E 19 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -215,6 +215,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-28 三套全绿。vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。`tests/e2e/**` 零 diff。勾选 T-28。未勾选尾：T-29。
 - 2026-08-24 · 主 AI：T-27 APPROVED p0=0（`review-t27.md`）。勾选 T-27。P2-1 HOLD。热区 `tests/e2e/**` 收口只读。未勾选尾：T-28 → T-29。
 - 2026-08-24 · 主 AI：T-27 实现待审查（`190f704`）。主 AI 独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。Fog-1/2/3 按 §13 原样成立；四条实施偏离 CHANGE 接受。L1 倒计时残留登记 P2（T-29）。未勾选。未勾选尾：T-27 审查 / T-28 → T-29。
 - 2026-08-24 · 主 AI：T-27 侦察已裁 Fog-1/2/3（`recon-t27-e2e.md` §13）。派实现。未勾选尾：T-27 → T-29。

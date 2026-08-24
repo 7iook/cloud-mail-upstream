@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W5 APPROVED · T-27 APPROVED · T-28 |
+| 状态 Status | in-progress · T-27/T-28 APPROVED · T-29 侦察 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -632,7 +632,13 @@
       - AC: AC-EDGE-03, AC-AUTH-01, AC-LIFE-10, AC-LIFE-11, AC-SEC-09
       - commit: 190f704
 
-- [ ] T-28 Checkpoint · 三套全量回归:`pnpm --dir mail-worker test` + `pnpm --dir mail-vue test` + `node tests/e2e/run.mjs` 全绿,单邮箱旧断言零改写(基线 138/95/13 只增不减);未跑项一律标 `unverified`
+- [x] T-28 Checkpoint · 三套全量回归:`pnpm --dir mail-worker test` + `pnpm --dir mail-vue test` + `node tests/e2e/run.mjs` 全绿,单邮箱旧断言零改写(基线 138/95/13 只增不减);未跑项一律标 `unverified`
+  - **Evidence**
+    - verify: `pnpm --dir mail-vue test -- --no-cache` → EXIT=0，22 files / 250 passed；`pnpm --dir mail-worker test -- --no-cache` → EXIT=0，18 files / 626 passed；`node tests/e2e/run.mjs` → EXIT=0，19 passed / 0 skipped（8788 先确认空闲）。`tests/e2e/**` 本任务零 diff
+    - files: 无生产/测试改动（纯回归）
+    - AC: 基线守恒（只增不减）
+    - commit: pending
+    - note: 活基线现为 vue 22/250 · worker 18/626 · E2E 19；章程原文 138/95/13 为开工地板，未改写
 
 - [ ] T-29 收尾:文档 / CHANGELOG / ADR / i18n
   - [ ] T-29.1 `docs/architecture/ADR-mailbox-share-capability-extension.md` 由 Proposed 转 Accepted(补实施结论);design.md front-matter `shipped_commit` 回填;两份 spec `## Update Log` 各追加一行
@@ -668,6 +674,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-28 三套全绿。vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。e2e 零 diff。勾选 T-28。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-27 APPROVED p0=0（`review-t27.md`）。勾选 T-27。独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。P2-1 HOLD（撤销后倒计时残留，T-29）。未勾选尾：T-28 → T-29。
 - 2026-08-24 · 主 AI:T-27 实现待审查（`190f704`）。主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。未勾选（等审查 APPROVED）。未勾选尾：T-27 审查 / T-28 → T-29。
 - 2026-08-24 · 主 AI:T-27 侦察已裁 Fog-1/2/3（`recon-t27-e2e.md`）。未勾选。未勾选尾：T-27 → T-29。
