@@ -20,13 +20,13 @@ Proposed(stub · 随 `docs/specs/mailbox-share-capability/` charter 落盘,实�
 
 **就地扩展既有边界,不重建**:
 
-- `mail_share` 表就地加列(v3_2DB)+ 新建 `mail_share_binding` 表;存量单邮箱行经**迁移门禁**(JOIN account 校验存活/未删/归属,R2 评审 A4)回填恰一条 Binding,不满足门禁的脏旧行直接 REVOKED 不回填,旧有效链接继续可用。
-- **滚动发布走 Expand/Contract 分阶段协议**(R2 评审 A1):Expand 阶段新代码双写 `mail_share.account_id` = 主 Binding 的 `account_id`(禁止写 0),多邮箱能力受 `SHARE_MULTI_ENABLED`(默认 false)门控,全量 Worker 升级并完成回填前不开启;新代码读路径只信 Binding;确认无旧 Worker 后方进入 Contract 停止双写。回滚 = 关 multi 开关,单邮箱因双写在旧 Worker 下仍可用。
-- **累计 Session 配额**用单条原子条件 UPDATE 实现,**不建服务端 Session 表**(维持旧 ADR「无状态 token」裁决;并发上限才需要落库,本裁决为累计上限)。**线性化承诺收敛**(R2 评审 A3):以条件 UPDATE 成功时刻为配额与授权线性化点;UPDATE→签发之间的并发失效属已知极窄 TOCTOU,token 回源失败且名额不退还,不承诺「响应时仍可用」。
+- `mail_share` 表就地加列(v3_2DB)+ 新建 `mail_share_binding` 表;存量单邮箱行经**迁移门禁**(JOIN account 校验存活/未删/归属,R2 评审 A4)回填恰一条 Binding;无效行处置以 **account 事实为显式判据**(`ACTIVE AND (account 不存在 OR 已删 OR 归属不符)`,R3 评审 A2——禁止以「无 Binding」判脏,迁移窗口内旧 Worker 新写的合法行由幂等回填重跑收编,不误 REVOKED),脏旧行直接 REVOKED 不回填,旧有效链接继续可用。
+- **滚动发布走 Expand/Contract 分阶段协议 + 全能力激活栅栏**(R2 评审 A1 · R3 评审 A1):Expand 阶段新代码双写 `mail_share.account_id` = 主 Binding 的 `account_id`(禁止写 0);全部新策略能力(multi 创建、bindings 使绑定数 >1、AuthKey 启用、有限 `max_sessions`)受 `SHARE_CAPABILITY_V2`(默认 false,取代 R2 的 `SHARE_MULTI_ENABLED`)统一门控——旧 Worker 不认识 AuthKey/`credentials_version`/配额条件,只门控 multi create 会让这些策略被随机路由绕过;激活前置 = 迁移完成 + 最终回填 + 无旧 Worker 在途 + 告警消费者就绪;开关 false 时行为等同旧单邮箱(双写仍进行);新代码读路径只信 Binding;确认无旧 Worker 后方进入 Contract 停止双写。回滚 = 关 V2 开关,单邮箱因双写在旧 Worker 下仍可用。
+- **累计 Session 配额**用单条原子条件 UPDATE 实现,**不建服务端 Session 表**(维持旧 ADR「无状态 token」裁决;并发上限才需要落库,本裁决为累计上限)。**线性化承诺收敛**(R2 评审 A3):以条件 UPDATE 成功时刻为配额与授权线性化点;UPDATE→签发之间的并发失效属已知极窄 TOCTOU,token 回源失败且名额不退还,不承诺「响应时仍可用」。**配额成功口径 = 客户端可恢复地获得凭据**(R3 评审 A3):`POST /share/session` 支持 `Idempotency-Key`,签发结果短存 KV(`share:est:<lid>:<key>`,TTL ≤ 120s)供同 key 重放、不再消耗配额;这只是签发结果去重缓存,**不是** Session 授权真源(每请求回源判定不变);KV 不可用时 fail-open 签发、无重放保护、记 `share.system.error`(文档化风险)。
 - **可选 auth_key** 作为 establishSession 的第二因子;错误暴露面最小化(仅 `lid`+`sec` 通过者可见 `SHARE_AUTH_REQUIRED`,其余保持不可区分 `SHARE_UNAVAILABLE`);暴破防护**仅**依赖既有 IP 边缘限流(R2 评审 A6:Key 为 128-bit 服务端 CSPRNG 凭据,在线穷举不可行,不建失败计数/锁定状态表)。
 - 旧 ADR 曾拒绝的「通用 ResourceGrant 抽象」维持拒绝:多邮箱 Binding 不构成第二种 grant 类型,不触发重开该裁决。
 
-细节契约见 `docs/specs/mailbox-share-capability/design.md`(Decision 1-19)。
+细节契约见 `docs/specs/mailbox-share-capability/design.md`(Decision 1-20)。
 
 ## Consequences
 
@@ -41,7 +41,8 @@ Proposed(stub · 随 `docs/specs/mailbox-share-capability/` charter 落盘,实�
 - `mail_share.account_id` 在 Expand 阶段是双写目标(鉴权零读取),Contract 后才降为遗留列;双真源风险由「读路径只信 Binding + 双写主 Binding + `SHARE_MULTI_ENABLED` 门控」的分阶段协议封闭(design「迁移/发布协议」),代价是兼容窗口内每次 Binding 变更多一次主表写。
 - 级联撤销、清理任务、附件校验等六处单值假设须同步改造,漏改即越权或孤儿行(spec 已列 AC 钉死)。
 - AuthKey 使凭据面从纯 capability URL 扩展为 URL+Key 两件套;因 Key 为服务端生成 128-bit 凭据,不引入锁定机制(R2 评审 A6),请求成本约束完全依赖边缘限流。
-- 配额与授权只在条件 UPDATE 时刻线性化:UPDATE→签发间的极窄 TOCTOU 下 token 即死且名额不退还,属文档化接受的取舍(替代方案是服务端 Grant/Session 台账,被判定过重)。
+- 配额与授权只在条件 UPDATE 时刻线性化:UPDATE→签发间的极窄 TOCTOU 下 token 即死且名额不退还,属文档化接受的取舍(替代方案是服务端 Grant/Session 台账,被判定过重)。响应丢失导致的重复扣额由 `Idempotency-Key` + KV 短期结果重放消解(R3 评审 A3);代价是签发路径新增对既有 KV 绑定的软依赖(fail-open,KV 故障时退化为无重放保护)。
+- `SHARE_CAPABILITY_V2` 栅栏使 AuthKey/配额/多 Binding 在发布兼容窗口内整体冻结(行为等同旧单邮箱):这是把「随机路由策略降级」换成「新能力延迟可用」的显式取舍(R3 评审 A1);激活前置含告警消费者就绪(R3 评审 A7)。
 - 推翻旧裁决产生两份并存 charter(mail-share / mailbox-share-capability),supersede 时点留待发布观察期后由用户裁定。
 
 ## References

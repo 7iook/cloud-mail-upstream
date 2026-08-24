@@ -64,6 +64,8 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 - [AC-CAP-10] THE MailShareService SHALL 继续接受旧 ShareDialog 的单邮箱 create 载荷形状(单个 `accountId`、无新配置字段),按全部配置默认值创建恰一条 Binding(响应 `shareType` 派生为 `single`)。
 - [AC-CAP-11] WHERE 管理员通过环境变量配置了活跃分享数量上限或最大有效期(`SHARE_ACTIVE_LIMIT`/`SHARE_MAX_DURATION_SECONDS`), THE MailShareService SHALL 沿用既有上限校验并返回既有错误码(`SHARE_LIMIT_EXCEEDED`/`SHARE_DURATION_EXCEEDED`)。
 - [AC-CAP-12] WHERE 前端提供创建预设(单邮箱验证码/临时邮箱/多邮箱验证码池/自定义), THE 前端创建向导 SHALL 仅做表单预填,SHALL NOT 要求服务端预设存储;预设落库不在本期。
+- [AC-CAP-13] THE MailShareService SHALL 强制每分享 Binding 数量上限为常量 `SHARE_BINDING_LIMIT`(=50,R3-A5):WHEN create 或 bindings 变更将使该分享现存 Binding 数超过该上限, THE MailShareService SHALL 拒绝整单并返回 `SHARE_BINDING_LIMIT_EXCEEDED`,SHALL NOT 部分写入。
+- [AC-CAP-14] WHEN create 提交成功但首次响应丢失(Owner 未获得 `sec`/AuthKey 明文), THE 幂等重放 SHALL 仅返回 `shareId`/`lid` 而不重放明文(AC-CAP-09 安全边界不变,R3-A6);THE 管理 UI SHALL 依据重放结果引导 Owner 对该分享执行 revoke/delete 后重新 create 取得新链接;THE 前端 SHALL NOT 在结果未知时更换 `Idempotency-Key` 盲目重复创建。
 
 ### Requirement 2(R2): Binding 与聚合管理
 
@@ -81,7 +83,8 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 - [AC-BIND-08] WHEN Binding 集合发生增删, THE ShareMailService SHALL 使变更在 Visitor 的下一次列表/状态请求即刻生效,SHALL NOT 依赖 Session 重建或缓存过期。
 - [AC-BIND-09] THE 迁移任务(v3_2DB) SHALL 为每条**通过迁移门禁(AC-BIND-11)**的存量 `mail_share` 行幂等回填恰一条 Binding(`INSERT ... SELECT ... WHERE NOT EXISTS`),携带原行的 `account_id` 与 `window_start_email_id`,使旧单邮箱链接在新读路径下继续有效。
 - [AC-BIND-10] THE MailShareService SHALL 以单条 `INSERT ... SELECT` 条件写新增 Binding:仅当目标 `account` 行仍存在、`is_del=NORMAL` 且 `user_id` 等于 Owner 时插入;IF 条件不成立(含与 account 删除并发), THEN THE MailShareService SHALL 返回 `SHARE_ACCOUNT_FORBIDDEN`;WHEN account 删除与 Binding 写入并发仍产生孤儿 Binding, THE 级联与定时清理路径 SHALL 补偿剔除之。
-- [AC-BIND-11] THE 迁移任务(v3_2DB)回填 SQL SHALL JOIN `account` 表并要求 account 行存在、`is_del=NORMAL` 且 `account.user_id = mail_share.user_id`(与 AC-BIND-10 运行时条件同源);IF 存量行不满足上述门禁(account 不存在/已删/归属不符), THEN THE 迁移任务 SHALL 将该行直接置为 `REVOKED`(记录 `revoked_at`)且 SHALL NOT 为其回填 Binding;迁移完成后 SHALL 零非法 Binding(每条回填 Binding 的 account 均存活且归属正确,R2-A4 迁移门禁)。
+- [AC-BIND-11] THE 迁移任务(v3_2DB)回填 SQL SHALL JOIN `account` 表并要求 account 行存在、`is_del=NORMAL` 且 `account.user_id = mail_share.user_id`(与 AC-BIND-10 运行时条件同源);THE 无效行处置 UPDATE SHALL 以 account 事实为显式判据——`status='ACTIVE' AND (account 不存在 OR is_del != NORMAL OR user_id 不匹配)`——SHALL NOT 以「无 Binding」作为脏数据判据(R3-A2):迁移窗口内旧 Worker 在回填 INSERT 之后新写的 account 合法行虽暂无 Binding,SHALL NOT 被置 REVOKED,SHALL 由发布收尾重跑幂等回填收编;IF 存量行不满足 account 门禁(不存在/已删/归属不符), THEN THE 迁移任务 SHALL 将该行置为 `REVOKED`(记录 `revoked_at`)且 SHALL NOT 为其回填 Binding;迁移完成后 SHALL 零非法 Binding(每条回填 Binding 的 account 均存活且归属正确,R2-A4 迁移门禁);迁移测试 SHALL 覆盖旧写发生在回填 INSERT 之前/INSERT 与 UPDATE 之间/UPDATE 之后与任务重启后的全部交错时序。
+- [AC-BIND-12] THE `PUT /mailShare/bindings` 批量变更 SHALL 为全有或全无的原子命令(同一 `c.env.db.batch()` 提交):IF 任一 add/remove 项校验失败, THEN THE MailShareService SHALL 使整单失败且零残留变更;remove SHALL 以 `binding_id + share_id + 当前 Owner(user_id)` 三重资源谓词定位目标,IF 任一 `bindingId` 不属于该分享或该 Owner, THEN THE MailShareService SHALL 返回 `SHARE_BINDING_FORBIDDEN` 且整单失败(SHALL NOT 泄露该 bindingId 是否存在于他人分享);WHILE `SHARE_CAPABILITY_V2=false`, 使现存 Binding 数由 1 变为大于 1 的变更 SHALL 被拒绝(AC-LIFE-11,R3-A4)。
 
 ### Requirement 3(R3): Visitor 认证与 Session
 
@@ -89,7 +92,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 
 #### Acceptance Criteria (EARS)
 
-- [AC-SESS-01] WHEN Visitor 提交 `lid`+`sec` 建立 ShareSession, THE ShareAuthService SHALL 以「先读快照取 `credentials_version` → 单条原子条件 UPDATE → RETURNING 非空才 issueToken」为**单一线性化点**,该 UPDATE 的 WHERE SHALL 同时包含:`status='ACTIVE'`、`expires_at > now`、`credentials_version = :expectedCv`、配额条件(`access_count < max_sessions`,`max_sessions IS NULL` 时豁免配额项;物理列 `access_count` 承载领域量 `used_sessions`);IF RETURNING 为空, THEN THE ShareAuthService SHALL 拒绝签发且零配额消耗。
+- [AC-SESS-01] WHEN Visitor 提交 `lid`+`sec` 建立 ShareSession, THE ShareAuthService SHALL 以「读快照取 `credentials_version` 并完成 `sec`(及 AuthKey)校验 → 幂等重放缓存查询(AC-SESS-10,命中即返回缓存 token、零配额消耗、零 UPDATE)→ 未命中才单条原子条件 UPDATE → RETURNING 非空才 issueToken」为处理次序,条件 UPDATE 为配额消耗的**单一线性化点**,该 UPDATE 的 WHERE SHALL 同时包含:`status='ACTIVE'`、`expires_at > now`、`credentials_version = :expectedCv`、配额条件(`access_count < max_sessions`,`max_sessions IS NULL` 时豁免配额项;物理列 `access_count` 承载领域量 `used_sessions`);IF RETURNING 为空, THEN THE ShareAuthService SHALL 拒绝签发且零配额消耗;THE 配额的成功口径 SHALL 为「客户端可恢复地获得凭据」(R3-A3 产品裁决)——服务端 UPDATE 已提交但响应丢失的请求 SHALL 可经同一 `Idempotency-Key` 重放恢复,SHALL NOT 再次消耗配额。
 - [AC-SESS-02] THE ShareAuthService SHALL 以「成功建立 ShareSession」为唯一的配额消耗事件;轮询、列表/详情/附件读取、页面刷新 SHALL NOT 改变 `used_sessions`。
 - [AC-SESS-03] WHEN Visitor 在同一 tab 内刷新且 `sessionStorage` 键 `share:session:<lid>` 中的 token 仍在 TTL 内, THE 访客页 SHALL 凭该 token 恢复会话,SHALL NOT 新建 Session、SHALL NOT 消耗配额。
 - [AC-SESS-04] WHEN Visitor 在无恢复凭据的新 tab/新浏览器打开同一链接, THE 访客页 SHALL 重新建立 Session 并消耗一次配额。
@@ -98,6 +101,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 - [AC-SESS-07] WHEN `used_sessions` 达到 `max_sessions`, THE ShareAuthService SHALL 使后续 `POST /share/session` 一律失败,新访客 SHALL 无法建立访问。
 - [AC-SESS-08] WHILE Visitor 的网络出口 IP 发生变化且 sessionToken 有效, THE ShareAuthService SHALL 继续接受该 token(token 自绑定),SHALL NOT 要求新建 Session。
 - [AC-SESS-09] WHEN Session 建立成功, THE ShareAuthService SHALL 在响应中下发 `shareType`、绑定邮箱清单(经掩码策略处理)、`expiresAt` 与展示配置(`autoRefresh`/`refreshIntervalMs`/`otpExtractionEnabled`/`messageLimit`);统计字段(`last_access_at`)写入失败 SHALL NOT 阻断签发(沿用 fire-and-forget 语义)。
+- [AC-SESS-10] WHEN Visitor 在 `POST /share/session` 携带 `Idempotency-Key`(客户端 SHALL 在发请求**前**生成并写入 sessionStorage), THE ShareAuthService SHALL 在成功签发后把 sessionToken 短存于 KV 键 `share:est:<lid>:<key>`,TTL = min(120 秒, token 剩余寿命);WHEN 同一 `Idempotency-Key` 重放命中缓存, THE ShareAuthService SHALL 返回缓存 token 且 SHALL NOT 再消耗配额、SHALL NOT 再执行条件 UPDATE;WHERE 请求无 key、key 未命中或缓存已过期, THE ShareAuthService SHALL 走 AC-SESS-01 正常条件 UPDATE;THE 访客页 SHALL 在超时/响应丢失后以同一 `Idempotency-Key` 重试,SHALL NOT 换 key 盲重试;IF KV 不可用, THEN THE ShareAuthService SHALL 仍正常签发(fail-open,该次无重放保护)并记 `share.system.error` 结构化日志(文档化风险,R3-A3);E2E SHALL 覆盖 `max_sessions=1` 下响应丢失后同 key 重试成功且 `used_sessions` 恒为 1。
 - [AC-AUTH-01] WHERE 分享启用了 AuthKey, WHEN Visitor 提交的 `lid`+`sec` 匹配但未携带或携带错误 AuthKey, THE ShareAuthService SHALL 返回 `SHARE_AUTH_REQUIRED` 且 SHALL NOT 签发 token、SHALL NOT 消耗配额。
 - [AC-AUTH-02] THE ShareAuthService SHALL 仅在 `lid`+`sec` 校验通过后才暴露 `SHARE_AUTH_REQUIRED`;`lid` 不存在、`sec` 错误、过期、撤销、配额触顶等一切其余 Visitor 失败 SHALL 统一返回不可区分的 `SHARE_UNAVAILABLE`。
 - [AC-AUTH-03] THE ShareAuthService SHALL 以 `HMAC-SHA256(authKey, PEPPER[auth_key_kid])` 常量时间比较校验 AuthKey,SHALL NOT 存储或记录 AuthKey 明文。
@@ -190,7 +194,9 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 - [AC-LIFE-07] WHERE 管理员关闭分享功能(`SHARE_ENABLED`), THE ShareAuthService SHALL 视为临时冻结:Visitor 全线 `SHARE_UNAVAILABLE`,重开后此前 `ACTIVE` 分享恢复可用。
 - [AC-LIFE-08] THE 存量单邮箱分享链接 SHALL 在迁移(Binding 回填)后继续有效:旧 token 可验、旧 `/s/<lid>#<sec>` 可建新 Session、行为与迁移前一致(`max_sessions=NULL` 不限、配置取默认值)。
 - [AC-LIFE-09] WHEN account 删除触发级联, THE MailShareService SHALL 经 Binding JOIN 定位受影响分享(替换 `mail-share-service.js:394-415` 的主表 `account_id` 直查),按 AC-BIND-05/06 语义处置。
-- [AC-LIFE-10] THE 发布协议(R2-A1 发布栅栏) SHALL 分阶段消解滚动发布双轨:(Expand)新代码 SHALL 将 `mail_share.account_id` 双写为主 Binding 的 `account_id`(SHALL NOT 写 0),新建分享与增删 Binding 后 SHALL 同步更新该列;多邮箱能力 SHALL 受 `SHARE_MULTI_ENABLED`(默认 false)门控,全量 Worker 升级并完成回填前 SHALL NOT 允许创建 multi 分享;新代码读路径 SHALL 只信 Binding,旧 Worker 仍可按主表 `account_id` 读旧语义;(Contract,后续版本)确认无旧 Worker 在途后才 SHALL 停止双写;回滚预案 = 关闭 multi 开关,单邮箱分享因双写 SHALL 在旧 Worker 下保持可用。三条路径验收:① 旧实例晚写(旧 Worker 新建行无 Binding)→ 发布收尾重跑幂等回填后旧链接在新代码下有效;② Binding 移除后旧实例读取 → 双写使主表列同步为剩余主 Binding(删空则 REVOKED,旧 Worker 读 status 即拒),不按已移除邮箱授权;③ 回滚读取 → multi 开启前无 multi 行,异常回滚时旧 Worker 按主 Binding 提供单邮箱降级视图,不越权。
+- [AC-LIFE-10] THE 发布协议(R2-A1 发布栅栏 · R3-A1 升级为全能力栅栏) SHALL 分阶段消解滚动发布双轨:(Expand)新代码 SHALL 将 `mail_share.account_id` 双写为主 Binding 的 `account_id`(SHALL NOT 写 0),新建分享与增删 Binding 后 SHALL 同步更新该列;全部新策略能力 SHALL 受 `SHARE_CAPABILITY_V2`(默认 false,取代 R2 的 `SHARE_MULTI_ENABLED`)统一门控(能力清单与激活前置见 AC-LIFE-11);新代码读路径 SHALL 只信 Binding,旧 Worker 仍可按主表 `account_id` 读旧语义;(Contract,后续版本)确认无旧 Worker 在途后才 SHALL 停止双写;回滚预案 = 关闭 `SHARE_CAPABILITY_V2`,单邮箱分享因双写 SHALL 在旧 Worker 下保持可用。四条路径验收:① 旧实例晚写(旧 Worker 新建行无 Binding)→ 发布收尾重跑幂等回填后旧链接在新代码下有效;② Binding 移除后旧实例读取 → 双写使主表列同步为剩余主 Binding(删空则 REVOKED,旧 Worker 读 status 即拒),不按已移除邮箱授权;③ 回滚读取 → V2 开启前无 multi 行、无 AuthKey、无有限配额,异常回滚(已开 V2 后关闭)时旧 Worker 按主 Binding 提供单邮箱降级视图,不越权;④ 滚动窗口随机路由 → 开关 false 期间 SHALL 不存在任何旧 Worker 无法执行的已写入策略(AC-LIFE-11 拒绝写入),故 SHALL NOT 出现「新代码启用 AuthKey/有限配额/多 Binding,请求落旧 Worker 被绕过」的策略降级路径。
+
+- [AC-LIFE-11] THE MailShareService 与前端 SHALL 以 `SHARE_CAPABILITY_V2`(环境变量,默认 false)为全部新策略能力的唯一激活栅栏(R3-A1):WHILE 开关为 false, THE MailShareService SHALL 拒绝(`SHARE_INVALID_CONFIG`)一切旧 Worker 无法执行的策略写入——① create 携带 `accountIds.length > 1`;② `PUT /mailShare/bindings` 使现存 Binding 数大于 1 的变更;③ 启用 AuthKey(create `authKeyEnabled=true` 或 resetAuthKey `action='enable'`);④ 将 `max_sessions` 设为非 NULL 有限值(create 或 update)——此时系统行为 SHALL 等同旧 mail-share 单邮箱语义(双写仍进行),Visitor 侧依赖新策略字段的前端功能 SHALL 以「能力未激活」提示降级、SHALL NOT 报错死链;WHEN 开关置 true, THE 发布负责人 SHALL 已确认全部激活前置:迁移完成、最终回填重跑完成、无旧 Worker 在途、关键日志事件已有告警消费者(R3-A7 发布门槛);已按 V2 写入的策略 SHALL NOT 因开关回退被静默改写,回退后按 AC-LIFE-10 路径③降级语义处置。
 
 ### Requirement 9(R9): 异常与极端场景
 
@@ -220,7 +226,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 |---|---|---|
 | D1 | 统一模型 | 单/多邮箱共用 `MailboxShare` + `ShareMailboxBinding`;`share_type`=`single`\|`multi` |
 | D2 | 复用既有 | `lid`+`sec` fragment、HMAC pepper、无状态 Session token(`s1.`)、`share-auth-service`、`share-scoped-email-repository`、`useSharePolling`、SafeMailRenderer、`share:manage`;就地演进 `mail_share` + 新 binding 表,不推倒重建 |
-| D3 | 新旧关系 | 新 slug `mailbox-share-capability`,`related_specs: [docs/specs/mail-share]`;旧单邮箱链接继续有效(迁移回填 Binding);旧 `ShareDialog` 可继续调 create(升级 payload);完整管理模块新建;发布后不立刻 supersede。**R2-A1**:滚动发布走 Expand(双写主 Binding + `SHARE_MULTI_ENABLED` 门控)→ Contract 分阶段协议(见 AC-LIFE-10 与 design「迁移/发布协议」) |
+| D3 | 新旧关系 | 新 slug `mailbox-share-capability`,`related_specs: [docs/specs/mail-share]`;旧单邮箱链接继续有效(迁移回填 Binding);旧 `ShareDialog` 可继续调 create(升级 payload);完整管理模块新建;发布后不立刻 supersede。**R2-A1**:滚动发布走 Expand(双写主 Binding)→ Contract 分阶段协议;**R3-A1**:门控升级为 `SHARE_CAPABILITY_V2` 全能力发布栅栏(取代 `SHARE_MULTI_ENABLED`,覆盖 multi/1→N/AuthKey 启用/有限配额,见 AC-LIFE-10/11 与 design「迁移/发布协议」) |
 | D4 | Session 计数 | 建立 Session 计 1(既有 `access_count` 语义升级为 `used_sessions`);轮询/刷新/同 tab sessionStorage 恢复不计;新 tab 无恢复凭据则新建并计数 |
 | D5 | max_sessions | 累计建立次数上限(非并发)。触顶 → effectiveStatus `ACCESS_LIMIT_REACHED`(计算态,不落库)。已建立 Session 在自身 TTL 内可继续用,禁止新建。**R2-A5**:首次从 NULL 设为有限值时默认 `resetUsedSessions=true`(`access_count` 置 0);显式 false 保留计数(见 AC-EDGE-14) |
 | D6 | Session TTL | 默认 15min(`SHARE_SESSION_TTL`),绝对、不续期;上限受 `expires_at` 约束 |
@@ -266,3 +272,12 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
   - R2 · F1 → 采纳(不变量收紧:enabled ⇒ hash 非空且 `auth_key_kid` 非空;落 design AuthKey 状态机与 AC-AUTH-07 验证行)
   - R2 · F2 → 采纳(日志事件补 `share.migrate.invalid_row`/`share.system.error`,每条带 requestId/shareId 无凭据;落 design 结构化观测节,requirements 无对应 AC 需改)
   - AC 总数 99 → 102(+AC-BIND-11、+AC-LIFE-10、+AC-EDGE-14)。
+- 2026-08-24 · executor(R3 修订执行者)消化第 3 轮异构评审 `review3.sub.md`(主 AI 过筛裁决:3 P0 + 4 P1 采纳;P2-F1/F2 不在本轮指令内,未动):
+  - R3 · A1 → 采纳(`SHARE_MULTI_ENABLED` 升级为 `SHARE_CAPABILITY_V2` 全能力发布栅栏,默认 false;false 时拒绝 multi 创建/bindings 使绑定数>1/AuthKey 启用/有限 `max_sessions` 四路策略写入,行为等同旧单邮箱、双写仍进行,Visitor 侧前端以「能力未激活」降级;激活前置=迁移完成+最终回填+无旧 Worker+告警消费者就绪;改写 AC-LIFE-10 为四条路径验收,新增 AC-LIFE-11,标注 D3)
+  - R3 · A2 → 采纳(迁移无效行判定改为显式 account 事实谓词 `ACTIVE AND (account 不存在 OR is_del!=NORMAL OR user_id 不匹配)`,禁止以「无 Binding」判脏;回填 INSERT 与 UPDATE 之间旧 Worker 新写的合法无 Binding 行不误 REVOKED,由幂等回填重跑收编;改写 AC-BIND-11 并补交错时序测试要求)
+  - R3 · A3 → 采纳(裁决配额成功口径=「客户端可恢复地获得凭据」;`POST /share/session` 支持 `Idempotency-Key`,成功后 sessionToken 短存 KV `share:est:<lid>:<key>`(TTL=min(120s, token 剩余寿命)),同 key 重放返回缓存 token 不再消耗配额;KV 不可用 fail-open 签发、无重放保护、记 `share.system.error`、文档标风险;改 AC-SESS-01 叙述,新增 AC-SESS-10)
+  - R3 · A4 → 采纳(bindings 批量变更全有或全无原子命令;remove 以 `binding_id+share_id+owner` 三重谓词;跨分享/跨租户 bindingId 混入 → 整单 `SHARE_BINDING_FORBIDDEN`;1→N 受 V2 开关约束;新增 AC-BIND-12)
+  - R3 · A5 → 采纳(每分享 Binding 上限常量 `SHARE_BINDING_LIMIT`=50,超限整单 `SHARE_BINDING_LIMIT_EXCEEDED`;新增 AC-CAP-13)
+  - R3 · A6 → 采纳(create 响应丢失恢复:幂等重放仅返回 shareId/lid 无明文 → UI 引导 Owner revoke/delete 后重新 create,禁止换 `Idempotency-Key` 盲建;新增 AC-CAP-14)
+  - R3 · A7 → 采纳(「启用 `SHARE_CAPABILITY_V2` 前关键日志事件必须已有告警消费者」纳入发布门槛一句话,落 AC-LIFE-11 与 design 结构化观测节;完整 Runbook 不在本期)
+  - AC 总数 102 → 107(+AC-LIFE-11、+AC-SESS-10、+AC-BIND-12、+AC-CAP-13、+AC-CAP-14)。
