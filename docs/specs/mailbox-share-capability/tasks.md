@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W3 T-19 APPROVED · 下一波 T-20 |
+| 状态 Status | in-progress · W4 T-20 已入库 · 待审查 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -459,10 +459,27 @@
 
 ### W4 · 前端管理模块(layout 域,登录态 axios)
 
-- [ ] T-20 管理模块路由 + 列表页(`mail-vue/src/views/share-admin/`,新建)
-  - [ ] T-20.1 `mail-vue/src/request/mail-share.js` 扩展 8 端点函数(get/update/bindings/delete/resetAuthKey + list 分页参数);`mail-vue/src/router/index.js` 加 layout 子路由 + `meta.perm='share:manage'`(沿用 `perm/perm.js` `permsToRouter` 动态路由;**不动**访客白名单/守卫逻辑,那属 W5)
-  - [ ]* T-20.2 红→绿:新建 `views/share-admin/index.spec.js` —— 列表字段齐全(名称/类型/绑定摘要/effectiveStatus 四态徽标/used_sessions/max_sessions/到期/最后访问)+ status 筛选 + 路由 meta perm;767px 断点遵循既有移动约定
+- [x] T-20 管理模块路由 + 列表页(`mail-vue/src/views/share-admin/`,新建)
+  - **Evidence**
+    - verify: 红（执行者）`index.spec.js` collection 失败 + request 3 条红；绿定点 `pnpm --dir mail-vue exec vitest run src/views/share-admin/index.spec.js src/request/mail-share.spec.js --no-cache` → 2 files / 20 tests；主 AI 独立同命令 20/20 + 全量 vue 18/113、worker 18/619、E2E 13，均为 EXIT=0；`pnpm --dir mail-vue build` EXIT=0
+    - files: `mail-vue/src/request/mail-share.js` · `mail-vue/src/request/mail-share.spec.js` · `mail-vue/src/perm/perm.js` · `mail-vue/src/layout/aside/index.vue` · `mail-vue/src/views/share-admin/{index.vue,status.js,index.spec.js}`
+    - AC: AC-ADMIN-01, AC-ADMIN-09, AC-ADMIN-10
+    - commit: 672da73
+    - decision: T20-ROUTE 路由落 `perm/perm.js`（`router/index.js` 0 行）；T20-ASIDE 个人组入口复用 `shareManage`；T20-CARD 卡片轨；T20-ACTIONS HOLD（行内 0 button 是 T-21 闸门）
+    - review: pending
+  - [x] T-20.1 `mail-vue/src/request/mail-share.js` 扩展 8 端点函数(get/update/bindings/delete/resetAuthKey + list 分页参数);路由对象落 `perm/perm.js` `routers['share:manage']` + `meta.perm='share:manage'`(沿用 `permsToRouter` 动态路由;**不动** `router/index.js` / 访客白名单/守卫,那属 W5)
+    - **Evidence**
+      - verify: 主 AI 独立定点 20/20 + 全量 vue 18/113 EXIT=0
+      - files: `mail-vue/src/request/mail-share.js` · `mail-vue/src/perm/perm.js` · `mail-vue/src/layout/aside/index.vue`
+      - AC: AC-ADMIN-10
+      - commit: 672da73
+  - [x]* T-20.2 红→绿:新建 `views/share-admin/index.spec.js` —— 列表字段齐全(名称/类型/绑定摘要/effectiveStatus 四态徽标/used_sessions/max_sessions/到期/最后访问)+ status 筛选 + 路由 meta perm;767px 断点遵循既有移动约定
     - _Requirements: AC-ADMIN-01_
+    - **Evidence**
+      - verify: 红（执行者）collection 失败；主 AI 独立绿 14 页面 + 6 请求 = 20/20；全量 vue 18/113
+      - files: `mail-vue/src/views/share-admin/index.spec.js` · `mail-vue/src/views/share-admin/index.vue` · `mail-vue/src/views/share-admin/status.js`
+      - AC: AC-ADMIN-01, AC-ADMIN-09
+      - commit: 672da73
 
 - [ ] T-21 详情抽屉:Binding 管理 + 配置编辑 + AuthKey 区
   - [ ]* T-21.1 红→绿:`views/share-admin/` 组件 spec —— Binding 增删调 `PUT /mailShare/bindings`;配置编辑调 `PUT /mailShare/update`(含 `resetUsedSessions` 确认交互);AuthKey 区状态展示 + enable/reset/disable(新 Key 一次性展示,复用 `mail-vue/src/views/email/ShareDialog.vue:161-189` 一次性密钥展示模式);掩码开关文案为「显示完整地址(展示选项)」不得暗示保密效果
@@ -542,6 +559,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-20 `672da73` 勾选。主 AI 独立定点 20/20 + 全量 vue 18/113、worker 18/619、E2E 13，均为 EXIT=0。`pnpm --dir mail-vue build` 绿。审查 pending。未勾选尾：T-20 审查 / T-21 → T-29。
 - 2026-08-24 · 主 AI:T-19 `03d987c` / P1 `db1e511` 勾选。R2 APPROVED p0=0。主 AI 独立定点 38/38 + 全量 worker 18/619、vue 17/95、E2E 13。T-20 侦察已落；T20-ASIDE/CARD CHANGE、T20-ACTIONS HOLD。未勾选尾：T-20 → T-29。
 - 2026-08-24 · 主 AI:T-18 `73dc371` 勾选。审查 APPROVED p0=0（P2-1 HOLD）。主 AI 独立定点 27/27 + 全量 worker 18/598、vue 17/95、E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。
 - 2026-08-24 · 主 AI:T-17 审查 APPROVED p0=0。T-18 侦察已落。裁决 T18-DUAL（Binding 为主、无 Binding 回落主表）与 T18-ORPHAN-REVOKE（补偿后剩 0 则撤销）。未勾选尾：T-18 → T-29。

@@ -65,6 +65,8 @@
 | W3 | T-19 集成用例 | ✅ 已提交 `03d987c` · P1 `db1e511` | generalPurpose≈executor | 主 AI 独立 38/38 · 全量 18/619 |
 | W3 | T-19 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t19-r2.md` |
 | W4 | T-20 列表页侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t20-share-admin.md` |
+| W4 | T-20 列表页 + request | ✅ 已提交 `672da73` | generalPurpose≈executor | 主 AI 独立 20/20 · 全量 vue 18/113 · worker 18/619 · E2E 13 |
+| W4 | T-21 抽屉侦察 | ✅ 已落盘 | executor 顺带 | `recon-t21-drawer.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -135,6 +137,9 @@
 | 文件 | 当前写者 | 备注 |
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
+| `mail-vue/src/request/mail-share.js` | T-20 已入库 `672da73` | T-21 只消费新函数 |
+| `mail-vue/src/views/share-admin/*` | T-20 已入库 `672da73` | T-21 对 `index.vue` 只允许 ≤10 行锚点 |
+| `mail-vue/src/perm/perm.js` | T-20 已入库 `672da73` | 其后只加路由须新任务 |
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` | T-14 已入库 `d6fa50b` | 其后只加路由须新任务；W3 不写此文件 |
 | `security.js` | T-17 已入库 `d18f027` | 其后只读，除非再加 Owner 路径 |
@@ -145,6 +150,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-20 `672da73` 入库。主 AI 独立定点 20/20 + 全量 vue 18/113 · worker 18/619 · E2E 13 · build 绿。审查 pending。未勾选尾：T-20 审查 / T-21 → T-29。
 - 2026-08-24 · 主 AI：T-19 `03d987c` / P1 `db1e511` 入库。R2 APPROVED。主 AI 独立 38/38 + 全量 18/619 · 17/95 · E2E 13。T-20 侦察已落。未勾选尾：T-20 → T-29。
 - 2026-08-24 · 主 AI：T-18 `73dc371` 入库。审查 APPROVED p0=0。主 AI 独立 27/27 + 全量 18/598 · 17/95 · E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。
 - 2026-08-24 · 主 AI：T-17 审查 APPROVED。T-18 侦察已落。T18-DUAL / T18-ORPHAN-REVOKE 已裁。未勾选尾：T-18 → T-29。

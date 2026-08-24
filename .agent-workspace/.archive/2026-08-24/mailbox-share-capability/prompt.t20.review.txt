@@ -1,0 +1,59 @@
+T-20 independent code review · share-admin list page
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Commit: 672da73 feat(vue): add share-admin list page and owner APIs
+
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files. Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t20.md
+
+You are a heterogeneous reviewer. Do not trust executor notes or the main AI narrative.
+Read the diff and the current files yourself. Run the tests yourself.
+
+## Original requirement (from tasks.md)
+
+T-20 管理模块路由 + 列表页
+- T-20.1 mail-vue/src/request/mail-share.js 扩展 8 端点函数(get/update/bindings/delete/resetAuthKey + list 分页参数); 路由经 perm/perm.js routers['share:manage'] + meta.perm='share:manage'; 不动 router/index.js / 访客白名单 / 守卫
+- T-20.2 列表字段齐全(名称/类型/绑定摘要/effectiveStatus 四态徽标/usedSessions/maxSessions/到期/最后访问) + status 筛选 + 路由 meta perm; 767px 断点遵循既有移动约定
+
+Success state (user view):
+NOT "a Vue page exists", BUT: a logged-in owner with share:manage can open /share-admin from the personal aside, see every share as a card with name / type / bindings / four-state badge / used/max sessions / expires / last access, filter by status, and paginate.
+Negative: no write/revoke/delete buttons on a row; no logout on body-403; no route for owners without the perm; router/index.js and i18n files stay untouched.
+
+## Already decided (do not reopen as defects)
+
+- T20-ROUTE: route object lives in perm/perm.js; router/index.js target = 0 lines
+- T20-ASIDE: personal-group menu item, reuse existing i18n key shareManage
+- T20-CARD: card list, not el-table
+- T20-ACTIONS HOLD: row actions belong to T-21. index.spec.js must keep "rows carry hooks, not buttons" (findAll('button') === 0 on the row)
+- Cold-start without perm → 404 (route not registered). Do not require beforeEach changes (W5)
+- 10 pending i18n keys via tf() fallback are T-28/T-29, not a T-20 defect
+- shareRefresh extra key for a real <button aria-label> is an allowed a11y expansion; HOLD unless it breaks the 0-button row gate
+
+## What to verify
+
+1. git show --stat 672da73 and git diff 672da73^ 672da73 --name-only: only the T-20 whitelist (request + spec, perm.js, aside, share-admin/*, exec-t20-note, recon-t21). Forbidden: router/index.js, i18n/zh.js, i18n/en.js, axios/index.js, views/share/**, ShareDialog.vue, mail-worker/**
+2. listMailShares() / listMailShares({}) / listMailShares({status:'', page:null}) remain single-arg GET /mailShare/list
+3. Existing mail-share.spec.js first two cases still assert the old contract
+4. isShareForbidden is body-403 (code 403 or message SHARE_FORBIDDEN); page does not clear token or router.replace
+5. Four effective statuses have distinct data-status AND distinct visible labels
+6. maxSessions null renders unlimited copy, not the word null
+7. Empty mailbox binding falls back to #accountId, no empty comma slots
+8. Status filter omitted on first query; changing filter resets page to 1
+9. permsToRouter(['share:manage']) emits /share-admin; ['email:send'] does not; ['*'] does
+10. Row has 0 buttons and no revoke-share hook
+11. src contains @media (max-width: 767px) and no window.onresize
+12. Production caller exists: aside + perm routers + index.vue fetchList. Not tests-only.
+
+## Required tests (run yourself, --no-cache)
+
+pnpm --dir mail-vue exec vitest run src/views/share-admin/index.spec.js src/request/mail-share.spec.js --no-cache
+
+Report file/test counts. Full vue suite optional.
+
+## Output
+
+Write review-t20.md with: Verdict APPROVED | NEEDS_CHANGES; P0/P1/P2 table; findings with file:line evidence; checklist of the 12 items; commands you actually ran.
+
+Reply to user in Chinese.
