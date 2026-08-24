@@ -82,7 +82,8 @@
 | W5 | T-25 审查 | ✅ R3 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t25-r3.md` · P1-4 HOLD |
 | W5 | T-26 session UX | ✅ 已提交 `6e8bc10` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 13 · worker 零 diff |
 | W5 | T-26 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t26.md` |
-| W6 | T-27 E2E | ⏳ 实现待审查（未勾选） | generalPurpose≈executor | 6 新 spec + harness 追加；生产 vue/worker 零 diff；`exec-t27-note.md` |
+| W6 | T-27 E2E | ✅ 已提交 `190f704` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 |
+| W6 | T-27 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t27.md` · P2-1 HOLD |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -188,6 +189,7 @@
 | T27-SEC09-AUTH | CHANGE: AC-SEC-09 放行 Authorization 携带 sessionToken | AC 限定日志/query/Referer；Bearer 是既定载体；sec/authKey 仍禁任何头 |
 | T27-BADGE-GATE | CHANGE: 角标闸门=首帧 `share:status:<lid>` 写盘，不是 `ready` | reconcile 首见 Binding 即播种水位；ready 后立刻投递会被卷进基线 |
 | T27-L1 | P2 登记：浏览中撤销后倒计时残留 | `clearMailboxView` 未清 `expiresAt`；属 mail-vue，T-27 禁改；建议 T-29 |
+| T27-P2-1 | HOLD:审查确认同一残留，不据此 NEEDS_CHANGES | review-t27；修法 `expiresAt.value = ''`，归 T-29 |
 
 ## 冲突热区占用
 
@@ -208,11 +210,12 @@
 | `mail-vue/src/views/share/session.js` | T-26 已收口 `6e8bc10` | 其后只读 |
 | `useSharePolling.js` | T-26 已收口 `6e8bc10` | `toValue(intervalMs)`；禁止 `autoStart`/`listStatus`/`mode` |
 | `mail-vue/src/request/share.js` | T-26 已收口 `6e8bc10` | 其后只读 |
-| `tests/e2e/**` | **T-27 待审查** | 既有 12 spec 文件字节冻结；新增 6 文件；harness 只追加 |
+| `tests/e2e/**` | T-27 已收口 `190f704` | T-28 禁改 spec 把断言调绿；其后只读除非再开任务 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-27 APPROVED p0=0（`review-t27.md`）。勾选 T-27。P2-1 HOLD。热区 `tests/e2e/**` 收口只读。未勾选尾：T-28 → T-29。
 - 2026-08-24 · 主 AI：T-27 实现待审查（`190f704`）。主 AI 独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。Fog-1/2/3 按 §13 原样成立；四条实施偏离 CHANGE 接受。L1 倒计时残留登记 P2（T-29）。未勾选。未勾选尾：T-27 审查 / T-28 → T-29。
 - 2026-08-24 · 主 AI：T-27 侦察已裁 Fog-1/2/3（`recon-t27-e2e.md` §13）。派实现。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 APPROVED p0=0（`review-t26.md`）。勾选 T-26。热区 `index.vue` / `session.js` / `request/share.js` / `useSharePolling.js` 收口只读。未勾选尾：T-27 → T-29。

@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W5 APPROVED · T-27 待审查 |
+| 状态 Status | in-progress · W5 APPROVED · T-27 APPROVED · T-28 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -602,13 +602,35 @@
 
 ### W6 · E2E 扩展 + 收口(串行)
 
-- [ ] T-27 E2E 新场景(`tests/e2e/specs/`,跑 `node tests/e2e/run.mjs`)
-  - [ ]* T-27.1 多邮箱访客页:干净浏览器打开 multi 链接 → Tab 切换、真投递验证码邮件、OTP 复制、角标出现与消费
+- [x] T-27 E2E 新场景(`tests/e2e/specs/`,跑 `node tests/e2e/run.mjs`)
+  - **Evidence**
+    - verify: 主 AI 独立 `node tests/e2e/run.mjs` → 19 passed / 0 skipped；vue 22/250；worker 18/626。审查复跑同口径，均为 EXIT=0
+    - files: `tests/e2e/specs/visitor-multi-mailbox.spec.js` · `visitor-session-quota.spec.js` · `visitor-session-replay.spec.js` · `visitor-revoke-live.spec.js` · `visitor-authkey.spec.js` · `capability-v2-fence.spec.js` · `tests/e2e/harness/worker-entry.js` · `control.js` · `fixtures/share.js`
+    - AC: AC-OTP-04, AC-SEC-01, AC-SESS-04, AC-SESS-07, AC-SESS-10, AC-EDGE-03, AC-AUTH-01, AC-LIFE-10, AC-LIFE-11, AC-SEC-09
+    - commit: 190f704
+    - decision: Fog-1/2/3 CHANGE；T27-DROP-GLOB/URL-EQ/SEC09-AUTH/BADGE-GATE CHANGE；T27-L1 / review P2-1 HOLD（`clearMailboxView` 未清 `expiresAt`，T-29）
+    - review: `review-t27.md` APPROVED p0=0 p1=0 p2=1
+  - [x]* T-27.1 多邮箱访客页:干净浏览器打开 multi 链接 → Tab 切换、真投递验证码邮件、OTP 复制、角标出现与消费
     - _Requirements: AC-OTP-04, AC-SEC-01_
-  - [ ]* T-27.2 配额与幂等:耗尽 `max_sessions` 后新隐身窗口进不来(建会话 +1 计数);`max_sessions=1` + 注入响应丢失 → 同 key 重试拿同一 token、`used_sessions` 恒 1 不超发
+    - **Evidence**
+      - verify: `visitor-multi-mailbox.spec.js` 含于 E2E 19 passed
+      - files: `tests/e2e/specs/visitor-multi-mailbox.spec.js`
+      - AC: AC-OTP-04, AC-SEC-01, AC-CAP-02
+      - commit: 190f704
+  - [x]* T-27.2 配额与幂等:耗尽 `max_sessions` 后新隐身窗口进不来(建会话 +1 计数);`max_sessions=1` + 注入响应丢失 → 同 key 重试拿同一 token、`used_sessions` 恒 1 不超发
     - _Requirements: AC-SESS-04, AC-SESS-07, AC-SESS-10_
-  - [ ]* T-27.3 撤销即时 + AuthKey 流 + V2 开关:浏览中撤销 → 下一拍停轮询清存储展示不可用态;AuthKey 输入流(错 Key 重试→正确 Key 进入);`SHARE_CAPABILITY_V2=false` 下四路受限写入被拒、随机路由新旧行为无策略差异(依 AC-LIFE-10 四条路径注入);headers 断言无 `sec`/authKey/token 泄露
+    - **Evidence**
+      - verify: `visitor-session-quota.spec.js` + `visitor-session-replay.spec.js` 含于 E2E 19 passed
+      - files: `tests/e2e/specs/visitor-session-quota.spec.js` · `visitor-session-replay.spec.js` · `tests/e2e/fixtures/share.js`
+      - AC: AC-SESS-04, AC-SESS-07, AC-SESS-10
+      - commit: 190f704
+  - [x]* T-27.3 撤销即时 + AuthKey 流 + V2 开关:浏览中撤销 → 下一拍停轮询清存储展示不可用态;AuthKey 输入流(错 Key 重试→正确 Key 进入);`SHARE_CAPABILITY_V2=false` 下四路受限写入被拒、随机路由新旧行为无策略差异(依 AC-LIFE-10 四条路径注入);headers 断言无 `sec`/authKey/token 泄露
     - _Requirements: AC-EDGE-03, AC-AUTH-01, AC-LIFE-10, AC-LIFE-11, AC-SEC-09_
+    - **Evidence**
+      - verify: `visitor-revoke-live.spec.js` + `visitor-authkey.spec.js` + `capability-v2-fence.spec.js` 含于 E2E 19 passed
+      - files: `tests/e2e/specs/visitor-revoke-live.spec.js` · `visitor-authkey.spec.js` · `capability-v2-fence.spec.js` · `tests/e2e/harness/worker-entry.js`
+      - AC: AC-EDGE-03, AC-AUTH-01, AC-LIFE-10, AC-LIFE-11, AC-SEC-09
+      - commit: 190f704
 
 - [ ] T-28 Checkpoint · 三套全量回归:`pnpm --dir mail-worker test` + `pnpm --dir mail-vue test` + `node tests/e2e/run.mjs` 全绿,单邮箱旧断言零改写(基线 138/95/13 只增不减);未跑项一律标 `unverified`
 
@@ -646,6 +668,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-27 APPROVED p0=0（`review-t27.md`）。勾选 T-27。独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。P2-1 HOLD（撤销后倒计时残留，T-29）。未勾选尾：T-28 → T-29。
 - 2026-08-24 · 主 AI:T-27 实现待审查（`190f704`）。主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。未勾选（等审查 APPROVED）。未勾选尾：T-27 审查 / T-28 → T-29。
 - 2026-08-24 · 主 AI:T-27 侦察已裁 Fog-1/2/3（`recon-t27-e2e.md`）。未勾选。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI:T-26 APPROVED p0=0（`review-t26.md`）。勾选 T-26。独立复跑 vue 定点 5/88 · 全量 22/250；worker 18/626；E2E 13。未勾选尾：T-27 → T-29。
