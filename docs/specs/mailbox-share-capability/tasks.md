@@ -38,6 +38,7 @@
     - files: `mail-worker/src/init/init.js:33,38-137` · `mail-worker/src/entity/mail-share.js:21-31` · `mail-worker/src/entity/mail-share-binding.js:1-10` · `mail-worker/test/v3-2-db.spec.js:1-367` · `mail-worker/test/mail-share.schema.spec.js:18-140`
     - AC: AC-BIND-09, AC-BIND-11, AC-LIFE-08, AC-EDGE-09
     - commit: 4f72418
+    - review: `review-t01.md` · CHANGES_REQUIRED then P0-1 CHANGE / P0-2 HOLD
   - [x]* T-01.1 红:新建 `mail-worker/test/v3-2-db.spec.js` —— 预置 v3_1 形状旧行(含 account 已删/归属不符/不存在三类脏行 + 合法行),断言:有效行恰一条 Binding 回填、脏行置 `REVOKED`(记 `revoked_at`)且零 Binding、重复跑幂等、`access_count` 原值保留;注入「旧写落在 INSERT 前 / INSERT 与 UPDATE 之间 / UPDATE 后 / 任务重启后」全部交错时序,断言合法无 Binding 晚写行不被误 REVOKED(R3-A2);跑一次确认因 `v3_2DB` 不存在而红
     - _Requirements: AC-BIND-09, AC-BIND-11, AC-EDGE-09_
     - **Evidence** verify: `pnpm --dir mail-worker exec vitest run test/v3-2-db.spec.js` → EXIT=1（12/12 failed, `dbInit.v3_2DB is not a function`） · files: `mail-worker/test/v3-2-db.spec.js:1-367` · AC: AC-BIND-09/11, AC-EDGE-09 · commit: 4f72418
@@ -54,6 +55,7 @@
     - files: `mail-worker/src/service/mail-share-service.js:275-289` · `mail-worker/test/mail-share-service.spec.js:463-529` · `mail-worker/test/mail-share.schema.spec.js:142-156`
     - AC: AC-LIFE-10, AC-BIND-01
     - commit: e878760
+    - review: `review-w0-t02-t04.md` · CHANGES_REQUIRED P0=3 → P0-3/P1-2 已修 `3cce543`
   - [x]* T-02.1 红:`mail-worker/test/mail-share.schema.spec.js` 与 `mail-worker/test/mail-share-service.spec.js` 加断言 —— 任何写路径后主表 `account_id` 恒等于现存最小 `binding_id` 的 `account_id` 且非 0;grep 级断言鉴权/范围代码(`share-auth-service.js`、`share-scoped-email-repository.js`)零读取 `mail_share.account_id`(双写路径除外)
     - _Requirements: AC-LIFE-10, AC-BIND-01_
     - **Evidence**
@@ -75,6 +77,7 @@
     - files: `mail-worker/src/service/mail-share-service.js:16-82` · `mail-worker/wrangler.toml:58-60` · `mail-worker/wrangler-vitest.toml:40-41` · `mail-worker/test/mail-share-service.spec.js:557-674`
     - AC: AC-LIFE-11
     - commit: e878760
+    - review: `review-w0-t02-t04.md` · 与 T-02/T-04 同次 W0 阶段审；P0-3/P1-2 已修 `3cce543`
   - [x]* T-03.1 红:`mail-worker/test/mail-share-service.spec.js` 加断言 —— V2=false 时四路策略写入(multi create / bindings 使绑定数 1→N / AuthKey enable / 有限 `maxSessions`)一律 `SHARE_INVALID_CONFIG`;V2=true 放行
     - _Requirements: AC-LIFE-11_
     - **Evidence**
@@ -96,6 +99,7 @@
     - files: `mail-worker/test/setup.js:18-126`
     - AC: AC-CAP-04, AC-CAP-11
     - commit: e878760
+    - review: `review-w0-t02-t04.md` · CHANGES_REQUIRED P0=3 → P0-3/P1-2 已修 `3cce543`
   - **Follow-up (W0 review P0-3 / P1-2)**
     - verify: 红 `pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js test/mail-share.schema.spec.js` → EXIT=1（17 failed / 55 passed）；主 AI 绿同命令 → EXIT=0（72/72）
     - files: `mail-worker/test/setup.js:60-63,105,123` · `mail-worker/src/service/mail-share-service.js:73-83` · `mail-worker/test/mail-share-service.spec.js:556-730`
@@ -123,6 +127,7 @@
     - files: `mail-worker/src/service/share-auth-service.js:25-38,227-239,269,299,306` · `mail-worker/test/share-auth-service.spec.js:355-493` · `mail-worker/package.json:14`
     - AC: AC-LIFE-01, AC-LIFE-02, AC-LIFE-04, AC-LIFE-05, AC-LIFE-07, AC-SESS-06
     - commit: c7789e6
+    - review: 无独立 `review-t05.md`；同文件后续 T-06/`review-t07.md`/`review-t08-r2.md` APPROVED 覆盖，不重开 T-05 审查
   - [x]* T-05.1 红:`mail-worker/test/share-auth-service.spec.js` 加 `effectiveStatus` 全组合真值表(property,fast-check ≥100 轮):优先级 REVOKED > EXPIRED > ACCESS_LIMIT_REACHED > ACTIVE、纯函数零写库;`establishSession` 拒一切非 ACTIVE,`resolveSession` 对 `ACCESS_LIMIT_REACHED` 放行(唯一差异态);扫表断言持久化 status 值域仅 ACTIVE/REVOKED
     - **P-LIFE-02: 状态判定纯函数性** _Validates: AC-LIFE-01, AC-LIFE-02_
     - **P-SESS-03: 触顶不清场** _Validates: AC-SESS-06, AC-LIFE-04_
@@ -219,6 +224,7 @@
     - files: `mail-worker/src/service/share-auth-service.js:348-368` · `.agent-workspace/.archive/2026-08-24/mailbox-share-capability/share-context-freeze.md`
     - AC: W1-ctx（bindings 为真源；`accountId`/`windowStartEmailId` 垫片至 T-11）
     - commit: dd1de15
+    - review: checkpoint · 主 AI 自跑回归 + 冻结公告，无异构代码审查（预期）
 
 ### W2 · 读路径与 Binding CRUD(依赖 T-08 冻结的 ShareContext;文件不冲突时 T-10/T-12 可与 W1 后半并行起跑)
 
@@ -229,6 +235,7 @@
     - AC: AC-MAIL-01, AC-MAIL-02, AC-MAIL-03, AC-MAIL-09, AC-EDGE-06, AC-EDGE-07
     - commit: bca7bc2
     - decision: bindings[] 非空只认集合、垫片回落；N 截断在 SQL `row_number`；游标 `email_id < cursor`；ASC 黄金断言随 DESC 改写
+    - review: `review-t10.md` · APPROVED p0=0
   - [x]* T-10.1 红:`mail-worker/test/share-scoped-email-repository.spec.js` —— 集合封闭性 property:任意 ctx/参数组合只返回现存 Binding 集合内的行,每行满足所属 Binding 独立 `window_start_email_id` 下界 + `account_id > 0` + `is_del=NORMAL` + `status != SAVING`(P-BIND-01);`messageLimit=N` 各邮箱投 N+2 封 → 各返回最新 N(DESC),N=1 合法;`onlyMessagesAfterCreated=false` → 下界 0 仍受 N 截断;零邮件 → 空集不报错
     - **P-BIND-01: Binding 集合封闭性** _Validates: AC-MAIL-01, AC-MAIL-02, AC-MAIL-06_
     - **P-SCOPE-03: message_limit 服务端封闭性** _Validates: AC-MAIL-03, AC-MAIL-04, AC-MAIL-05, AC-EDGE-06_
@@ -339,6 +346,7 @@
     - AC: AC-OTP-09, AC-EDGE-11, AC-SEC-03
     - commit: d6fa50b
     - decision: `latestByBinding` 复用 `visibleSubquery` 的 `row_no=1`；handler 不读 query；`statusX` 仍 JWT；API 测试落新文件以免与 T-11 抢 `share-api.spec.js`
+    - review: `review-t14.md` · APPROVED p0=0
   - [x]* T-14.1 红:`mail-worker/test/share-api.spec.js` + `share-integration.spec.js` —— API 面断言不接受 `sinceEmailId`/任何游标参数;返回每 Binding 在 VisibleWindow ∩ message_limit ∩ 排除条件内的 `latestEmailId`(无可见邮件为 null)+ 可选 `latestReceivedAt`;窗口外/被 N 滚出邮件注入 → 水位不反映(侧信道封闭);与 mails 同周期调用零配额、同 token 同范围;`/share/mailboxes/statusX` 前缀近似不豁免
     - _Requirements: AC-OTP-09, AC-EDGE-11, AC-SEC-03_
     - **Evidence**
@@ -639,6 +647,7 @@
     - AC: 基线守恒（只增不减）
     - commit: none (checkpoint, no code delta)
     - note: 活基线现为 vue 22/250 · worker 18/626 · E2E 19；章程原文 138/95/13 为开工地板，未改写
+    - review: checkpoint · 主 AI 自跑三套回归，无异构代码审查（预期；零生产 diff）
 
 - [x] T-29 收尾:文档 / CHANGELOG / ADR / i18n
   - **Evidence**
@@ -691,6 +700,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:收口核验。远程 HEAD=`03e5711` 已与 origin 对齐。`.agent-workspace/.archive` 例外早已生效，108/111 已跟踪；补跟踪 3 份审查 prompt（`prompt.round1.sub.txt` / `prompt.t08.artifact.round1.sub.txt` / `prompt.t12.artifact.round1.sub.txt`）。T-01→T-29 全 `[x]`。补 T-01 / T-02–T-04 / T-10 / T-14 Evidence `review:` 行（报告早已入库）；T-05 由后续同文件审查覆盖；T-09/T-28 checkpoint 无异构审查（预期）。不重开审查。未勾选尾：无。
 - 2026-08-24 · 主 AI:T-29 APPROVED p0=0（`review-t29.md`）。勾选 T-29。P2-1/P2-2 CHANGE（ADR Consequences 旧名、D-3 锚点 `:904-910`）。独立复跑 vue 22/252 · worker 18/626 · E2E 19 passed / 0 skipped。未勾选尾：无。
 - 2026-08-24 · executor:T-29 收尾落盘（`exec-t29-note.md`）。**邮箱分享能力交付**：ADR 转 Accepted 并补「实施结论」（写明生产 `SHARE_CAPABILITY_V2` 默认 false）；design.md `status: shipped` + `shipped_commit: 190f704` + 新增「已知限制与技术债」D-1/D-2/D-3；`docs/specs/README.md` 索引同步 shipped；96 个 i18n 键落盘（访客 10 + 管理端 86，zh/en 双语，PENDING_COPY 映射按裁决保留）；两份 README 各加一条分享能力 bullet；F-4 `expiresAt` 残留两处修复（先红后绿 2 条单测 + 1 条 E2E 死壳断言）。三套复跑 vue 22/252 · worker 18/626 · E2E 19 passed / 0 skipped。**未勾选**（等协调者审查后勾）。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-29 侦察已裁 F-1/F-3/F-4（`recon-t29-wrap.md`）。未勾选。未勾选尾：T-29。

@@ -226,6 +226,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：收口核验。远程已齐 `03e5711`。archive 108/111 早已跟踪；补 3 份未入库审查 prompt。补 T-01/T-02–T-04/T-10/T-14 `review:` 行。T-05 由 T-08 R2 覆盖；T-09/T-28 为 checkpoint。未勾选尾：无。
 - 2026-08-24 · 主 AI：T-29 APPROVED p0=0（`review-t29.md`）。勾选 T-29。P2-1/P2-2 CHANGE。未勾选尾：无。
 - 2026-08-24 · 主 AI：T-29 实现待审查。独立复跑 vue 22/252 · worker 18/626 · E2E 19 passed / 0 skipped（`SHARE_E2E_REBUILD=1`）。i18n 480/480 无差集。未勾选。未勾选尾：T-29 审查。
 - 2026-08-24 · 主 AI：T-29 侦察已裁 F-1/F-3/F-4（`recon-t29-wrap.md`）。派实现。未勾选尾：T-29。
