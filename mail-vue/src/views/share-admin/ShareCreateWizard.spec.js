@@ -564,6 +564,41 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / AC-LIFE-11)', () =>
         expect(createMailShare).toHaveBeenCalledTimes(1)
     })
 
+    it('refuses to close while create is pending and still shows the secret (T22-P1-1)', async () => {
+        let resolveCreate = null
+        createMailShare.mockImplementationOnce(() => new Promise((resolve) => {
+            resolveCreate = resolve
+        }))
+        const wrapper = await openWizard()
+
+        await wrapper.get('[data-test="wizard-submit"]').trigger('click')
+        await wrapper.get('[data-test="wizard-close"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="share-create-wizard"]').exists()).toBe(true)
+        expect(wrapper.find('[data-test="secret-once"]').exists()).toBe(false)
+        expect(wrapper.get('[data-test="wizard-close"]').attributes('disabled')).toBeDefined()
+
+        resolveCreate(firstSuccess())
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="secret-once"]').exists()).toBe(true)
+        expect(wrapper.get('[data-test="share-url"]').element.value).toContain('#sec-7')
+    })
+
+    it('stops a fractional refresh interval locally and does not call that a dead capability (T22-P2-1)', async () => {
+        const wrapper = await openWizard()
+        await wrapper.get('[data-test="preset-custom"]').trigger('click')
+        await wrapper.get('[data-test="authkey-toggle"]').setValue(true)
+        await wrapper.get('[data-test="refresh-interval"]').setValue('3000.5')
+        await submit(wrapper)
+
+        expect(createMailShare).not.toHaveBeenCalled()
+        expect(capabilityV2.value).toBe('unknown')
+        expect(wrapper.find('[data-test="capability-inactive"]').exists()).toBe(false)
+        expect(wrapper.find('[data-test="wizard-error"]').exists()).toBe(true)
+    })
+
     // A non-multiple el-select cannot render an array and quietly shows its placeholder, so a
     // single-mailbox preset looked like nothing was chosen while the request said otherwise.
     it('hands the picker a bare id when single and an array when multi', async () => {

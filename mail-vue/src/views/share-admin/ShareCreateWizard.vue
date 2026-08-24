@@ -9,6 +9,9 @@
       :model-value="visible"
       :title="tf('shareWizardTitle')"
       width="min(680px, calc(100vw - 32px))"
+      :close-on-click-modal="!submitting"
+      :close-on-press-escape="!submitting"
+      :show-close="!submitting"
       @update:model-value="onOpenChange"
   >
     <div v-if="created" class="result" data-test="wizard-result" aria-live="polite">
@@ -215,6 +218,8 @@
                 data-test="refresh-interval"
                 :min="MIN_REFRESH_INTERVAL_MS"
                 :step="1000"
+                :precision="0"
+                :step-strictly="true"
                 :controls="false"
                 :disabled="locked"
             />
@@ -288,7 +293,7 @@
     </template>
 
     <template #footer>
-      <el-button data-test="wizard-close" @click="onOpenChange(false)">{{ $t('cancel') }}</el-button>
+      <el-button data-test="wizard-close" :disabled="submitting" @click="onOpenChange(false)">{{ $t('cancel') }}</el-button>
       <el-button
           v-if="!created && locked"
           type="primary"
@@ -556,6 +561,11 @@ function onOpenChange(value) {
   if (value) {
     return
   }
+  // A close here would hide the only place the new link can appear. The worker will not mint
+  // shareUrl/authKey again, so a pending create must finish on this dialog.
+  if (submitting.value) {
+    return
+  }
   // Losing a form costs a minute of retyping; losing the plaintext costs the share. Only the
   // second one is worth a confirm.
   if (hasUnsavedSecret.value) {
@@ -594,9 +604,13 @@ function localError() {
   if (!(Number(form.durationSeconds) > 0)) {
     return 'shareDurationRequired'
   }
-  if (form.refreshIntervalMs != null && form.refreshIntervalMs !== ''
-      && Number(form.refreshIntervalMs) < MIN_REFRESH_INTERVAL_MS) {
-    return 'shareRefreshIntervalTooSmall'
+  if (form.refreshIntervalMs != null && form.refreshIntervalMs !== '') {
+    const interval = Number(form.refreshIntervalMs)
+    // assertCreateBody rejects any non-safe-integer before the V2 fence. 3000.5 would share
+    // SHARE_INVALID_CONFIG with a real capability miss and grey four groups over a typo.
+    if (!Number.isSafeInteger(interval) || interval < MIN_REFRESH_INTERVAL_MS) {
+      return 'shareRefreshIntervalTooSmall'
+    }
   }
   if (!isCount(form.maxSessions) || !isCount(form.messageLimit)) {
     return 'shareWizardCountTooSmall'
