@@ -1,7 +1,8 @@
-import { env } from 'cloudflare:test';
+import { env, SELF } from 'cloudflare:test';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import shareAuthService from '../src/service/share-auth-service';
+import shareAuthSource from '../src/service/share-auth-service.js?raw';
 import shareResult from '../src/model/share-result';
 import { isDel } from '../src/const/entity-const';
 
@@ -49,6 +50,8 @@ async function hmacHex(key, message) {
 	return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+const UNAVAILABLE_BODY = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
+
 function failEnvelope(err) {
 	return JSON.stringify(shareResult.fail(err.message, err.code));
 }
@@ -84,6 +87,110 @@ function decodeTokenPayload(token) {
 	return JSON.parse(decoder.decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0))));
 }
 
+// The quota gate is the only statement establishSession writes; matching it by SQL
+// text lets a test interleave state changes around it without any production seam.
+const QUOTA_UPDATE_SQL = /^update\s+"mail_share"\s+set\s+"access_count"/i;
+
+// Wraps the D1 binding handed to orm(c) so `before` runs after the gate statement is
+// prepared but before it executes, and `after` runs once it has committed. bind()
+// returns a fresh statement object, so the wrapper has to re-apply itself there.
+function injectingDb(db, { before, after } = {}) {
+	const wrapStatement = (stmt) => new Proxy(stmt, {
+		get(target, prop) {
+			const value = target[prop];
+			if (typeof value !== 'function') {
+				return value;
+			}
+			if (prop === 'bind') {
+				return (...args) => wrapStatement(value.apply(target, args));
+			}
+			if (prop === 'all' || prop === 'run' || prop === 'first' || prop === 'raw') {
+				return async (...args) => {
+					if (before) {
+						await before();
+					}
+					const out = await value.apply(target, args);
+					if (after) {
+						await after();
+					}
+					return out;
+				};
+			}
+			return value.bind(target);
+		}
+	});
+	return new Proxy(db, {
+		get(target, prop) {
+			const value = target[prop];
+			if (typeof value !== 'function') {
+				return value;
+			}
+			if (prop !== 'prepare') {
+				return value.bind(target);
+			}
+			return (sql) => {
+				const stmt = value.call(target, sql);
+				return QUOTA_UPDATE_SQL.test(String(sql).trim()) ? wrapStatement(stmt) : stmt;
+			};
+		}
+	});
+}
+
+async function captureLogs(run) {
+	const lines = [];
+	const log = console.log;
+	console.log = (...args) => lines.push(args.map(String).join(' '));
+	try {
+		await run();
+	} finally {
+		console.log = log;
+	}
+	return lines;
+}
+
+function quotaEvents(lines) {
+	return lines
+		.map((line) => {
+			try {
+				return JSON.parse(line);
+			} catch {
+				return null;
+			}
+		})
+		.filter((entry) => entry && entry.event === 'share.session.denied_quota');
+}
+
+async function quotaRow(shareId) {
+	return await env.db.prepare(
+		'SELECT access_count, last_access_at, status, credentials_version FROM mail_share WHERE share_id = ?'
+	).bind(shareId).first();
+}
+
+// The deployed worker signs with the wrangler-vitest ring, so endpoint-level reads
+// have to be established through the worker rather than with the spec-local keys.
+async function shareFetch(method, path, { bearer, body } = {}) {
+	const headers = { 'accept-language': 'en' };
+	if (bearer) {
+		headers.Authorization = `Bearer ${bearer}`;
+	}
+	if (body !== undefined) {
+		headers['content-type'] = 'application/json';
+	}
+	const response = await SELF.fetch(`http://example.com/api${path}`, {
+		method,
+		headers,
+		body: body === undefined ? undefined : JSON.stringify(body)
+	});
+	const text = await response.text();
+	let json = null;
+	try {
+		json = JSON.parse(text);
+	} catch {
+		json = null;
+	}
+	return { status: response.status, text, json };
+}
+
 const seededLids = [];
 const seededAccountIds = new Set();
 
@@ -106,7 +213,8 @@ async function insertShare({
 	accountId = ACCOUNT_ID,
 	windowStartEmailId = 10,
 	maxSessions,
-	accessCount
+	accessCount,
+	credentialsVersion
 }) {
 	const secHmac = await hmacHex(pepper, sec);
 	seededLids.push(lid);
@@ -126,6 +234,12 @@ async function insertShare({
 	if (accessCount !== undefined) {
 		columns.push('access_count');
 		values.push(accessCount);
+	}
+	// W1 has no writer for credentials_version (resetAuthKey lands in T-16), so the
+	// cv predicate can only be exercised by seeding the column directly.
+	if (credentialsVersion !== undefined) {
+		columns.push('credentials_version');
+		values.push(credentialsVersion);
 	}
 	await env.db.prepare(`
 		INSERT INTO mail_share (${columns.join(', ')})
@@ -266,22 +380,31 @@ describe('shareAuthService', () => {
 		expect(body).toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
 	});
 
-	it('still issues a session when access accounting fails (AC-LIFE-14)', async () => {
+	// Semantic reversal of the former "still issues a session when access accounting
+	// fails (mail-share AC-LIFE-14)": once accounting IS the quota gate, a write that
+	// never lands must refuse instead of hand out an unmetered session.
+	it('refuses the session when the quota UPDATE itself throws (AC-SESS-11)', async () => {
 		await ensureAccount();
 		const lid = randomLid('acct-fail');
 		const sec = randomSec();
-		await insertShare({ lid, sec });
-		const established = await shareAuthService.establishSession(ctx(), lid, sec, {
-			recordAccess: async () => {
-				throw new Error('d1 write failed');
-			}
+		const { shareId } = await insertShare({ lid, sec });
+		const failing = ctx({
+			db: injectingDb(env.db, {
+				before: () => {
+					throw new Error('d1 write failed');
+				}
+			})
 		});
-		expect(established.sessionToken).toEqual(expect.any(String));
-		const resolved = await shareAuthService.resolveSession(ctx(), established.sessionToken);
-		expect(resolved.effectiveStatus).toBe('ACTIVE');
+
+		const body = await catchFail(shareAuthService.establishSession(failing, lid, sec));
+		expect(body).toBe(UNAVAILABLE_BODY);
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(0);
+		expect(row.last_access_at).toBeNull();
 	});
 
-	it('increments access_count only on successful establish (AC-LIFE-10)', async () => {
+	it('increments access_count only on successful establish (mail-share AC-LIFE-10)', async () => {
 		await ensureAccount();
 		const lid = randomLid('acct-ok');
 		const sec = randomSec();
@@ -490,5 +613,278 @@ describe('shareAuthService', () => {
 			"SELECT COUNT(*) AS n FROM mail_share WHERE status IN ('ACCESS_LIMIT_REACHED', 'EXPIRED')"
 		).first();
 		expect(computed.n).toBe(0);
+	});
+});
+
+function futureText(secondsFromNow) {
+	const at = new Date(Date.now() + secondsFromNow * 1000);
+	const pad = (n) => String(n).padStart(2, '0');
+	return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} `
+		+ `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+}
+
+function functionSource(source, name) {
+	const start = source.indexOf(`async function ${name}(`);
+	expect(start).toBeGreaterThan(-1);
+	const end = source.indexOf('\n}\n', start);
+	expect(end).toBeGreaterThan(start);
+	return source.slice(start, end);
+}
+
+describe('shareAuthService session quota gate', () => {
+	it('consumes exactly one slot per established session and keeps the absolute exp bound (AC-SESS-01, AC-SESS-05)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-one');
+		const sec = randomSec();
+		const expiresAt = futureText(60);
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 5, expiresAt });
+
+		const established = await shareAuthService.establishSession(ctx(), lid, sec);
+		expect(established.sessionToken).toEqual(expect.any(String));
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(1);
+		expect(row.last_access_at).toEqual(expect.any(String));
+
+		// issueToken now runs after the gate; exp must still be min(expires_at, iat+TTL).
+		const payload = decodeTokenPayload(established.sessionToken);
+		expect(payload.exp - payload.iat).toBeLessThanOrEqual(61);
+		expect(payload.exp - payload.iat).toBeGreaterThan(0);
+		expect(payload.exp).toBeLessThan(payload.iat + 900);
+	});
+
+	it('lets exactly one of six concurrent visitors take the last slot (AC-EDGE-02, AC-SESS-07, P-SESS-01)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-last-slot');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 3, accessCount: 2 });
+		const c = ctx();
+
+		// Every one of these reads the same `access_count = 2 < 3` snapshot, so the
+		// snapshot check cannot separate them; only the conditional UPDATE can.
+		const settled = await Promise.allSettled(
+			Array.from({ length: 6 }, () => shareAuthService.establishSession(c, lid, sec))
+		);
+
+		const fulfilled = settled.filter((item) => item.status === 'fulfilled');
+		const rejected = settled.filter((item) => item.status === 'rejected');
+		expect(fulfilled.length).toBe(1);
+		expect(rejected.length).toBe(5);
+		expect(fulfilled[0].value.sessionToken).toEqual(expect.any(String));
+		for (const item of rejected) {
+			expect(failEnvelope(item.reason)).toBe(UNAVAILABLE_BODY);
+		}
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(3);
+		expect(row.status).toBe('ACTIVE');
+	});
+
+	it('never overshoots max_sessions when eight visitors race an empty quota (AC-SESS-01, AC-SESS-07, P-SESS-01)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-race-empty');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 3, accessCount: 0 });
+		const c = ctx();
+
+		const settled = await Promise.allSettled(
+			Array.from({ length: 8 }, () => shareAuthService.establishSession(c, lid, sec))
+		);
+
+		expect(settled.filter((item) => item.status === 'fulfilled').length).toBe(3);
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(3);
+	});
+
+	it('leaves an unlimited share unthrottled while still counting every session (AC-SESS-01)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-unlimited');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const c = ctx();
+
+		const settled = await Promise.allSettled(
+			Array.from({ length: 3 }, () => shareAuthService.establishSession(c, lid, sec))
+		);
+		expect(settled.filter((item) => item.status === 'fulfilled').length).toBe(3);
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(3);
+	});
+
+	it('refuses when credentials_version moves between the snapshot and the gate (AC-SESS-01, AC-EDGE-13)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-cv');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, credentialsVersion: 7 });
+		const drifting = ctx({
+			db: injectingDb(env.db, {
+				before: async () => {
+					await env.db.prepare('UPDATE mail_share SET credentials_version = 8 WHERE share_id = ?')
+						.bind(shareId).run();
+				}
+			})
+		});
+
+		// Nothing else moved: still ACTIVE, unexpired, uncapped. Only cv can refuse here.
+		expect(await catchFail(shareAuthService.establishSession(drifting, lid, sec))).toBe(UNAVAILABLE_BODY);
+
+		const row = await quotaRow(shareId);
+		expect(row.credentials_version).toBe(8);
+		expect(row.access_count).toBe(0);
+		expect(row.last_access_at).toBeNull();
+	});
+
+	it('refuses with zero consumption when revoke or expiry commits before the gate (AC-EDGE-13)', async () => {
+		await ensureAccount();
+
+		const revokedLid = randomLid('gate-pre-revoke');
+		const revokedSec = randomSec();
+		const revoked = await insertShare({ lid: revokedLid, sec: revokedSec, maxSessions: 3 });
+		const revoking = ctx({
+			db: injectingDb(env.db, {
+				before: async () => {
+					await env.db.prepare("UPDATE mail_share SET status = 'REVOKED' WHERE share_id = ?")
+						.bind(revoked.shareId).run();
+				}
+			})
+		});
+		expect(await catchFail(shareAuthService.establishSession(revoking, revokedLid, revokedSec)))
+			.toBe(UNAVAILABLE_BODY);
+		const revokedRow = await quotaRow(revoked.shareId);
+		expect(revokedRow.access_count).toBe(0);
+
+		const expiredLid = randomLid('gate-pre-expire');
+		const expiredSec = randomSec();
+		const expired = await insertShare({ lid: expiredLid, sec: expiredSec, maxSessions: 3 });
+		const expiring = ctx({
+			db: injectingDb(env.db, {
+				before: async () => {
+					await env.db.prepare("UPDATE mail_share SET expires_at = '2001-01-01 00:00:00' WHERE share_id = ?")
+						.bind(expired.shareId).run();
+				}
+			})
+		});
+		expect(await catchFail(shareAuthService.establishSession(expiring, expiredLid, expiredSec)))
+			.toBe(UNAVAILABLE_BODY);
+		const expiredRow = await quotaRow(expired.shareId);
+		expect(expiredRow.access_count).toBe(0);
+	});
+
+	it('does not refund the slot when revocation lands after the gate and fails the first read (AC-EDGE-13)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-toctou');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 3 });
+		const racing = ctx({
+			db: injectingDb(env.db, {
+				after: async () => {
+					await env.db.prepare("UPDATE mail_share SET status = 'REVOKED' WHERE share_id = ?")
+						.bind(shareId).run();
+				}
+			})
+		});
+
+		const established = await shareAuthService.establishSession(racing, lid, sec);
+		expect(established.sessionToken).toEqual(expect.any(String));
+
+		// Documented TOCTOU window: the token is dead on its first trip back.
+		expect(await catchFail(shareAuthService.resolveSession(ctx(), established.sessionToken)))
+			.toBe(UNAVAILABLE_BODY);
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(1);
+		expect(row.status).toBe('REVOKED');
+	});
+
+	it('logs share.session.denied_quota for both the capped snapshot and the lost race', async () => {
+		await ensureAccount();
+
+		const cappedLid = randomLid('gate-log-capped');
+		const cappedSec = randomSec();
+		const capped = await insertShare({ lid: cappedLid, sec: cappedSec, maxSessions: 1, accessCount: 1 });
+
+		const racedLid = randomLid('gate-log-race');
+		const racedSec = randomSec();
+		const raced = await insertShare({ lid: racedLid, sec: racedSec, maxSessions: 1, accessCount: 0 });
+		const losing = ctx({
+			db: injectingDb(env.db, {
+				before: async () => {
+					await env.db.prepare('UPDATE mail_share SET access_count = 1 WHERE share_id = ?')
+						.bind(raced.shareId).run();
+				}
+			})
+		});
+
+		const lines = await captureLogs(async () => {
+			expect(await catchFail(shareAuthService.establishSession(ctx(), cappedLid, cappedSec)))
+				.toBe(UNAVAILABLE_BODY);
+			expect(await catchFail(shareAuthService.establishSession(losing, racedLid, racedSec)))
+				.toBe(UNAVAILABLE_BODY);
+		});
+
+		const events = quotaEvents(lines);
+		expect(events.map((entry) => entry.reason)).toEqual(['quota_snapshot', 'quota_race']);
+		expect(events.map((entry) => entry.shareId)).toEqual([capped.shareId, raced.shareId]);
+		const joined = lines.join('\n');
+		expect(joined).not.toContain(cappedSec);
+		expect(joined).not.toContain(racedSec);
+		expect(joined).not.toContain(cappedLid);
+		expect(joined).not.toContain(racedLid);
+
+		expect((await quotaRow(capped.shareId)).access_count).toBe(1);
+		expect((await quotaRow(raced.shareId)).access_count).toBe(1);
+	});
+
+	it('keeps used_sessions flat across polling, list, detail and attachment reads (AC-SESS-02, AC-EDGE-01, P-SESS-02)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-read-only');
+		const sec = randomSec();
+		// Seeded against the deployed pepper ring and left uncapped: the attachment
+		// route still hard-requires an ACTIVE context (its cap handling is T-08).
+		const { shareId } = await insertShare({
+			lid,
+			sec,
+			pepper: env.SHARE_SEC_PEPPER,
+			pepperKid: env.SHARE_SEC_PEPPER_KID
+		});
+
+		const session = await shareFetch('POST', '/share/session', { body: { lid, sec } });
+		const sessionToken = session.json.data.sessionToken;
+		expect(sessionToken).toEqual(expect.any(String));
+
+		const afterEstablish = await quotaRow(shareId);
+		expect(afterEstablish.access_count).toBe(1);
+
+		const reader = ctx({
+			SHARE_SESSION_SIGNING_KEY: env.SHARE_SESSION_SIGNING_KEY,
+			SHARE_SESSION_SIGNING_KID: env.SHARE_SESSION_SIGNING_KID
+		});
+		for (let i = 0; i < 3; i++) {
+			await shareAuthService.resolveSession(reader, sessionToken);
+		}
+		await shareFetch('GET', '/share/mails?limit=20', { bearer: sessionToken });
+		await shareFetch('GET', '/share/mails?limit=20', { bearer: sessionToken });
+		await shareFetch('GET', '/share/mail?mailId=999999', { bearer: sessionToken });
+		await shareFetch('GET', '/share/attachment?mailId=999999&attachmentId=999999', { bearer: sessionToken });
+
+		const after = await quotaRow(shareId);
+		expect(after.access_count).toBe(1);
+		expect(after.last_access_at).toBe(afterEstablish.last_access_at);
+	});
+
+	it('keeps resolveSession structurally write-free with the gate as the only write (AC-SESS-02, P-SESS-02)', () => {
+		const resolveBody = functionSource(shareAuthSource, 'resolveSession');
+		expect(resolveBody).not.toMatch(/\.(update|insert|delete)\(/);
+		expect(resolveBody).not.toMatch(/\b(UPDATE|INSERT|DELETE)\b/);
+		expect(resolveBody).not.toContain('consumeSessionQuota');
+
+		expect(shareAuthSource.match(/\.(update|insert|delete)\(/g)).toEqual(['.update(']);
+		const gateBody = functionSource(shareAuthSource, 'consumeSessionQuota');
+		expect(gateBody).toContain('.update(');
+		expect(gateBody).toContain('.returning(');
+
+		// The fire-and-forget helper and its deps seam are gone on both sides.
+		expect(shareAuthSource).not.toContain('recordAccess');
 	});
 });

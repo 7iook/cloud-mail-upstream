@@ -1,10 +1,14 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
 import { isDel } from '../const/entity-const';
 import account from '../entity/account';
 import { mailShare } from '../entity/mail-share';
 import orm from '../entity/orm';
 import BizError from '../error/biz-error';
+// Known cycle with mail-share-service: it imports this module too. Both directions
+// are dereferenced inside function bodies only, so neither module evaluation hits a
+// TDZ. The event names stay in one place until W2 extracts them.
+import { SHARE_EVENT, logShareEvent } from './mail-share-service';
 
 const SHARE_UNAVAILABLE = 'SHARE_UNAVAILABLE';
 // 15 minutes: long enough to wait for and copy an OTP, short enough to bound
@@ -246,14 +250,35 @@ async function loadLiveAccount(c, accountId) {
 	return accountRow;
 }
 
-async function recordAccess(c, shareId) {
-	await orm(c).update(mailShare).set({
-		accessCount: sql`${mailShare.accessCount} + 1`,
-		lastAccessAt: nowText()
-	}).where(eq(mailShare.shareId, shareId)).run();
+// Only shareId and reason: this line goes through console.log and is covered by the
+// AC-LEAK-05 fence, so no lid, sec or token may reach it.
+function denyQuota(shareId, reason) {
+	logShareEvent(SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId, reason });
+	throwUnavailable();
 }
 
-async function establishSession(c, lid, sec, deps = {}) {
+// The single linearization point for quota and authorization (AC-SESS-01). The WHERE
+// re-asserts every fact the snapshot observed, so a revoke, expiry or resetAuthKey
+// that commits after the snapshot loses the race instead of being written over. The
+// credentials_version predicate doubles as a snapshot-freshness guard: a stale read
+// (today impossible, D1 only replicates behind the Sessions API) can never win here.
+// An empty RETURNING therefore means "someone else changed the world"; refuse.
+async function consumeSessionQuota(c, shareId, expectedCv, now) {
+	return await orm(c).update(mailShare).set({
+		accessCount: sql`${mailShare.accessCount} + 1`,
+		lastAccessAt: now
+	}).where(and(
+		eq(mailShare.shareId, shareId),
+		eq(mailShare.status, 'ACTIVE'),
+		gt(mailShare.expiresAt, now),
+		eq(mailShare.credentialsVersion, expectedCv),
+		or(isNull(mailShare.maxSessions), sql`${mailShare.accessCount} < ${mailShare.maxSessions}`)
+	)).returning({ accessCount: mailShare.accessCount });
+}
+
+// `options` is empty at T-06; it exists so T-07 (idempotencyKey) and T-08 (authKey)
+// do not have to change this signature again.
+async function establishSession(c, lid, sec, options = {}) {
 	if (isShareDisabled(c)) {
 		throwUnavailable();
 	}
@@ -266,17 +291,36 @@ async function establishSession(c, lid, sec, deps = {}) {
 	if (!row || !matched) {
 		throwUnavailable();
 	}
+	// The snapshot read above stays: AC-SEC-08 bans a read-then-write state change,
+	// not a read. It carries sec_hmac for the credential check and credentials_version
+	// into the gate below, while the state change itself is still one statement.
+	// assertAllowed throws rather than returning the capped state, so recompute it here
+	// to keep the everyday "cap already reached" refusal observable.
+	if (effectiveStatus(row, nowText()) === 'ACCESS_LIMIT_REACHED') {
+		denyQuota(row.shareId, 'quota_snapshot');
+	}
 	assertAllowed(row, ESTABLISH_ALLOWED);
 	const accountRow = await loadLiveAccount(c, row.accountId);
-	const sessionToken = await issueToken(c, row);
+	const now = nowText();
+	let applied;
 	try {
-		await (deps.recordAccess || recordAccess)(c, row.shareId);
+		applied = await consumeSessionQuota(c, row.shareId, row.credentialsVersion, now);
 	} catch (err) {
-		console.error('share-auth access accounting failed', {
+		// AC-SESS-11: a gate that never landed must refuse, not hand out an unmetered
+		// session the way the old fire-and-forget accounting did.
+		console.error('share-auth quota gate failed', {
 			shareId: row.shareId,
 			name: err && err.name
 		});
+		throwUnavailable();
 	}
+	if (!applied.length) {
+		denyQuota(row.shareId, 'quota_race');
+	}
+	// Only now is the slot ours. A state change committing between here and the
+	// response is the documented TOCTOU window (AC-EDGE-13): the token dies on its
+	// first trip back and the slot is not refunded.
+	const sessionToken = await issueToken(c, row);
 	return {
 		sessionToken,
 		mailbox: accountRow.email,
