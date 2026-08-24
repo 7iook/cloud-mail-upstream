@@ -72,7 +72,8 @@
 | W4 | T-21 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t21-r2.md` · P1-1/P2-1 CLOSED |
 | W4 | T-23 ShareDialog | ✅ 已提交 `4f4cc65` | generalPurpose≈executor | 主 AI 独立 10/10 · 邻接 18/18 |
 | W4 | T-23 审查 | ✅ APPROVED · P2-1 HOLD | gpt-5.6-sol-xhigh-fast | `review-t23.md` · 夹带 tasks.md 日志不改写历史 |
-| W4 | T-22 创建向导 | ⏳ 已提交 `5c9651f` · 修复 `4648101` 待 R2 | generalPurpose≈executor | 主 AI 独立定点 6/58 · T22-P 2/2 |
+| W4 | T-22 创建向导 | ✅ 已提交 `5c9651f` · 修复 `4648101` | generalPurpose≈executor | 主 AI 独立 58/58 · 全量 vue 21/185 · worker 18/619 · E2E 13 |
+| W4 | T-22 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t22-r2.md` · P1-1/P2-1 CLOSED |
 | W4 | T-22 向导侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t22-wizard.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -155,8 +156,8 @@
 | 文件 | 当前写者 | 备注 |
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
-| `mail-vue/src/request/mail-share.js` | T-22 条件展开 `createMailShare` | 旧四键 `toEqual` 必须仍绿；其后只读除非再开任务 |
-| `mail-vue/src/views/share-admin/*` | T-21 已收口 `00b0ae1`/`5af8675` | T-22 只许 `index.vue` header「新建」锚点；`status.js` / 抽屉 0 行 |
+| `mail-vue/src/request/mail-share.js` | T-22 已收口 `5c9651f` | 旧四键 `toEqual` 仍绿；其后只读除非再开任务 |
+| `mail-vue/src/views/share-admin/*` | T-21/`T-22` 已收口 | `status.js` / 抽屉 / 向导其后只读；T-29 清 PENDING_COPY |
 | `mail-vue/src/perm/perm.js` | T-20 已入库 `672da73` | 其后只加路由须新任务 |
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` | T-14 已入库 `d6fa50b` | 其后只加路由须新任务；W3 不写此文件 |
@@ -169,6 +170,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-22 R2 APPROVED p0=0。P1-1/P2-1 CLOSED。主 AI 独立 58/58 + 全量 vue 21/185 · worker 18/619 · E2E 13。W4 收口。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI：T-22 审查 NEEDS_CHANGES p1=1 p2=1。T22-P1-1/P2-1 均 CHANGE。定点 T22-P 2/2 + 邻接 6/58。R2 pending。未勾选尾：T-22 R2 / T-24 → T-29。
 - 2026-08-24 · 主 AI：T-23 审查 APPROVED（P2-1 HOLD）。T-22 实现待审查。主 AI 独立定点 6 files / 56 + 全量 vue 21/183。未勾选尾：T-22 审查 / T-24 → T-29。
 - 2026-08-24 · 主 AI：T-23 实现待审查。定点 10/10 + 邻接 18/18；全量 vue 20/161 · worker 18/619 · E2E 13。未勾选尾：T-23 审查 / T-22 → T-29。

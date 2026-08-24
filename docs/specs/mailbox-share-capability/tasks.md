@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W4 T-23 APPROVED · T-22 实现待审查 |
+| 状态 Status | in-progress · W4 收口 · 下一波 W5 T-24 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -497,9 +497,21 @@
       - AC: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-05
       - commit: 00b0ae1 · 5af8675
 
-- [ ] T-22 创建向导:四预设 + 幂等恢复 + V2 降级
-  - [ ]* T-22.1 红→绿:向导 spec —— 四预设(单邮箱验证码/临时邮箱/多邮箱验证码池/自定义)仅前端表单预填,请求不含预设标识;提交带 `Idempotency-Key`,结果未知同 key 重试,重放识别 `idempotentReplay` 且无 `sec` 明文 → 引导 revoke/delete 后重建,禁止换 key 盲建;V2=false 时多邮箱/AuthKey/配额表单项以「能力未激活」置灰;成功后一次性展示 `shareUrl`(+`authKey`),复用 `mail-vue/src/views/email/build-share-url.js`
+- [x] T-22 创建向导:四预设 + 幂等恢复 + V2 降级
+  - **Evidence**
+    - verify: 主 AI 独立定点 6 files / 58 tests + `T22-P` 2/2；全量 vue 21/185、worker 18/619、E2E 13，均为 EXIT=0
+    - files: `mail-vue/src/views/share-admin/ShareCreateWizard.vue` · `ShareCreateWizard.spec.js` · `presets.js` · `index.vue`(+2) · `mail-vue/src/request/mail-share.js` · `mail-share.spec.js`
+    - AC: AC-CAP-12, AC-CAP-14, AC-LIFE-11
+    - commit: 5c9651f · 4648101
+    - decision: T22-V2-COLLIDE CHANGE（撞后降级）；T22-CREATE-EXPAND CHANGE（就地条件展开）；T22-P1-1/P2-1 CHANGE（提交中拒关；刷新间隔必须是安全整数）
+    - review: `review-t22.md` NEEDS_CHANGES → `review-t22-r2.md` APPROVED p0=0
+  - [x]* T-22.1 红→绿:向导 spec —— 四预设(单邮箱验证码/临时邮箱/多邮箱验证码池/自定义)仅前端表单预填,请求不含预设标识;提交带 `Idempotency-Key`,结果未知同 key 重试,重放识别 `idempotentReplay` 且无 `sec` 明文 → 引导 revoke/delete 后重建,禁止换 key 盲建;V2=false 时多邮箱/AuthKey/配额表单项以「能力未激活」置灰;成功后一次性展示 `shareUrl`(+`authKey`),复用 `mail-vue/src/views/email/build-share-url.js`
     - _Requirements: AC-CAP-12, AC-CAP-14, AC-LIFE-11_
+    - **Evidence**
+      - verify: 主 AI 独立定点 58/58 + P1/P2 2/2；审查 R2 APPROVED
+      - files: `mail-vue/src/views/share-admin/ShareCreateWizard.spec.js` · `mail-vue/src/request/mail-share.spec.js`
+      - AC: AC-CAP-12, AC-CAP-14, AC-LIFE-11
+      - commit: 5c9651f · 4648101
 
 - [x] T-23 ShareDialog 兼容保持(快捷入口)
   - **Evidence**
@@ -583,6 +595,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-22 R2 APPROVED p0=0（`review-t22-r2.md`）。P1-1/P2-1 CLOSED。主 AI 独立定点 58/58 + 全量 vue 21/185、worker 18/619、E2E 13。W4 收口。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-22 审查 NEEDS_CHANGES p1=1 p2=1（`review-t22.md`）。T22-P1-1/P2-1 均 CHANGE：提交中拒关；刷新间隔必须是安全整数。定点 T22-P 2/2 + 邻接 6/58。未勾选尾：T-22 R2 / T-24 → T-29。
 - 2026-08-24 · 主 AI:T-23 审查过筛：P2-1 HOLD。T-22 实现待审查。主 AI 独立定点 6 files / 56 + 全量 vue 21/183。未勾选尾：T-22 审查 / T-24 → T-29。
 - 2026-08-24 · 主 AI:T-23 实现待审查。主 AI 独立定点 ShareDialog 10/10 + 邻接 18/18；全量 vue 20/161、worker 18/619、E2E 13。未勾选尾：T-23 审查 / T-22 → T-29。
