@@ -646,7 +646,7 @@
 
 ## Update Log
 
-- 2026-08-24 · 主 AI:T-27 实现待审查。6 新 spec + harness 追加；生产 vue/worker 零 diff。未勾选（等审查 APPROVED）。未勾选尾：T-27 审查 / T-28 → T-29。
+- 2026-08-24 · 主 AI:T-27 实现待审查（`190f704`）。主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。未勾选（等审查 APPROVED）。未勾选尾：T-27 审查 / T-28 → T-29。
 - 2026-08-24 · 主 AI:T-27 侦察已裁 Fog-1/2/3（`recon-t27-e2e.md`）。未勾选。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI:T-26 APPROVED p0=0（`review-t26.md`）。勾选 T-26。独立复跑 vue 定点 5/88 · 全量 22/250；worker 18/626；E2E 13。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI:T-26 实现待审查。vue 22/250 · worker 18/626 · E2E 13。worker 零 diff。未勾选（等审查 APPROVED）。未勾选尾：T-26 审查 / T-27 → T-29。

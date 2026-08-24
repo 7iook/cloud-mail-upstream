@@ -213,7 +213,7 @@
 
 ## Update Log
 
-- 2026-08-24 · 主 AI：T-27 实现待审查。Fog-1/2/3 按 §13 原样成立；四条实施偏离 CHANGE 接受。L1 倒计时残留登记 P2（T-29）。未勾选。未勾选尾：T-27 审查 / T-28 → T-29。
+- 2026-08-24 · 主 AI：T-27 实现待审查（`190f704`）。主 AI 独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。Fog-1/2/3 按 §13 原样成立；四条实施偏离 CHANGE 接受。L1 倒计时残留登记 P2（T-29）。未勾选。未勾选尾：T-27 审查 / T-28 → T-29。
 - 2026-08-24 · 主 AI：T-27 侦察已裁 Fog-1/2/3（`recon-t27-e2e.md` §13）。派实现。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 APPROVED p0=0（`review-t26.md`）。勾选 T-26。热区 `index.vue` / `session.js` / `request/share.js` / `useSharePolling.js` 收口只读。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 实现待审查（worker 零 diff）。主 AI 独立复跑 vue 定点 5/88 · 全量 22/250；worker 18/626；E2E 13。三处偏离 CHANGE 接受。未勾选。未勾选尾：T-26 审查 / T-27 → T-29。
