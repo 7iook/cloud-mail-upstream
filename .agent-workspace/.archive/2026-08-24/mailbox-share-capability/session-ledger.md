@@ -102,6 +102,8 @@
 | T15-V2 | CHANGE:update 同时接 FINITE_MAX_SESSIONS 与 MESSAGE_LIMIT | exec-t12-note 第 5 条 |
 | T15-PATCH | HOLD:禁止 update 复用 `normalizeCreateBody` | 缺省会重置未提交字段 |
 | T15-PERM | HOLD:`security.js` 新路径留给 T-17 | 与 T-13 bindings 同形缺口 |
+| T15-P1-1 | CHANGE:带 `status?` 的 list 走默认 page=1/size=20，无参才 deprecated 500 | review-t15；design.md:301 无参 ≠ 筛选单参 |
+| T15-P1-2 | CHANGE:幂等 DELETE 经 `mail_share.user_id` EXISTS 回查，不再用子表 user_id | review-t15；无 FK 下他人 delete 不可误删调用方幂等行 |
 
 ## 冲突热区占用
 
@@ -117,6 +119,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-15 审查 NEEDS_CHANGES p1=2。T15-P1-1/P1-2 CHANGE。定点红 3 → 绿 198/198；全量 18/444 · 17/95 · E2E 13。T-16 侦察已落。未勾选尾：T-15 复审 / T-16 → T-29。
 - 2026-08-24 · 主 AI：T-15 `1d49bb4` 入库。T-11 R2 APPROVED。主 AI 独立 195/195 + 全量 18/441 · 17/95 · E2E 13。未勾选尾：T-15 审查 / T-16 → T-29。
 - 2026-08-24 · 主 AI：T-11 P1-1 `e63998e`。T-14 审查 APPROVED。T-15 侦察已落。未勾选尾：T-11 复审 / T-15 → T-29。
 - 2026-08-24 · 主 AI：T-11 `bee72b6` + T-14 `d6fa50b` 入库。T-13 R2 APPROVED。主 AI 独立 135/135 + 全量 18/410 · 17/95 · E2E 13。未勾选尾：T-11/T-14 审查 → T-15 → T-29。

@@ -2089,6 +2089,13 @@ async function countIdempotency(shareId) {
 	return row.n;
 }
 
+async function countIdempotencyForUser(shareId, userId) {
+	const row = await env.db.prepare(
+		'SELECT COUNT(*) AS n FROM share_idempotency WHERE share_id = ? AND user_id = ?'
+	).bind(shareId, userId).first();
+	return row.n;
+}
+
 async function ownerApi(method, path, { jwt, body } = {}) {
 	const headers = { Authorization: jwt, 'accept-language': 'en' };
 	if (body !== undefined) {
@@ -2542,6 +2549,33 @@ describe('mailShareService.delete (T-15)', () => {
 		expect(await countIdempotency(theirs.shareId)).toBe(1);
 	});
 
+	it('does not delete a caller-owned idempotency row that only shares a foreign share_id', async () => {
+		await seedOwners();
+		const theirs = await seedShareRow({ userId: USER_B, accountId: ACC_B });
+		await seedBindingRow({ shareId: theirs.shareId, accountId: ACC_B });
+		await seedIdempotencyRow(theirs.shareId, USER_B, 't15-owner-key');
+		await seedIdempotencyRow(theirs.shareId, USER_A, 't15-mismatched-key');
+
+		expect(await catchBiz(mailShareService.delete(ctx(), { shareId: theirs.shareId }, USER_A)))
+			.toBe('SHARE_NOT_FOUND');
+
+		expect(await readShareRow(theirs.shareId)).not.toBe(null);
+		expect(await listBindings(theirs.shareId)).toHaveLength(1);
+		expect(await countIdempotency(theirs.shareId)).toBe(2);
+		expect(await countIdempotencyForUser(theirs.shareId, USER_A)).toBe(1);
+	});
+
+	it('clears every idempotency row of an owned share even if the child user_id drifted', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+		await seedIdempotencyRow(share.shareId, USER_A, 't15-own-key');
+		await seedIdempotencyRow(share.shareId, USER_B, 't15-drift-key');
+
+		await mailShareService.delete(ctx(), { shareId: share.shareId }, USER_A);
+
+		expect(await countIdempotency(share.shareId)).toBe(0);
+	});
+
 	it('is not idempotent by accident: the second delete is SHARE_NOT_FOUND', async () => {
 		await seedOwners();
 		const share = await seedShareWithBindings([ACC_A]);
@@ -2597,6 +2631,17 @@ describe('mailShareService.list paging and projection (T-15)', () => {
 		});
 		// 存储态仍只有两值（AC-LIFE-01）。
 		expect(new Set(listed.list.map((row) => row.status))).toEqual(new Set(['ACTIVE', 'REVOKED']));
+	});
+
+	it('pages a status-only query with the default size instead of the deprecated dump (R1-F2)', async () => {
+		await seedOwners();
+		await seedBulkShares(25);
+
+		const listed = await mailShareService.list(ctx(), { status: 'ACTIVE' }, USER_A);
+
+		expect(listed).toMatchObject({ total: 25, page: 1, size: 20 });
+		expect(listed.list).toHaveLength(20);
+		expect(listed.deprecated).toBeUndefined();
 	});
 
 	it('filters on the computed state and counts with the same CASE (AC-ADMIN-01)', async () => {

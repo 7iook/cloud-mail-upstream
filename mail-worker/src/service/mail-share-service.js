@@ -14,8 +14,9 @@ const encoder = new TextEncoder();
 // R3-A5 / AC-CAP-13:每分享 Binding 数量硬上限,create 与 bindings 两个写入口共用。
 export const SHARE_BINDING_LIMIT = 50;
 
-// R1-F2 的 list 分页口径:`size` 默认 20 / 上限 100;无参调用是兼容期的 deprecated 全量
-// 转储,不套默认分页(前端 `request/mail-share.js:34` 至今不带参数),只压一条硬上限。
+// R1-F2 的 list 分页口径:`size` 默认 20 / 上限 100;真正无参调用是兼容期的 deprecated
+// 全量转储,不套默认分页(前端 `request/mail-share.js:34` 至今不带参数),只压一条硬上限。
+// 带 `status?` 的筛选不是无参,走默认 page=1/size=20。
 const LIST_DEFAULT_SIZE = 20;
 const LIST_MAX_SIZE = 100;
 const LIST_DEPRECATED_CAP = 500;
@@ -924,7 +925,8 @@ function prepareUpdate(c, values) {
 }
 
 // 入参抗污染:`size='abc'` / `0` / `-1` / `page=true` 一律钳到默认或上限,而不是抛错 ——
-// 前端传一个脏参数不该把整页打死。`page`/`size` 都缺席才走 deprecated 全量转储。
+// 前端传一个脏参数不该把整页打死。deprecated 全量转储只留给真正的无参调用
+// (老前端 `http.get('/mailShare/list')`);带 `status` 就是有参筛选,套默认 20。
 function clampPositive(value, fallback, max) {
 	const num = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
 	if (!Number.isSafeInteger(num) || num < 1) {
@@ -934,7 +936,9 @@ function clampPositive(value, fallback, max) {
 }
 
 function normalizeListPaging(params) {
-	if (!hasValue(params, 'page') && !hasValue(params, 'size')) {
+	const hasPaging = hasValue(params, 'page') || hasValue(params, 'size');
+	const hasFilter = hasValue(params, 'status');
+	if (!hasPaging && !hasFilter) {
 		return { paged: false, limit: LIST_DEPRECATED_CAP, offset: 0 };
 	}
 	const size = clampPositive(params.size, LIST_DEFAULT_SIZE, LIST_MAX_SIZE);
@@ -1195,8 +1199,11 @@ const mailShareService = {
 				)
 			`).bind(shareId, shareId, userId),
 			c.env.db.prepare(`
-				DELETE FROM share_idempotency WHERE share_id = ? AND user_id = ?
-			`).bind(shareId, userId),
+				DELETE FROM share_idempotency
+				WHERE share_id = ? AND EXISTS (
+					SELECT 1 FROM mail_share ms WHERE ms.share_id = ? AND ms.user_id = ?
+				)
+			`).bind(shareId, shareId, userId),
 			c.env.db.prepare(`
 				DELETE FROM mail_share WHERE share_id = ? AND user_id = ?
 			`).bind(shareId, userId)

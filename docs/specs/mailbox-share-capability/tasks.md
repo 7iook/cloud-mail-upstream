@@ -363,7 +363,7 @@
     - AC: AC-ADMIN-01, AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-04, AC-ADMIN-06, AC-ADMIN-07, AC-ADMIN-09, AC-EDGE-14, AC-LIFE-11
     - commit: 1d49bb4
     - decision: `toOwnerRow` 带 `maxSessions` 才能算出 `ACCESS_LIMIT_REACHED`；update 独立 `normalizeUpdateBody`（不复用 create）；list `status?` 筛计算态且 `total` 走同一 CASE 的 `COUNT(*)`；bindings 摘要 `json_each`；delete 子表先删同 batch；`security.js` 留给 T-17
-    - review: pending
+    - review: `review-t15.md` NEEDS_CHANGES → P1-1/P1-2 CHANGE pending commit
   - [x]* T-15.1 红:`mail-worker/test/mail-share-service.spec.js` —— get 本人 → 详情+bindings+config,他人 shareId → `SHARE_NOT_FOUND`;update 各字段落库、下次 Visitor 请求生效、不可改 `lid/sec/expires_at`、SHALL NOT 触碰 auth_key 字段;`maxSessions` NULL→有限值缺省 `resetUsedSessions=true` 置 0、显式 false 保留计数立即 `ACCESS_LIMIT_REACHED`;下调 `max_sessions ≤ used_sessions` 接受且态正确;delete → share/binding/幂等行全删零孤儿(batch 原子);list 分页(size 默认 20/上限 100,`share_id DESC`,无参 deprecated 上限 500)+ 行含 shareType/effectiveStatus 四态/usedSessions/maxSessions/bindings 摘要;非 ACTIVE 计算态行可见可审计
     - _Requirements: AC-ADMIN-01, AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-04, AC-ADMIN-06, AC-ADMIN-07, AC-ADMIN-09, AC-EDGE-14_
     - **Evidence**
@@ -484,6 +484,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-15 审查 NEEDS_CHANGES p0=0 p1=2。T15-P1-1/P1-2 均 CHANGE。红 3/3 → 绿定点 198/198 + 全量 worker 18/444、vue 17/95、E2E 13。未勾选尾：T-15 复审 / T-16 → T-29。
 - 2026-08-24 · 主 AI:T-15 `1d49bb4` 勾选。T-11 R2 APPROVED p0=0。主 AI 独立定点 195/195 + 全量 worker 18/441、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-15 审查 / T-16 → T-29。
 - 2026-08-24 · 主 AI:T-11 P1-1 CHANGE 入库 `e63998e`（非法地址多 `@`/空白 → `***`）。T-14 审查 APPROVED p0=0。未勾选尾：T-11 复审 / T-15 → T-29。
 - 2026-08-24 · 主 AI:T-11 `bee72b6` + T-14 `d6fa50b` 勾选。T-13 R2 APPROVED（`7a91fac`）。主 AI 独立定点 135/135 + 全量 worker 18/410、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11/T-14 审查 → T-15 → T-29。
