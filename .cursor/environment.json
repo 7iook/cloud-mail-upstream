@@ -1,0 +1,14 @@
+{
+  "name": "Cloud Mail",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "mail-worker (wrangler dev :8787)",
+      "command": "cd mail-worker && pnpm dev"
+    },
+    {
+      "name": "mail-vue (vite dev :3001)",
+      "command": "cd mail-vue && pnpm dev"
+    }
+  ]
+}
