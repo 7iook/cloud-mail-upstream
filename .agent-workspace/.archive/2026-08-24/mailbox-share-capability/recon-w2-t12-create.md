@@ -38,9 +38,9 @@
 |---|---|---|---|
 | HTTP 入口 | `mail-worker/src/api/mail-share-api.js:23-28` | `{...body, idempotencyKey}` 整体透传 | **零改动即可**(见 §1.3) |
 | 服务入口 | `mail-share-service.js:362-423` `create(c, params, userId)` | 单 `accountId` | 重写 |
-| 开关 | `:364-366` `isShareDisabled` | `SHARE_DISABLED` | 不动 |
+| 开关 | `:363-365` `isShareDisabled` | `SHARE_DISABLED` | 不动 |
 | 载荷归一 | `:106-113` `normalizeCreateBody` | 只认 4 字段 | **重写**(集合化 + 新配置字段 + 默认值) |
-| accountId 校验 | `:368-371` | `Number.isFinite && > 0` | 改成集合级 |
+| accountId 校验 | `:368-370` | `Number.isFinite && > 0` | 改成集合级 |
 | 时长校验 | `:371-375` | `SHARE_DURATION_EXCEEDED` | 不动 |
 | 归属校验 | `:156-162` `loadOwnedAccount` → `:376` 调用 | 单行 `SELECT` + `isDel`/`userId` 判定 | **改批量 IN**(tasks.md 里写的 `:104-110` 是陈旧锚点,实际 `:156-162`) |
 | pepper | `:378-382` | `SHARE_SEC_PEPPER` 缺失即 500 | 复用(AuthKey 同源,见 §6-R5) |
@@ -55,9 +55,9 @@
 
 ### 1.2 已有的三个可复用「单语句原子写」模式(别重造)
 
-1. **限额条件写**:`prepareShareInsert` `:250-253` —— `INSERT ... SELECT ... WHERE (SELECT COUNT(*) ...) < ?`。AC-CAP-07 点名要沿用的就是这个(spec 里写的 `:187-218` 是陈旧锚点)。
-2. **窗口原子快照**:`:248` —— `(SELECT COALESCE(MAX(email_id), 0) FROM email WHERE account_id = ?)` 内嵌在 INSERT 的 SELECT 里。per-binding 快照就是把它挪进 binding 的 `INSERT ... SELECT`。
-3. **靠 `lid` 回捞刚插入的 `share_id`**:`:312-314` 幂等行用 `SELECT ?, ?, ?, ?, share_id, ?, ? FROM mail_share WHERE lid = ?`。**这是 T-12 最关键的一块现成积木** —— binding 行同样需要一个尚不存在的 `share_id`,同一 batch 里用 `WHERE lid = ?` 回捞即可;并且当 share 因限额未插入时,这条 SELECT 天然零行,binding 自动不写,零孤儿。
+1. **限额条件写**:`prepareShareInsert` `:249-252` —— `INSERT ... SELECT ... WHERE (SELECT COUNT(*) ...) < ?`。AC-CAP-07 点名要沿用的就是这个(spec 里写的 `:187-218` 是陈旧锚点)。
+2. **窗口原子快照**:`:247` —— `(SELECT COALESCE(MAX(email_id), 0) FROM email WHERE account_id = ?)` 内嵌在 INSERT 的 SELECT 里。per-binding 快照就是把它挪进 binding 的 `INSERT ... SELECT`。
+3. **靠 `lid` 回捞刚插入的 `share_id`**:`:311-313` 幂等行用 `SELECT ?, ?, ?, ?, share_id, ?, ? FROM mail_share WHERE lid = ?`。**这是 T-12 最关键的一块现成积木** —— binding 行同样需要一个尚不存在的 `share_id`,同一 batch 里用 `WHERE lid = ?` 回捞即可;并且当 share 因限额未插入时,这条 SELECT 天然零行,binding 自动不写,零孤儿。
 
 ### 1.3 `mail-share-api.js` 大概率不用改
 
@@ -108,7 +108,7 @@
 
 顺序建议(**先域校验、再栅栏、最后归属**,理由见 §3.3):
 
-1. `durationSeconds`(`:370-374`,不动)
+1. `durationSeconds`(`:371-375`,不动)
 2. `accountIds.length > SHARE_BINDING_LIMIT` → `SHARE_BINDING_LIMIT_EXCEEDED`
 3. `refreshIntervalMs < 3000` → `SHARE_INVALID_CONFIG`(**拒绝,不是钳制** —— 见 §6-R1)
 4. `messageLimit != null && messageLimit < 1` → `SHARE_INVALID_CONFIG`
@@ -137,7 +137,7 @@ async function loadOwnedAccounts(c, accountIds, userId) -> Map<accountId, row>
 
 batch 语句序列(顺序即依赖顺序):
 
-1. `deleteStale`(`:303-306`,不动)
+1. `deleteStale`(`:302-305`,不动)
 2. `insertShare`(`:239-270` 扩写):`INSERT` 列表加 11 个新列;`WHERE` 子句在既有限额谓词之上 **AND** 一条归属计数谓词:
    ```
    AND (SELECT COUNT(*) FROM account
@@ -162,16 +162,16 @@ batch 语句序列(顺序即依赖顺序):
    - **(推荐)** 给助手加一个按 `lid` 定位的姊妹语句,或把 `WHERE share_id = ?` 改成 `WHERE share_id = (SELECT share_id FROM mail_share WHERE lid = ?)`。改动小、语义不变、`EXISTS` 守卫原样保留。
    - 退而求其次:create 路径不调助手,靠 Step 5.2 的 `accountIds[0]` 初值直接落对。**不推荐** —— 主 Binding 的定义是「`binding_id` 最小」,而 `binding_id` 由第 3 条语句的 AUTOINCREMENT 决定,JOIN 的行序不保证等于 `accountIds` 的升序。让两个真源各自猜,迟早对不上。
    无论选哪条,**都要在同一个 `batch()` 里**(AC-LIFE-10 原话:「同一 `c.env.db.batch()` 内同步更新主表列」)。
-5. `insertIdempotency`(`:308-323`,只改指纹入参)
+5. `insertIdempotency`(`:307-322`,只改指纹入参)
 
 ### Step 6 · 结果判定与错误归因
 
-`insertShare` 的 `meta.changes === 0` 现在有**两个**可能原因(限额 / 归属)。既有代码 `:328-340` 只归因到 `SHARE_LIMIT_EXCEEDED`。改法沿用仓内已有的「事后消歧」模式(`replayOrConflict` 就是这么干的):`changes === 0` → 先查幂等重放,没有重放再补一次归属查询,归属不过 → `SHARE_ACCOUNT_FORBIDDEN`,否则 `SHARE_LIMIT_EXCEEDED`。
+`insertShare` 的 `meta.changes === 0` 现在有**两个**可能原因(限额 / 归属)。既有代码 `:327-339` 只归因到 `SHARE_LIMIT_EXCEEDED`。改法沿用仓内已有的「事后消歧」模式(`replayOrConflict` 就是这么干的):`changes === 0` → 先查幂等重放,没有重放再补一次归属查询,归属不过 → `SHARE_ACCOUNT_FORBIDDEN`,否则 `SHARE_LIMIT_EXCEEDED`。
 
 ### Step 7 · 响应
 
 - `firstCreateResponse`(`:194-203`)加 `shareType`(由本次写入的 binding 条数派生,**不落库**,AC-CAP-02)、`bindings: [{bindingId, accountId}]`、`authKey`(仅 `authKeyEnabled` 时,明文恰一次)。
-- `replayFromIdempotency`(`:213-226`)加 `shareType` / `bindings[]`,**明文一个都不给**(AC-CAP-14)。派生所需的 binding 计数得回查一次 —— 重放路径本来就已经查了一次 `mail_share`(`:215-217`),扩成 JOIN 即可,不新增往返。
+- `replayFromIdempotency`(`:213-226`)加 `shareType` / `bindings[]`,**明文一个都不给**(AC-CAP-14)。派生所需的 binding 计数得回查一次 —— 重放路径本来就已经查了一次 `mail_share`(`:214-216`),扩成 JOIN 即可,不新增往返。
 
 ### Step 8 · 不要做的三件事
 
@@ -258,11 +258,11 @@ T-12.1 的红灯清单里有一条「51 个 accountId → `SHARE_BINDING_LIMIT_E
 
 **三个必须钉死的实现细节:**
 
-1. **字段顺序是指纹的一部分**。`JSON.stringify` 按插入顺序序列化。归一化函数必须**用字面量一次性构造整个对象**(现状 `:107-113` 已经是这个写法),不能 `{...defaults, ...params}` —— 后者的键顺序会随调用方传了哪些字段而变,同一语义请求会算出两个指纹。
+1. **字段顺序是指纹的一部分**。`JSON.stringify` 按插入顺序序列化。归一化函数必须**用字面量一次性构造整个对象**(现状 `:106-113` 已经是这个写法),不能 `{...defaults, ...params}` —— 后者的键顺序会随调用方传了哪些字段而变,同一语义请求会算出两个指纹。
 2. **默认值必须在指纹之前落定**。「不传 `messageLimit`」与「显式传 `null`」必须同指纹。这正是既有用例 `:327-343`(missing name ≡ empty name)在守的性质,把它扩到全部新字段就是 T-12.1 的现成红灯素材。
 3. **数值归一**。`'5'` 与 `5`、`true` 与 `1` 必须收敛到同一个 JSON 值,否则前端换个序列化方式就 conflict。`3cce543` 刚给 `test/setup.js:62-64` 加的 `isRowId`(`Number.isSafeInteger(v) && v > 0`)是现成的同款判据,`accountIds` 元素校验可以照抄这个形状 —— 那次修复挡的正是 `'1e3'` / `'1.5'` / `true` / `Infinity` 这四种「满足 `> 0` 却不是行 ID」的形状。
 
-**跨部署风险**(§6-R7):`share_idempotency` 的 TTL 是 24 小时(`:10`)。部署瞬间之前由旧 Worker 写下的指纹是旧形状;同一个 key 在部署之后重试 → 指纹不匹配 → `replayOrConflict` `:234-236` 抛 `SHARE_IDEMPOTENCY_CONFLICT`,而不是重放。Owner 看到的是「冲突」而非「你的分享已经建好了」。窗口 ≤24h、影响面 = 恰好跨越部署时刻的创建重试。AC-CAP-14 定义的恢复流程(引导 revoke/delete 后重建)覆盖不到这个形状。
+**跨部署风险**(§6-R7):`share_idempotency` 的 TTL 是 24 小时(`:10`)。部署瞬间之前由旧 Worker 写下的指纹是旧形状;同一个 key 在部署之后重试 → 指纹不匹配 → `replayOrConflict` `:233-235` 抛 `SHARE_IDEMPOTENCY_CONFLICT`,而不是重放。Owner 看到的是「冲突」而非「你的分享已经建好了」。窗口 ≤24h、影响面 = 恰好跨越部署时刻的创建重试。AC-CAP-14 定义的恢复流程(引导 revoke/delete 后重建)覆盖不到这个形状。
 
 ### 4.2 四条 W0 双写用例会被 T-12 打破
 
@@ -320,7 +320,7 @@ T-12.1 的红灯清单里有一条「51 个 accountId → `SHARE_BINDING_LIMIT_E
 
 ### 5.1 证据
 
-1. **create 根本不消费 ShareContext**。ShareContext 是 `resolveSession` 的返回形状(`share-auth-service.js:345-350`),服务的是访客读路径。`mail-share-service.js` 从 `share-auth-service` 只取两样东西:`digestShareSecret`(`:404`,纯 HMAC 工具)与 `effectiveStatus`(`:175`,在 `projectOwnerRow` 里,归 list 用,T-12 不碰)。两者都不在 T-08 的冻结契约里。
+1. **create 根本不消费 ShareContext**。ShareContext 是 `resolveSession` 的返回形状(`share-auth-service.js:345-350`),服务的是访客读路径。`mail-share-service.js` 从 `share-auth-service` 只取两样东西:`digestShareSecret`(`:404`,纯 HMAC 工具)与 `effectiveStatus`(`:174`,在 `projectOwnerRow` 里,归 list 用,T-12 不碰)。两者都不在 T-08 的冻结契约里。
 2. **charter 已经明文允许**。`tasks.md:163` W2 标题:「文件不冲突时 T-10/T-12 可与 W1 后半并行起跑」;`tasks.md:297-298` 波次定义里同一句话再说一遍。
 3. **前一份侦察已经关掉了这道门**。`recon-w1-t06-quota-gate.md:497`:「T-12 ✅ **现在可以了** …… 该阻塞已解除:W0 全部 commit 于 `e878760`」;§7.3 第 5 条与 §10 第 8 条重复确认。
 4. **写路径与读路径在数据上不交叉**。T-12 只写 `mail_share` / `mail_share_binding` / `share_idempotency`;T-08 只读。T-08 冻结 ShareContext 之后由 T-10/T-11 消费,与 create 无耦合。
@@ -367,7 +367,7 @@ design.md:161 把主表 `window_start_email_id` 定为「迁移遗留只读」,A
 后果:T-12 若不写主表这一列,新建分享该列取 DDL 默认 0 → 兼容窗口内路由到旧 Worker 的访客请求,窗口下界变成 0 → **`only_messages_after_created=true` 的分享会把创建之前的全部历史邮件放出去**。这不是降级,是越权读。
 
 - 严重度:高(泄露),窗口:滚动发布期,触发概率:随机路由,必然发生。
-- 现有代码本来就在写它(`:248`),所以**修法极简:主 Binding 的快照值同时写进主表**。
+- 现有代码本来就在写它(`:247`),所以**修法极简:主 Binding 的快照值同时写进主表**。
 - 但这需要把 AC-LIFE-10 的双写清单从「`account_id`」扩到「`account_id` + `window_start_email_id`」,并改 design.md:161 的「只读」定性 —— **这是 spec 改动,必须上报,不许执行者自己顺手加**。
 
 ### R3 · [P1 · spec 覆盖缺口] 栅栏清单漏了三个「旧 Worker 无法执行的策略」
