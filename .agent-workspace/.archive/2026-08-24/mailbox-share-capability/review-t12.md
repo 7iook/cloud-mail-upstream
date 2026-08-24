@@ -70,6 +70,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:复审 `review-t12-r2.md` APPROVED，p0=0。P0-1/P1-1 CLOSED。定点 132/132。
 - 2026-08-24 · 主 AI:P0-1/P1-1 已入库 `6b5d29b`。兼容载荷落旧 4 字段 hash 且重放双认；`toFlag`/`toNullableCount` 值域封闭。主 AI 独立 mail-share 132/132 + 全量 17/317 EXIT=0。
 
 ## Recommendations

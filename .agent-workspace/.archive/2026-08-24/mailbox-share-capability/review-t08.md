@@ -59,6 +59,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:复审 `review-t08-r2.md` APPROVED，p0=0。C1/I1/M1 CLOSED。定点 90/90。
 - 2026-08-24 · 主 AI:C1/I1/M1 已入库 `bc2b4e2`。`consumeSessionQuota` WHERE 含 `auth_key_enabled`；KV hit 绑 `cv`；围栏注释已改。主 AI 独立 定点 90/90 + 全量 17/317 EXIT=0。
 
 ## Recommendations
