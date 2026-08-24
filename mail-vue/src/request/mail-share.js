@@ -30,12 +30,62 @@ export function createMailShare(body, idempotencyKey) {
     })
 }
 
-export function listMailShares() {
-    return http.get('/mailShare/list')
+function toListQuery(params) {
+    if (!params) {
+        return null
+    }
+    const query = {}
+    for (const key of ['page', 'size', 'status']) {
+        const value = params[key]
+        if (value !== undefined && value !== null && value !== '') {
+            query[key] = value
+        }
+    }
+    return Object.keys(query).length > 0 ? query : null
+}
+
+// A no-arg call must stay a single argument: the backend reads that as the deprecated
+// full-scan branch, and ShareDialog / ShareIndicator still rely on it.
+export function listMailShares(params) {
+    const query = toListQuery(params)
+    return query ? http.get('/mailShare/list', { params: query }) : http.get('/mailShare/list')
+}
+
+export function getMailShare(shareId) {
+    return http.get('/mailShare/get', {
+        params: { shareId }
+    })
+}
+
+export function updateMailShare(body) {
+    return http.put('/mailShare/update', body)
+}
+
+export function updateMailShareBindings(body) {
+    return http.put('/mailShare/bindings', body)
+}
+
+export function deleteMailShare(shareId) {
+    return http.delete('/mailShare/delete', {
+        params: { shareId }
+    })
+}
+
+export function resetMailShareAuthKey(body) {
+    return http.post('/mailShare/resetAuthKey', body)
 }
 
 export function revokeMailShare(shareId) {
     return http.delete('/mailShare/revoke', {
         params: { shareId }
     })
+}
+
+// SHARE_FORBIDDEN arrives as HTTP 200 with a body code, so it never reaches the axios
+// 401 branch that clears the token and replaces to /login.
+export function isShareForbidden(err) {
+    if (!err) {
+        return false
+    }
+    return err.code === 403 || err.message === 'SHARE_FORBIDDEN'
 }
