@@ -49,6 +49,8 @@
 | W2 | T-13 R2 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t13-r2.md` · `7a91fac` |
 | W2 | T-11 投影+附件可见集 | ✅ 已提交 `bee72b6` | generalPurpose≈executor | 主 AI 独立 135/135 · 全量 18/410 |
 | W2 | T-14 status 水位 | ✅ 已提交 `d6fa50b` | generalPurpose≈executor | 主 AI 独立 135/135 · 全量 18/410 |
+| W2 | T-11 P1-1 复审 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t11-r2.md` |
+| W3 | T-15 Owner get/update/delete + list | ✅ 已提交 `1d49bb4` | generalPurpose≈executor | 主 AI 独立 195/195 · 全量 18/441 |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -109,12 +111,13 @@
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` | T-14 已入库 `d6fa50b` | 其后只加路由须新任务；W3 不写此文件 |
 | `security.js` | T-14 已加 status 一行 | 下一写者 T-17（premKey） |
-| `mail-share-service.js` | T-13 R2 APPROVED | 下一写者 T-15 |
+| `mail-share-service.js` | T-15 已入库 `1d49bb4` | 下一写者 T-16（resetAuthKey） |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-15 `1d49bb4` 入库。T-11 R2 APPROVED。主 AI 独立 195/195 + 全量 18/441 · 17/95 · E2E 13。未勾选尾：T-15 审查 / T-16 → T-29。
 - 2026-08-24 · 主 AI：T-11 P1-1 `e63998e`。T-14 审查 APPROVED。T-15 侦察已落。未勾选尾：T-11 复审 / T-15 → T-29。
 - 2026-08-24 · 主 AI：T-11 `bee72b6` + T-14 `d6fa50b` 入库。T-13 R2 APPROVED。主 AI 独立 135/135 + 全量 18/410 · 17/95 · E2E 13。未勾选尾：T-11/T-14 审查 → T-15 → T-29。
 - 2026-08-24 · 主 AI：T-13 CHANGE 入库 `22d9832`。T-08 R2 APPROVED p0=0。主 AI 独立 164/164 + 全量 17/358 · 17/95 · E2E 13。未勾选尾：T-13 复审 / T-11 / T-14 → T-29。

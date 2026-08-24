@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W2 收口 · T-11 `bee72b6` / T-14 `d6fa50b` 待审查 · 下一波 W3 T-15 |
+| 状态 Status | in-progress · W3 T-15 `1d49bb4` 待审查 · 下一波 T-16 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -253,7 +253,7 @@
     - AC: AC-MAIL-04, AC-MAIL-05, AC-MAIL-06, AC-MAIL-07, AC-MAIL-08, AC-OTP-01, AC-OTP-02, AC-OTP-03, AC-SEC-05, AC-EDGE-06, AC-EDGE-08
     - commit: e63998e
     - decision: 字段名 `bindingId`/`mailboxAddress`；`code` 仅 `otpExtractionEnabled === true`；附件先 `getById` 再查 att；不改 ShareContext / `email.js`
-    - review: `review-t11.md` NEEDS_CHANGES → P1-1 CHANGE `e63998e`；复审 pending
+    - review: `review-t11.md` NEEDS_CHANGES → P1-1 CHANGE `e63998e`；`review-t11-r2.md` APPROVED p0=0
   - [x]* T-11.1 红:`mail-worker/test/share-mail-service.spec.js` —— 掩码封闭性+幂等 property(`show_full_address` 双态下系统生成的绑定邮箱身份字段形状,发件人不掩码、含址正文原样,P-MASK-01);`code` 键存在 IFF `otp_extraction_enabled=true` 且值恒等 `email.code` 原值含空串(P-OTP-04);投影白名单键集合断言(新增 Binding 标识/掩码地址,无 `user_id`/`account_id` 原值/`is_del`/`status`)
     - **P-MASK-01: 身份字段掩码封闭性与幂等** _Validates: AC-MAIL-08_
     - **P-OTP-04: code 字段条件存在性** _Validates: AC-OTP-01, AC-OTP-02_
@@ -356,11 +356,28 @@
 
 ### W3 · Owner 管理面 + perm + cleanup(mail-share-service.js 串行:T-15→T-16→T-18)
 
-- [ ] T-15 Owner API 扩展:get / update / delete + list 分页与新投影
-  - [ ]* T-15.1 红:`mail-worker/test/mail-share-service.spec.js` —— get 本人 → 详情+bindings+config,他人 shareId → `SHARE_NOT_FOUND`;update 各字段落库、下次 Visitor 请求生效、不可改 `lid/sec/expires_at`、SHALL NOT 触碰 auth_key 字段;`maxSessions` NULL→有限值缺省 `resetUsedSessions=true` 置 0、显式 false 保留计数立即 `ACCESS_LIMIT_REACHED`;下调 `max_sessions ≤ used_sessions` 接受且态正确;delete → share/binding/幂等行全删零孤儿(batch 原子);list 分页(size 默认 20/上限 100,`share_id DESC`,无参 deprecated 上限 500)+ 行含 shareType/effectiveStatus 四态/usedSessions/maxSessions/bindings 摘要;非 ACTIVE 计算态行可见可审计
+- [x] T-15 Owner API 扩展:get / update / delete + list 分页与新投影
+  - **Evidence**
+    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` → 31 failed / 164 passed（195）；绿同命令 → 195/195；主 AI 独立定点 195/195 + 全量 worker 18/441、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/src/service/mail-share-service.js:370-377,382-387,389-414,423-448,490-508,513-525,884-924,1155-1208,1210-1248` · `mail-worker/src/api/mail-share-api.js:35-49` · `mail-worker/test/mail-share-service.spec.js:2105-2740`
+    - AC: AC-ADMIN-01, AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-04, AC-ADMIN-06, AC-ADMIN-07, AC-ADMIN-09, AC-EDGE-14, AC-LIFE-11
+    - commit: 1d49bb4
+    - decision: `toOwnerRow` 带 `maxSessions` 才能算出 `ACCESS_LIMIT_REACHED`；update 独立 `normalizeUpdateBody`（不复用 create）；list `status?` 筛计算态且 `total` 走同一 CASE 的 `COUNT(*)`；bindings 摘要 `json_each`；delete 子表先删同 batch；`security.js` 留给 T-17
+    - review: pending
+  - [x]* T-15.1 红:`mail-worker/test/mail-share-service.spec.js` —— get 本人 → 详情+bindings+config,他人 shareId → `SHARE_NOT_FOUND`;update 各字段落库、下次 Visitor 请求生效、不可改 `lid/sec/expires_at`、SHALL NOT 触碰 auth_key 字段;`maxSessions` NULL→有限值缺省 `resetUsedSessions=true` 置 0、显式 false 保留计数立即 `ACCESS_LIMIT_REACHED`;下调 `max_sessions ≤ used_sessions` 接受且态正确;delete → share/binding/幂等行全删零孤儿(batch 原子);list 分页(size 默认 20/上限 100,`share_id DESC`,无参 deprecated 上限 500)+ 行含 shareType/effectiveStatus 四态/usedSessions/maxSessions/bindings 摘要;非 ACTIVE 计算态行可见可审计
     - _Requirements: AC-ADMIN-01, AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-04, AC-ADMIN-06, AC-ADMIN-07, AC-ADMIN-09, AC-EDGE-14_
-  - [ ] T-15.2 绿:`mail-share-service.js` 新增 get/update/delete + list 改经 Binding JOIN(`:354-364` 扩展);`mail-worker/src/api/mail-share-api.js` 新增 `GET /mailShare/get`、`PUT /mailShare/update`、`DELETE /mailShare/delete`;update 中有限 `maxSessions` 过 V2 门控
+    - **Evidence**
+      - verify: 红（执行者）31 failed（get/update/delete 入口不存在 / 投影无 maxSessions / page-size 未消费）
+      - files: `mail-worker/test/mail-share-service.spec.js:2105-2740`
+      - AC: AC-ADMIN-01, AC-ADMIN-02, AC-ADMIN-07
+      - commit: 1d49bb4
+  - [x] T-15.2 绿:`mail-share-service.js` 新增 get/update/delete + list 改经 Binding JOIN(`:354-364` 扩展);`mail-worker/src/api/mail-share-api.js` 新增 `GET /mailShare/get`、`PUT /mailShare/update`、`DELETE /mailShare/delete`;update 中有限 `maxSessions` 过 V2 门控
     - _Requirements: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-07, AC-LIFE-11_
+    - **Evidence**
+      - verify: 绿定点 195/195；主 AI 全量 worker 18/441、vue 17/95、E2E 13，均为 EXIT=0
+      - files: `mail-worker/src/service/mail-share-service.js:884-924,1155-1248` · `mail-worker/src/api/mail-share-api.js:35-49`
+      - AC: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-07, AC-LIFE-11
+      - commit: 1d49bb4
 
 - [ ] T-16 AuthKey 状态机:`POST /mailShare/resetAuthKey`(enable/reset/disable 单入口)
   - [ ]* T-16.1 红:`mail-worker/test/mail-share-service.spec.js` —— 状态机全迁移断言:enable(生成 128-bit CSPRNG/base64url/22 字符 Key,明文恰一次,cv 不变)/reset(换 hash+kid,cv+1)/disable(清 hash+kid+enabled=0,cv+1,无明文);不变量 `auth_key_enabled=1` IFF hash 与 kid 均非空(schema/service 双侧);enable 需 V2=true
@@ -467,6 +484,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-15 `1d49bb4` 勾选。T-11 R2 APPROVED p0=0。主 AI 独立定点 195/195 + 全量 worker 18/441、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-15 审查 / T-16 → T-29。
 - 2026-08-24 · 主 AI:T-11 P1-1 CHANGE 入库 `e63998e`（非法地址多 `@`/空白 → `***`）。T-14 审查 APPROVED p0=0。未勾选尾：T-11 复审 / T-15 → T-29。
 - 2026-08-24 · 主 AI:T-11 `bee72b6` + T-14 `d6fa50b` 勾选。T-13 R2 APPROVED（`7a91fac`）。主 AI 独立定点 135/135 + 全量 worker 18/410、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11/T-14 审查 → T-15 → T-29。
 - 2026-08-24 · 主 AI:T-13 审查 CHANGE 入库 `22d9832`（CAS 快照谓词 + INSERT 绑定 N+6）。T-08 R2 APPROVED p0=0。主 AI 独立 mail-share 164/164 + 全量 worker 17/358、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-13 复审 / T-11 / T-14 → T-29。
