@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W3 T-15 审查修复 `cccb3bb` 待复审 · 下一波 T-16 |
+| 状态 Status | in-progress · W3 T-15 R2 APPROVED · 下一波 T-16 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -363,7 +363,7 @@
     - AC: AC-ADMIN-01, AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-04, AC-ADMIN-06, AC-ADMIN-07, AC-ADMIN-09, AC-EDGE-14, AC-LIFE-11
     - commit: 1d49bb4 · fix cccb3bb
     - decision: `toOwnerRow` 带 `maxSessions` 才能算出 `ACCESS_LIMIT_REACHED`；update 独立 `normalizeUpdateBody`（不复用 create）；list `status?` 筛计算态且 `total` 走同一 CASE 的 `COUNT(*)`；带 status 走默认 20 分页；bindings 摘要 `json_each`；delete 子表先删且经主表 EXISTS 回查；`security.js` 留给 T-17
-    - review: `review-t15.md` NEEDS_CHANGES → P1-1/P1-2 CHANGE `cccb3bb`；复审 pending
+    - review: `review-t15.md` NEEDS_CHANGES → P1-1/P1-2 CHANGE `cccb3bb`；`review-t15-r2.md` APPROVED p0=0
   - [x]* T-15.1 红:`mail-worker/test/mail-share-service.spec.js` —— get 本人 → 详情+bindings+config,他人 shareId → `SHARE_NOT_FOUND`;update 各字段落库、下次 Visitor 请求生效、不可改 `lid/sec/expires_at`、SHALL NOT 触碰 auth_key 字段;`maxSessions` NULL→有限值缺省 `resetUsedSessions=true` 置 0、显式 false 保留计数立即 `ACCESS_LIMIT_REACHED`;下调 `max_sessions ≤ used_sessions` 接受且态正确;delete → share/binding/幂等行全删零孤儿(batch 原子);list 分页(size 默认 20/上限 100,`share_id DESC`,无参 deprecated 上限 500)+ 行含 shareType/effectiveStatus 四态/usedSessions/maxSessions/bindings 摘要;非 ACTIVE 计算态行可见可审计
     - _Requirements: AC-ADMIN-01, AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-04, AC-ADMIN-06, AC-ADMIN-07, AC-ADMIN-09, AC-EDGE-14_
     - **Evidence**
@@ -484,6 +484,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-15 R2 APPROVED p0=0。未勾选尾：T-16 → T-29。
 - 2026-08-24 · 主 AI:T-15 审查 NEEDS_CHANGES p0=0 p1=2。T15-P1-1/P1-2 均 CHANGE。红 3/3 → 绿定点 198/198 + 全量 worker 18/444、vue 17/95、E2E 13。未勾选尾：T-15 复审 / T-16 → T-29。
 - 2026-08-24 · 主 AI:T-15 `1d49bb4` 勾选。T-11 R2 APPROVED p0=0。主 AI 独立定点 195/195 + 全量 worker 18/441、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-15 审查 / T-16 → T-29。
 - 2026-08-24 · 主 AI:T-11 P1-1 CHANGE 入库 `e63998e`（非法地址多 `@`/空白 → `***`）。T-14 审查 APPROVED p0=0。未勾选尾：T-11 复审 / T-15 → T-29。
