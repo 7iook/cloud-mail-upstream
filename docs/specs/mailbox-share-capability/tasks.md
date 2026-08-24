@@ -374,7 +374,7 @@
   - [x] T-15.2 绿:`mail-share-service.js` 新增 get/update/delete + list 改经 Binding JOIN(`:354-364` 扩展);`mail-worker/src/api/mail-share-api.js` 新增 `GET /mailShare/get`、`PUT /mailShare/update`、`DELETE /mailShare/delete`;update 中有限 `maxSessions` 过 V2 门控
     - _Requirements: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-07, AC-LIFE-11_
     - **Evidence**
-      - verify: 绿定点 195/195；主 AI 全量 worker 18/441、vue 17/95、E2E 13，均为 EXIT=0
+      - verify: 绿定点 195/195；P1 后 198/198；主 AI 全量 worker 18/444、vue 17/95、E2E 13，均为 EXIT=0
       - files: `mail-worker/src/service/mail-share-service.js:884-924,1155-1248` · `mail-worker/src/api/mail-share-api.js:35-49`
       - AC: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-07, AC-LIFE-11
       - commit: 1d49bb4
