@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W3 T-16 `3bb1d55` 待审查 · 下一波 T-17 |
+| 状态 Status | in-progress · W3 T-16/T-17 已入库 · 下一波 T-18 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -386,7 +386,7 @@
     - AC: AC-AUTH-07, AC-AUTH-08, AC-ADMIN-05, AC-LIFE-11
     - commit: 3bb1d55
     - decision: 迁移守卫进 WHERE；仅 enable 过 V2；reset 落在未启用行 = SHARE_INVALID_CONFIG；不新增 SHARE_EVENT；HTTP enable 用 ownerWorker 喂 env，不改 toml；security.js 留给 T-17（缺口 5 条）
-    - review: pending
+    - review: `review-t16.md` APPROVED p0=0
   - [x]* T-16.1 红:`mail-worker/test/mail-share-service.spec.js` —— 状态机全迁移断言:enable(生成 128-bit CSPRNG/base64url/22 字符 Key,明文恰一次,cv 不变)/reset(换 hash+kid,cv+1)/disable(清 hash+kid+enabled=0,cv+1,无明文);不变量 `auth_key_enabled=1` IFF hash 与 kid 均非空(schema/service 双侧);enable 需 V2=true
     - _Requirements: AC-AUTH-07, AC-AUTH-08, AC-ADMIN-05_
     - **Evidence**
@@ -402,11 +402,28 @@
       - AC: AC-AUTH-07, AC-ADMIN-05, AC-LIFE-11
       - commit: 3bb1d55
 
-- [ ] T-17 perm 路径:`premKey['share:manage']` 扩展 8 条 + security-share 门控回归(security.js 热区第二写点)
-  - [ ]* T-17.1 红:`mail-worker/test/security-share.spec.js` —— 移除 `share:manage` → 8 条 `/mailShare/*` 全 `SHARE_FORBIDDEN`;Visitor 端点带 JWT 无 share token → 拒,share token 访问 Owner 端点 → 拒;Visitor 面路由枚举零写端点;`/share-evil` 前缀封闭性基线保持
+- [x] T-17 perm 路径:`premKey['share:manage']` 扩展 8 条 + security-share 门控回归(security.js 热区第二写点)
+  - **Evidence**
+    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/security-share.spec.js --no-cache` → 5 failed / 143 passed（148）；绿同命令 → 148/148；主 AI 独立定点 148/148 + 全量 worker 18/577、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/src/security/security.js:72-80,112-121` · `mail-worker/test/security-share.spec.js`
+    - AC: AC-ADMIN-10, AC-SEC-02, AC-SEC-04, AC-SEC-10
+    - commit: d18f027
+    - decision: `requirePermsExact` 与 `premKey['share:manage']` 同加 5 条；Visitor token 打 Owner 断言 401 不是 SHARE_FORBIDDEN；`excludeExact` 零改动；admin 后门用例推迟（T17-ADMIN HOLD）
+    - review: pending
+  - [x]* T-17.1 红:`mail-worker/test/security-share.spec.js` —— 移除 `share:manage` → 8 条 `/mailShare/*` 全 `SHARE_FORBIDDEN`;Visitor 端点带 JWT 无 share token → 拒,share token 访问 Owner 端点 → 拒;Visitor 面路由枚举零写端点;`/share-evil` 前缀封闭性基线保持
     - _Requirements: AC-ADMIN-10, AC-SEC-02, AC-SEC-04, AC-SEC-10_
-  - [ ] T-17.2 绿:`mail-worker/src/security/security.js:103` `premKey['share:manage']` 由 3 条扩为 8 条(create/list/revoke/get/update/bindings/delete/resetAuthKey);不动 `excludeExact` 之外任何豁免语义
+    - **Evidence**
+      - verify: 红（执行者）5 failed（get/update/delete/bindings/resetAuthKey 穿过中间件得 501）
+      - files: `mail-worker/test/security-share.spec.js`
+      - AC: AC-ADMIN-10, AC-SEC-02
+      - commit: d18f027
+  - [x] T-17.2 绿:`mail-worker/src/security/security.js:103` `premKey['share:manage']` 由 3 条扩为 8 条(create/list/revoke/get/update/bindings/delete/resetAuthKey);不动 `excludeExact` 之外任何豁免语义
     - _Requirements: AC-ADMIN-10_
+    - **Evidence**
+      - verify: 绿定点 148/148；主 AI 全量 worker 18/577、vue 17/95、E2E 13，均为 EXIT=0
+      - files: `mail-worker/src/security/security.js:72-80,112-121`
+      - AC: AC-ADMIN-10
+      - commit: d18f027
 
 - [ ] T-18 级联撤销经 Binding JOIN + cleanup 清理守恒
   - [ ]* T-18.1 红:`mail-worker/test/account-delete-share.spec.js` 扩展 —— 软删/硬删 account → 对应 Binding 剔除、余箱分享保持 ACTIVE、剩 0 → REVOKED、双写主表同步;`mail-worker/test/mail-share-cleanup.spec.js` 扩展 —— cleanup 跑后到期 share 的 binding 行同批删除零孤儿、注入孤儿 Binding → 补偿剔除
@@ -501,6 +518,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-16 审查 APPROVED p0=0。T-17 `d18f027` 勾选。主 AI 独立定点 148/148 + 全量 worker 18/577、vue 17/95、E2E 13。未勾选尾：T-17 审查 / T-18 → T-29。
 - 2026-08-24 · 主 AI:T-16 `3bb1d55` 勾选。主 AI 独立定点 219/219 + 全量 worker 18/465、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-16 审查 / T-17 → T-29。
 - 2026-08-24 · 主 AI:T-15 R2 APPROVED p0=0。未勾选尾：T-16 → T-29。
 - 2026-08-24 · 主 AI:T-15 审查 NEEDS_CHANGES p0=0 p1=2。T15-P1-1/P1-2 均 CHANGE。红 3/3 → 绿定点 198/198 + 全量 worker 18/444、vue 17/95、E2E 13。未勾选尾：T-15 复审 / T-16 → T-29。
