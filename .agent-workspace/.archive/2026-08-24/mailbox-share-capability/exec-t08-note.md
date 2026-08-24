@@ -298,6 +298,7 @@ mail-worker/test/share-auth-service.spec.js        | 713 ++++++++++++++++++++-
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:C1/I1/M1 入库 `bc2b4e2`。独立复跑 auth+api+att+schema 90/90、全量 worker 17/317、vue 17/95、E2E 13，均为 EXIT=0。
 - 2026-08-24 · executor:落地 T-08 代码审查三条 CHANGE(review-t08.md 过筛表),**未提交**。
   改动文件:`share-auth-service.js`(生产)、`share-auth-service.spec.js`(+2 用例)、
   `mail-share.schema.spec.js`(仅注释)、`design.md`(Session 幂等节 KV 契约 bullet 补一句交叉语义)。

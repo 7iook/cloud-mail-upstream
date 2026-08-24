@@ -68,6 +68,10 @@
 
 未勾选尾：T-12 代码审查 CHANGE 落地 → T-13 / T-09 / T-10 → T-29。
 
+## Update Log
+
+- 2026-08-24 · 主 AI:P0-1/P1-1 已入库 `6b5d29b`。兼容载荷落旧 4 字段 hash 且重放双认；`toFlag`/`toNullableCount` 值域封闭。主 AI 独立 mail-share 132/132 + 全量 17/317 EXIT=0。
+
 ## Recommendations
 
 - 补一条真实 `/mailShare/create` HTTP 集成用例，覆盖 `accountIds[]`、`shareType/bindings` 与重放无 secrets；当前 route spread 静态正确，但最终 sink 只由旧单邮箱 HTTP 用例覆盖。

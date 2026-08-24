@@ -57,6 +57,10 @@
 
 未勾选尾：T-08 代码审查 CHANGE 落地 → T-09 / T-10 / T-13 → T-29。
 
+## Update Log
+
+- 2026-08-24 · 主 AI:C1/I1/M1 已入库 `bc2b4e2`。`consumeSessionQuota` WHERE 含 `auth_key_enabled`；KV hit 绑 `cv`；围栏注释已改。主 AI 独立 定点 90/90 + 全量 17/317 EXIT=0。
+
 ## Recommendations
 
 - 在 `design.md` 的 establish/KV 交叉语义中明确：只有 token cv 与当前行一致的缓存值才算 AC-SESS-10 的有效 hit；stale-cv 值属于 miss。这样 AC-SESS-10 与 AC-EDGE-05 不再由实现自行猜优先级。

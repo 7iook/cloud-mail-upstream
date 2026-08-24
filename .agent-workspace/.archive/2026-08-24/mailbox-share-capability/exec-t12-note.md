@@ -191,6 +191,7 @@ Negative: no share_type column; no leftover binding when insertShare misses; no 
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:P0-1/P1-1 入库 `6b5d29b`。独立复跑 mail-share 132/132、全量 worker 17/317、vue 17/95、E2E 13，均为 EXIT=0。遗留风险 2（滚动指纹）已关。
 - 2026-08-24 · executor:落地 T-12 代码审查的两条 CHANGE(review-t12.md P0-1 / P1-1),只动
   `mail-share-service.js` + `mail-share-service.spec.js`,未 commit。
   - **红**:`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` →

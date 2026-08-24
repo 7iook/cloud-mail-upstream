@@ -38,10 +38,10 @@
 | W1 | T-06 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t06.md` |
 | W1 | T-07 | ✅ 已提交 `c2087ce` | generalPurpose≈executor | 主 AI 复跑 34/34 · 7/7;代码审查 APPROVED p0=0 |
 | W1 | T-08 | ✅ 已提交 `5a81065` | generalPurpose≈executor | 主 AI 复跑 auth 56 + api 8 + att 15；围栏 4→3 |
-| W1 | T-08 代码审查 | 🔧 NEEDS_CHANGES · CHANGE 落地中 | gpt-5.6-sol-xhigh-fast | `review-t08.md` · C1/I1/M1 全 CHANGE |
+| W1 | T-08 代码审查 | 🔧 CHANGE 已入库 `bc2b4e2` · 待复审 | gpt-5.6-sol-xhigh-fast | `review-t08.md` · C1/I1/M1 全 CHANGE |
 | W2 | T-12 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-w2-t12-create.md` |
 | W2 | T-12 | ✅ 已提交 `b6f5a28` | generalPurpose≈executor | 主 AI 复跑 mail-share 106/106；全量 17/289 |
-| W2 | T-12 代码审查 | 🔧 NEEDS_CHANGES · CHANGE 落地中 | gpt-5.6-sol-xhigh-fast | `review-t12.md` · P0-1/P1-1 全 CHANGE |
+| W2 | T-12 代码审查 | 🔧 CHANGE 已入库 `6b5d29b` · 待复审 | gpt-5.6-sol-xhigh-fast | `review-t12.md` · P0-1/P1-1 全 CHANGE |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -89,14 +89,15 @@
 | 文件 | 当前写者 | 备注 |
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
-| `share-auth-service.js` | T-08 C1/I1 修复中 | 修完再交 T-09 只跑测 |
+| `share-auth-service.js` | T-08 C1/I1 已入库 `bc2b4e2` | 复审后再交 T-09 只跑测 |
 | `share-api.js` | T-08 已收口 | 下一写者 T-14 只加新 `app.get` |
 | `security.js` | 无 | T-14 / T-17 |
-| `mail-share-service.js` | T-12 P0-1/P1-1 修复中 | 修完再交 T-13 独占 |
+| `mail-share-service.js` | T-12 P0-1/P1-1 已入库 `6b5d29b` | 复审后再交 T-13 独占 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-08 CHANGE 入库 `bc2b4e2`，T-12 CHANGE 入库 `6b5d29b`。主 AI 独立 90/90 + 132/132 + 全量 17/317 · 17/95 · E2E 13，均为 EXIT=0。未勾选尾：复审 → T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08/T-12 代码审查均 NEEDS_CHANGES。T08-C1/I1/M1 CHANGE；T12-P0-1/P1-1 CHANGE（哈希 d5c870…≠6ddde5… 已独立复算）。并行派修复，文件不重叠。未勾选尾：T-08/T-12 审查收口 → T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08/T-12 工件审查均 NEEDS_CHANGES。T08-A1 CHANGE（统一快照）；T08-A2/A3/A4 HOLD。T12-A1/H1 HOLD；T12-E1 CHANGE。代码审查未回。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08 `5a81065` + T-12 `b6f5a28` 入库。主 AI 独立 185/185、全量 worker 17/289、vue 17/95、E2E 13，均为 EXIT=0。ShareContext 已冻结。未勾选尾：T-09 / T-10 / T-13 → T-29。
