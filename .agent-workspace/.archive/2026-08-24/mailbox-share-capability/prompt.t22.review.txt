@@ -1,0 +1,57 @@
+T-22 independent code review · share-admin create wizard
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Commit: 5c9651f feat(vue): add share-admin create wizard and expand create
+
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files. Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t22.md
+
+You are a heterogeneous reviewer. Do not trust executor notes or the main AI narrative.
+Read the 5c9651f diff and the current files yourself. Run the tests yourself.
+
+## Original requirement (from tasks.md)
+
+T-22 创建向导: 四预设 + 幂等恢复 + V2 降级
+- 四预设仅前端表单预填，请求不含预设标识
+- 提交带 Idempotency-Key；结果未知同 key 重试；重放识别 idempotentReplay 且无 sec 明文 → 引导 revoke/delete 后重建，禁止换 key 盲建
+- V2=false 时多邮箱/AuthKey/配额表单项以「能力未激活」置灰（交付形态是撞后降级，见已裁决）
+- 成功后一次性展示 shareUrl(+authKey)
+
+Success state (user view):
+NOT "a wizard exists", BUT: an owner can create from the list header with four presets, retry a lost response with the same key, and after a real V2 fence rejection can resubmit the leftover single-mailbox body.
+Negative: no preset id in the request; no createMailShareV2; unknown must not pre-grey; ShareDialog four-key create stays identical.
+
+## Already decided (do not reopen as defects)
+
+- T22-V2-COLLIDE: collide then degrade; unknown does not pre-grey; no worker probe; no Vite constant; list-row positive evidence skipped
+- T22-CREATE-EXPAND: in-place conditional expand; old four-key toEqual must stay green
+- T22-AFTER-T21: 0 lines in status.js / ShareDetailDrawer.* / ShareRowActions.* / index.spec.js
+- PENDING_COPY / tf() keys are T-29
+- T-23 ShareDialog files are closed
+
+## What to verify
+
+1. git show --stat 5c9651f whitelist only: wizard vue+spec, presets.js, index.vue ≤6 lines, createMailShare + one appended spec case, exec/prompt notes. Forbidden: status.js, drawer/row-actions, index.spec.js, views/email/**, i18n, router, perm, mail-worker, tests/e2e
+2. Old mail-share.spec.js four-key toEqual is unchanged
+3. ShareDialog.spec.js still has the four-field create body (J3)
+4. createMailShare does not send accountId and accountIds together; optional fields appear only when named
+5. No request-layer clamp / false→0
+6. Unknown does not pre-grey; all four fence groups (including messageLimit) disable after SHARE_INVALID_CONFIG with fence intent
+7. Domain errors (DURATION/ACCOUNT/BINDING) do not mark inactive
+8. Unknown transport error retries the same key and locks the form
+9. Replay shows no secret and does not offer "try another key"
+10. Production caller: index.vue mounts ShareCreateWizard in header-actions. Not tests-only.
+
+## Required tests (run yourself, --no-cache)
+
+pnpm --dir mail-vue exec vitest run src/views/share-admin/ShareCreateWizard.spec.js src/request/mail-share.spec.js src/views/email/ShareDialog.spec.js src/views/email/ShareIndicator.spec.js src/views/share-admin/index.spec.js src/views/share/share-chunk.spec.js --no-cache
+
+Report file/test counts.
+
+## Output
+
+Write review-t22.md with: Verdict APPROVED | NEEDS_CHANGES; P0/P1/P2; checklist of the 10 items; commands you actually ran.
+
+Reply to user in Chinese.

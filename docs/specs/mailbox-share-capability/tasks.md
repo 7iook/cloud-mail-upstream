@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W4 T-21 APPROVED · 下一波 T-23 入库 / T-22 |
+| 状态 Status | in-progress · W4 T-23 APPROVED · T-22 实现待审查 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -501,9 +501,21 @@
   - [ ]* T-22.1 红→绿:向导 spec —— 四预设(单邮箱验证码/临时邮箱/多邮箱验证码池/自定义)仅前端表单预填,请求不含预设标识;提交带 `Idempotency-Key`,结果未知同 key 重试,重放识别 `idempotentReplay` 且无 `sec` 明文 → 引导 revoke/delete 后重建,禁止换 key 盲建;V2=false 时多邮箱/AuthKey/配额表单项以「能力未激活」置灰;成功后一次性展示 `shareUrl`(+`authKey`),复用 `mail-vue/src/views/email/build-share-url.js`
     - _Requirements: AC-CAP-12, AC-CAP-14, AC-LIFE-11_
 
-- [ ] T-23 ShareDialog 兼容保持(快捷入口)
-  - [ ]* T-23.1 红→绿:`mail-vue/src/views/email/ShareDialog.spec.js` 基线全绿保持(旧契约单邮箱创建可用);对话框尾部加「前往分享管理」跳转;完整管理能力不塞回对话框
+- [x] T-23 ShareDialog 兼容保持(快捷入口)
+  - **Evidence**
+    - verify: 主 AI 独立定点 ShareDialog 10/10 + 邻接 18/18；全量 vue 20/161（入库时；其后 T-22 工作树 21/183）、worker 18/619、E2E 13，均为 EXIT=0
+    - files: `mail-vue/src/views/email/ShareDialog.vue` · `ShareDialog.spec.js`
+    - AC: AC-CAP-10, AC-ADMIN-08
+    - commit: 4f4cc65
+    - decision: T23-COPY CHANGE（`tf` + `shareGoAdmin`）；T23-PERM CHANGE（`Array.isArray(permKeys)`）；T23-HEX HOLD；T23-P2-1 HOLD（提交夹带 tasks.md 日志，不改写历史）
+    - review: `review-t23.md` NEEDS_CHANGES p2=1 → 主 AI HOLD 后视为通过
+  - [x]* T-23.1 红→绿:`mail-vue/src/views/email/ShareDialog.spec.js` 基线全绿保持(旧契约单邮箱创建可用);对话框尾部加「前往分享管理」跳转;完整管理能力不塞回对话框
     - _Requirements: AC-CAP-10, AC-ADMIN-08_
+    - **Evidence**
+      - verify: 既有 6 条 `it()` 字节一致；新增 4 条；邻接 18/18
+      - files: `mail-vue/src/views/email/ShareDialog.spec.js`
+      - AC: AC-CAP-10, AC-ADMIN-08
+      - commit: 4f4cc65
 
 ### W5 · 访客页多邮箱(匿名 chunk 隔离域;T-24 组件抽取先行)
 
@@ -571,6 +583,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-23 审查过筛：P2-1 HOLD。T-22 实现待审查。主 AI 独立定点 6 files / 56 + 全量 vue 21/183。未勾选尾：T-22 审查 / T-24 → T-29。
 - 2026-08-24 · 主 AI:T-23 实现待审查。主 AI 独立定点 ShareDialog 10/10 + 邻接 18/18；全量 vue 20/161、worker 18/619、E2E 13。未勾选尾：T-23 审查 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-21 R2 APPROVED p0=0（`review-t21-r2.md`）。P1-1/P2-1 CLOSED。主 AI 独立定点 64/64 + 全量 vue 20/161、worker 18/619、E2E 13。未勾选尾：T-23 入库 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-21 实现 `00b0ae1`。审查 NEEDS_CHANGES p0=0 p1=1 p2=1（`review-t21.md`）。T21-P1-1/P2-1 均 CHANGE：`reqGen` 丢弃迟到响应；disable 清空一次性 Key。定点 4 files / 64 tests。T-21 未勾选（等 R2）。未勾选尾：T-21 R2 / T-23 / T-22 → T-29。
