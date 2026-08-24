@@ -45,7 +45,10 @@
 | W1 | T-09 Checkpoint | ✅ 已提交 `dd1de15` | 主 AI | `share-context-freeze.md` · worker 17/317 |
 | W2 | T-10 scoped repo | ✅ 已提交 `bca7bc2` | generalPurpose≈executor | 主 AI 复跑 repo 13 + api/integ DESC · 全量 17/349 |
 | W2 | T-13 bindings PUT | ✅ 已提交 `ee2db41` | generalPurpose≈executor | 主 AI 复跑 mail-share 155/155 · 全量 17/349 |
-| W2 | T-13 审查修复 | ✅ 已提交 `22d9832` | generalPurpose≈executor | 主 AI 独立 164/164 · 全量 17/358；复审 pending |
+| W2 | T-13 审查修复 | ✅ 已提交 `22d9832` | generalPurpose≈executor | 主 AI 独立 164/164 · 全量 17/358 |
+| W2 | T-13 R2 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t13-r2.md` · `7a91fac` |
+| W2 | T-11 投影+附件可见集 | ✅ 已提交 `bee72b6` | generalPurpose≈executor | 主 AI 独立 135/135 · 全量 18/410 |
+| W2 | T-14 status 水位 | ✅ 已提交 `d6fa50b` | generalPurpose≈executor | 主 AI 独立 135/135 · 全量 18/410 |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -98,14 +101,15 @@
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
-| `share-api.js` | T-08 已收口 | 下一写者 T-14 只加新 `app.get` |
-| `security.js` | 无 | T-14 / T-17 |
-| `mail-share-service.js` | T-13 修复 `22d9832` 待复审 | 下一写者 T-15；复审绿前禁止第三写者 |
-| `share-scoped-email-repository.js` | T-10 已入库 `bca7bc2` | 下一消费者 T-11 / T-14 |
+| `share-api.js` | T-14 已入库 `d6fa50b` | 其后只加路由须新任务；W3 不写此文件 |
+| `security.js` | T-14 已加 status 一行 | 下一写者 T-17（premKey） |
+| `mail-share-service.js` | T-13 R2 APPROVED | 下一写者 T-15 |
+| `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-11 `bee72b6` + T-14 `d6fa50b` 入库。T-13 R2 APPROVED。主 AI 独立 135/135 + 全量 18/410 · 17/95 · E2E 13。未勾选尾：T-11/T-14 审查 → T-15 → T-29。
 - 2026-08-24 · 主 AI：T-13 CHANGE 入库 `22d9832`。T-08 R2 APPROVED p0=0。主 AI 独立 164/164 + 全量 17/358 · 17/95 · E2E 13。未勾选尾：T-13 复审 / T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-10 审查 APPROVED p0=0。T-13 审查 NEEDS_CHANGES：P0-1/P1-1 均 CHANGE。未勾选尾：T-13 审查修复 → T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-10 `bca7bc2` + T-13 `ee2db41` 入库。主 AI 独立定点 189/189 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11 / T-14 → T-29。
