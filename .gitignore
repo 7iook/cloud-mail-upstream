@@ -25,4 +25,8 @@ mail-vue/node_modules
 mail-vue/dist
 .wrangler
 .venv
-.agent-workspace/
+
+# agent workspace: keep archived decision/recon docs tracked for handoff
+.agent-workspace/**
+!.agent-workspace/.archive/
+!.agent-workspace/.archive/**
