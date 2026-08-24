@@ -12,13 +12,19 @@ const MASKED_ADDRESS = '***';
  * address verbatim (AC-MAIL-08). Anything that is not a parsable address degrades to
  * `***` rather than throwing: one dirty account row must not turn a read into a 500.
  */
-function maskAddress(address, showFullAddress) {
-	const text = typeof address === 'string' ? address : '';
+function isMailboxAddress(text) {
+	if (typeof text !== 'string' || /\s/.test(text)) {
+		return false;
+	}
 	const at = text.indexOf('@');
-	if (at <= 0 || at === text.length - 1) {
+	return at > 0 && at < text.length - 1 && text.indexOf('@', at + 1) === -1;
+}
+
+function maskAddress(address, showFullAddress) {
+	if (!isMailboxAddress(address)) {
 		return MASKED_ADDRESS;
 	}
-	return showFullAddress === true ? text : `${text[0]}${MASKED_ADDRESS}${text.slice(at)}`;
+	return showFullAddress === true ? address : `${address[0]}${MASKED_ADDRESS}${address.slice(address.indexOf('@'))}`;
 }
 
 function resolveAttachmentRows(emailRow, attachmentRows) {

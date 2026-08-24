@@ -122,7 +122,12 @@ describe('shareMailService.maskAddress', () => {
 
 	it('returns *** for an illegal address instead of throwing', () => {
 		for (const showFullAddress of [true, false]) {
-			for (const bad of ['', '   ', 'no-at-sign', '@example.com', 'trailing@', null, undefined, 7, {}, []]) {
+			for (const bad of [
+				'', '   ', 'no-at-sign', '@example.com', 'trailing@',
+				'a@@example.com', 'alice@ex@ample.com',
+				' alice@example.com', 'alice@example.com ', 'alice @example.com',
+				null, undefined, 7, {}, []
+			]) {
 				expect(shareMailService.maskAddress(bad, showFullAddress)).toBe('***');
 			}
 		}
