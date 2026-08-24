@@ -72,12 +72,21 @@
         </el-button>
       </div>
     </div>
+
+    <template #footer>
+      <el-button v-if="canManage" data-test="goto-share-admin" @click="goShareAdmin">
+        {{ tf('shareGoAdmin') }}
+      </el-button>
+    </template>
   </el-dialog>
 </template>
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import router from '@/router/index.js'
+import { hasPerm } from '@/perm/perm.js'
+import { useUserStore } from '@/store/user.js'
 import { useCopyWithFallback } from '@/composables/useCopyWithFallback.js'
 import { createMailShare, listMailShares, newIdempotencyKey, revokeMailShare } from '@/request/mail-share.js'
 import { buildShareUrl } from './build-share-url.js'
@@ -87,8 +96,31 @@ const props = defineProps({
   accountId: { type: Number, default: 0 }
 })
 const emit = defineEmits(['update:modelValue', 'changed'])
-const { t } = useI18n()
+const { t, te } = useI18n()
 const { copy, selectableRef } = useCopyWithFallback()
+
+// T-29 is the only writer of i18n/zh.js and i18n/en.js. Until it lands shareGoAdmin
+// (registered in exec-t23-note.md), fall back to the agreed copy instead of painting a raw
+// key name on screen; te() flips to the real translation the moment the key exists.
+const PENDING_COPY = {
+  shareGoAdmin: '前往分享管理'
+}
+
+function tf(key) {
+  return te(key) ? t(key) : (PENDING_COPY[key] || key)
+}
+
+// hasPerm() calls permKeys.includes() unguarded, and share-admin is only addRoute()d for
+// share:manage holders; same shape as ShareIndicator.vue so neither can drift alone.
+function canManageShare() {
+  const keys = useUserStore().user && useUserStore().user.permKeys
+  if (!Array.isArray(keys)) {
+    return false
+  }
+  return hasPerm('share:manage')
+}
+
+const canManage = computed(() => canManageShare())
 const durationOptions = [
   { value: 3600, labelKey: 'shareDuration1h' },
   { value: 21600, labelKey: 'shareDuration6h' },
@@ -205,6 +237,13 @@ function askRevoke(row) {
     }
     console.error('mail share revoke failed', { shareId: row.shareId, code: err && err.code })
   })
+}
+
+function goShareAdmin() {
+  // Close first: the open modal keeps body scroll locked and would flash for a frame while
+  // the route swap unmounts this subtree.
+  emit('update:modelValue', false)
+  router.push({ name: 'share-admin' })
 }
 
 async function copyCreatedLink() {

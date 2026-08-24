@@ -70,6 +70,7 @@
 | W4 | T-21 抽屉侦察 | ✅ 已落盘 | executor 顺带 | `recon-t21-drawer.md` |
 | W4 | T-21 详情抽屉 | ✅ 已提交 `00b0ae1` · 修复 `5af8675` | generalPurpose≈executor | 主 AI 独立 64/64 · 全量 vue 20/161 · worker 18/619 · E2E 13 |
 | W4 | T-21 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t21-r2.md` · P1-1/P2-1 CLOSED |
+| W4 | T-23 ShareDialog | ⏳ 实现待入库审查 | generalPurpose≈executor | 定点 ShareDialog 10/10 · 邻接 18/18 |
 | W4 | T-22 向导侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t22-wizard.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -158,10 +159,12 @@
 | `mail-share-service.js` | T-18 已入库 `73dc371` | 其后只读，除非再开任务 |
 | `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
+| `mail-vue/src/views/email/ShareDialog.*` | T-23 写者 | 其后 T-29 才清 PENDING_COPY；T-22 0 行 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-23 实现待审查。定点 10/10 + 邻接 18/18；全量 vue 20/161 · worker 18/619 · E2E 13。未勾选尾：T-23 审查 / T-22 → T-29。
 - 2026-08-24 · 主 AI：T-21 R2 APPROVED p0=0。P1-1/P2-1 CLOSED。主 AI 独立 64/64 + 全量 vue 20/161 · worker 18/619 · E2E 13。未勾选尾：T-23 入库 / T-22 → T-29。
 - 2026-08-24 · 主 AI：T-21 实现 `00b0ae1`。审查 NEEDS_CHANGES p0=0 p1=1 p2=1。T21-P1-1/P2-1 均 CHANGE。定点 4 files / 64 tests。R2 pending。未勾选尾：T-21 R2 / T-23 入库 / T-22 → T-29。
 - 2026-08-24 · 主 AI：T-20 审查 APPROVED p0=0。T-22 侦察已落。T-21 迷雾已裁（内联密钥 / 弹窗清零 / 翻面登记）。T-22 迷雾已裁（撞后降级 / 条件展开 create / T-21 先于 T-22）。未勾选尾：T-21 → T-29。

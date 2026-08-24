@@ -571,6 +571,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-23 实现待审查。主 AI 独立定点 ShareDialog 10/10 + 邻接 18/18；全量 vue 20/161、worker 18/619、E2E 13。未勾选尾：T-23 审查 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-21 R2 APPROVED p0=0（`review-t21-r2.md`）。P1-1/P2-1 CLOSED。主 AI 独立定点 64/64 + 全量 vue 20/161、worker 18/619、E2E 13。未勾选尾：T-23 入库 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-21 实现 `00b0ae1`。审查 NEEDS_CHANGES p0=0 p1=1 p2=1（`review-t21.md`）。T21-P1-1/P2-1 均 CHANGE：`reqGen` 丢弃迟到响应；disable 清空一次性 Key。定点 4 files / 64 tests。T-21 未勾选（等 R2）。未勾选尾：T-21 R2 / T-23 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-20 审查 APPROVED p0=0（`review-t20.md`）。T-22 侦察已落。裁决 T21-INLINE / T21-RESET-BOX / T21-FLIP / T22-V2-COLLIDE / T22-CREATE-EXPAND；排期 T-21 先于 T-22。未勾选尾：T-21 → T-29。

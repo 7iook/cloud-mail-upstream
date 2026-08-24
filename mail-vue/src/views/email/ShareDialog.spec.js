@@ -5,11 +5,20 @@ import { createI18n } from 'vue-i18n'
 import { useUserStore } from '@/store/user.js'
 import en from '@/i18n/en.js'
 
-const { createMailShare, listMailShares, revokeMailShare, confirm } = vi.hoisted(() => ({
+const { createMailShare, listMailShares, revokeMailShare, confirm, routerPush } = vi.hoisted(() => ({
     createMailShare: vi.fn(),
     listMailShares: vi.fn(),
     revokeMailShare: vi.fn(),
-    confirm: vi.fn()
+    confirm: vi.fn(),
+    routerPush: vi.fn()
+}))
+
+// router/index.js default-exports null under MODE==='test', so the jump is only assertable
+// against the mocked singleton; the module string matches the component's import verbatim.
+vi.mock('@/router/index.js', () => ({
+    default: {
+        push: routerPush
+    }
 }))
 
 vi.mock('@/request/mail-share.js', async (importOriginal) => {
@@ -93,10 +102,10 @@ function sampleShare(overrides = {}) {
     }
 }
 
-function mountDialog(props = {}) {
+function mountDialog(props = {}, user = { permKeys: ['share:manage'] }) {
     const pinia = createPinia()
     setActivePinia(pinia)
-    useUserStore().user = { permKeys: ['share:manage'] }
+    useUserStore().user = user
     const i18n = createI18n({
         legacy: false,
         locale: 'en',
@@ -121,6 +130,7 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         listMailShares.mockReset()
         revokeMailShare.mockReset()
         confirm.mockReset()
+        routerPush.mockReset()
         listMailShares.mockResolvedValue({ list: [], total: 0 })
         createMailShare.mockResolvedValue({
             shareId: 7,
@@ -227,5 +237,70 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         const label = wrapper.get('[data-test="access-label"]').text()
         expect(label).toMatch(/successful open/i)
         expect(label).not.toMatch(/recipient read|delivered|read receipt/i)
+    })
+
+    it('closes itself before landing the owner on share-admin (AC-ADMIN-08)', async () => {
+        const wrapper = mountDialog()
+        await flushPromises()
+
+        await wrapper.get('[data-test="goto-share-admin"]').trigger('click')
+        await flushPromises()
+
+        const closes = wrapper.emitted('update:modelValue')
+        expect(closes[closes.length - 1]).toEqual([false])
+        expect(routerPush).toHaveBeenCalledTimes(1)
+        expect(routerPush).toHaveBeenCalledWith({ name: 'share-admin' })
+    })
+
+    it('hides the share-admin jump from owners without share:manage (AC-ADMIN-08)', async () => {
+        // permsToRouter only addRoute()s share-admin for share:manage holders, so rendering the
+        // jump for anyone else would push a name vue-router cannot resolve.
+        const denied = mountDialog({}, { permKeys: ['email:send'] })
+        await flushPromises()
+        expect(denied.find('[data-test="goto-share-admin"]').exists()).toBe(false)
+        // The entry degrades, the dialog does not.
+        expect(denied.find('[data-test="create-share"]').exists()).toBe(true)
+
+        // hasPerm() calls permKeys.includes() unguarded; an absent permKeys must not throw.
+        const absent = mountDialog({}, {})
+        await flushPromises()
+        expect(absent.find('[data-test="goto-share-admin"]').exists()).toBe(false)
+
+        expect(routerPush).not.toHaveBeenCalled()
+    })
+
+    it('still creates with the old single-mailbox four-field body (AC-CAP-10)', async () => {
+        const wrapper = mountDialog()
+        await flushPromises()
+        await wrapper.get('[data-test="create-share"]').trigger('click')
+        await flushPromises()
+
+        const body = createMailShare.mock.calls[0][0]
+        expect(body).toEqual({
+            accountId: 11,
+            durationSeconds: 3600,
+            name: '',
+            remark: ''
+        })
+        expect(body).not.toHaveProperty('accountIds')
+        expect(body).not.toHaveProperty('authKeyEnabled')
+        expect(body).not.toHaveProperty('maxSessions')
+        expect(body).not.toHaveProperty('messageLimit')
+    })
+
+    it('keeps full share management out of the dialog (AC-ADMIN-08)', async () => {
+        listMailShares.mockResolvedValue({ list: [sampleShare()], total: 1 })
+        const wrapper = mountDialog()
+        await flushPromises()
+
+        const managementHooks = [
+            'share-detail-drawer',
+            'share-create-wizard',
+            'binding-add',
+            'authkey-once'
+        ]
+        managementHooks.forEach((hook) => {
+            expect(wrapper.find(`[data-test="${hook}"]`).exists()).toBe(false)
+        })
     })
 })

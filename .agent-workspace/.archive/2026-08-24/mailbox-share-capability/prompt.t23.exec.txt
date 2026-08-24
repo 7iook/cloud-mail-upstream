@@ -1,0 +1,54 @@
+T-23 executor · ShareDialog compatibility + jump to share-admin
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD includes T-21 at 00b0ae1. T-21 owns share-admin. You do NOT touch share-admin or request/mail-share.js.
+
+Do NOT git commit / push / stash / switch branch.
+
+Read first:
+1. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/frontend-design/SKILL.md
+2. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/impeccable/SKILL.md
+3. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ui-ux-pro-max/SKILL.md
+4. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55280841/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ponytail/SKILL.md (lite)
+5. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t23-sharedialog.md
+6. mail-vue/src/views/email/ShareDialog.vue + ShareDialog.spec.js + ShareIndicator.vue (read-only except ShareDialog)
+
+Success state (user view):
+NOT "a footer button exists", BUT: the existing email ShareDialog still creates a single-mailbox share with the old four-field contract; the dialog footer has "前往分享管理" that closes the dialog then lands on /share-admin for owners with share:manage; owners without the perm never see the jump and never push a missing route.
+Negative: do not move drawer/wizard into the dialog; do not edit i18n files; do not edit request/mail-share.js (T-22 will expand create); do not edit ShareIndicator; do not restyle the dialog hex colors.
+
+## Already decided
+
+- T23-COPY: use tf() + PENDING_COPY for one new key `shareGoAdmin` (zh 前往分享管理 / en Go to share management). Do not reuse shareManage.
+- T23-PERM: footer jump is v-if canManage; canManage copies ShareIndicator's Array.isArray(permKeys) guard. Do not call hasPerm() raw.
+- T23-HEX: HOLD. Do not replace the existing raw hex in ShareDialog.vue.
+- Jump: import router from @/router/index.js (NOT useRouter). emit close first, then router.push({ name: 'share-admin' }).
+- ShareIndicator: 0 lines.
+- Existing 6 ShareDialog.spec.js assertions: do not rewrite. Append 3+ cases.
+
+## Allowed files
+
+- mail-vue/src/views/email/ShareDialog.vue
+- mail-vue/src/views/email/ShareDialog.spec.js
+- .agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t23-note.md
+
+FORBIDDEN: everything else, especially request/mail-share.js, share-admin/**, i18n, router/index.js, ShareIndicator, mail-worker.
+
+## Required tests (append, do not rewrite)
+
+- J1: click go-admin → dialog closed + router.push({name:'share-admin'})
+- J2: permKeys without share:manage (and undefined permKeys) → no jump control, no push
+- J3: create body still exactly {accountId, durationSeconds, name, remark} (safety net for T-22)
+- S5: dialog has no drawer/wizard/binding/authkey data-test hooks
+
+Mock @/router/index.js like share-admin/index.spec.js. Do not register v-perm.
+
+## Verify
+
+pnpm --dir mail-vue exec vitest run src/views/email/ShareDialog.spec.js src/views/email/ShareIndicator.spec.js src/request/mail-share.spec.js --no-cache
+pnpm --dir mail-vue test -- --no-cache
+
+Worker / E2E: do not run; mark unverified.
+Write exec-t23-note.md with i18n key table and leftover for T-29 (delete PENDING_COPY here too).
+Reply to user in Chinese.
