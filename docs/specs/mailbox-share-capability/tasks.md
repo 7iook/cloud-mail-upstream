@@ -139,9 +139,9 @@
   - [ ]* T-06.1 红:`mail-worker/test/share-auth-service.spec.js` —— 成功建会话 `access_count` 恰 +1(RETURNING 含 status/expires/cv/配额四条件);触顶/撤销/过期/cv 变 → 拒发零变更;并发抢最后名额恰 max 次成功(P-SESS-01,必须 `Promise.allSettled` 并发,串行 await 是假绿);读请求序列(mails/mail/attachment)零配额消耗(P-SESS-02;status 端点属 T-14,本任务以 resolveSession 源码无写护栏代替);条件 UPDATE 前状态变更注入 → 正确拒发;UPDATE 后 TOCTOU 注入 → token 首次回源失败、名额不退还(文档化行为);配额 UPDATE 失败/RETURNING 空 → 拒发(AC-SESS-11)
     - **P-SESS-01: 配额不超发** _Validates: AC-SESS-01, AC-SESS-07, AC-EDGE-02_
     - **P-SESS-02: 读请求零配额消耗** _Validates: AC-SESS-02, AC-EDGE-01, AC-EDGE-11_
-    - _Requirements: AC-SESS-01, AC-SESS-02, AC-SESS-05, AC-SESS-07, AC-EDGE-01, AC-EDGE-02, AC-EDGE-10, AC-EDGE-13_
+    - _Requirements: AC-SESS-01, AC-SESS-02, AC-SESS-05, AC-SESS-07, AC-SESS-11, AC-EDGE-01, AC-EDGE-02, AC-EDGE-10, AC-EDGE-13_
   - [ ] T-06.2 绿:`share-auth-service.js` 重写 `establishSession` 流程(读快照取 cv → 校验 → 条件 UPDATE `WHERE status='ACTIVE' AND expires_at > now AND credentials_version = :cv AND (max_sessions IS NULL OR access_count < max_sessions) RETURNING` → 非空才 `issueToken`);`last_access_at` 与 `access_count` 同在闸门成功语句,establish 路径不再保留 fire-and-forget 库写;`exp = min(expires_at, iat+TTL)` 不变、无续期路径;快照已触顶与闸门落空两处均打 `share.session.denied_quota`(reason=`quota_snapshot`/`quota_race`);无先读后写两步状态变更(AC-SEC-08;读快照取 cv 保留)
-    - _Requirements: AC-SESS-01, AC-SESS-05, AC-SEC-08_
+    - _Requirements: AC-SESS-01, AC-SESS-05, AC-SESS-11, AC-SEC-08_
 
 - [ ] T-07 Session 建立幂等恢复:KV 结果重放(R3-A3)
   - [ ]* T-07.1 红:`mail-worker/test/share-auth-service.spec.js` —— 同 `Idempotency-Key` 重放 → 同 token、`access_count` 不变、零 UPDATE;新 key/无 key → 正常消耗;KV 故障注入 → 仍签发(fail-open)+ `share.system.error` 日志;TTL = min(120s, token 剩余寿命)
