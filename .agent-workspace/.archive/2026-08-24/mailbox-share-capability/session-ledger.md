@@ -43,6 +43,8 @@
 | W2 | T-12 | ✅ 已提交 `b6f5a28` | generalPurpose≈executor | 主 AI 复跑 mail-share 106/106；全量 17/289 |
 | W2 | T-12 代码审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t12-r2.md` |
 | W1 | T-09 Checkpoint | ✅ 已提交 `dd1de15` | 主 AI | `share-context-freeze.md` · worker 17/317 |
+| W2 | T-10 scoped repo | ✅ 已提交 `bca7bc2` | generalPurpose≈executor | 主 AI 复跑 repo 13 + api/integ DESC · 全量 17/349 |
+| W2 | T-13 bindings PUT | ✅ 已提交 `ee2db41` | generalPurpose≈executor | 主 AI 复跑 mail-share 155/155 · 全量 17/349 |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -84,6 +86,8 @@
 | T08-M1 | CHANGE:围栏注释改写 | `:284` 在 `assertAllowed`，不是零 Binding 回落 |
 | T12-P0-1 | CHANGE:兼容载荷持久化并接受旧 4 字段指纹 | 主 AI 复算 d5c870…≠6ddde5…；关 AC-CAP-14 滚动窗口 |
 | T12-P1-1 | CHANGE:toFlag/toNullableCount 封闭值域 | `invalid`/`true` 不得静默变 1 |
+| T10-DESC | CHANGE:访客列表 ASC 黄金断言随 T-10 改为 DESC | design `listForBinding` + GET /share/mails；`share-api.js` nextCursor 仍取本页最后一行 |
+| T13-DUP | HOLD:同一 account 同时出现在 add+remove → `SHARE_BINDING_DUPLICATE` | 同批 INSERT 在 DELETE 前；想重绑分两次 |
 
 ## 冲突热区占用
 
@@ -93,12 +97,13 @@
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` | T-08 已收口 | 下一写者 T-14 只加新 `app.get` |
 | `security.js` | 无 | T-14 / T-17 |
-| `mail-share-service.js` | T-13 独占 | T-12 复审通过后放行 |
-| `share-scoped-email-repository.js` | T-10 独占 | 与 T-13 文件不重叠 |
+| `mail-share-service.js` | T-13 已入库 `ee2db41` | 下一写者 T-15（update）审查通过后放行 |
+| `share-scoped-email-repository.js` | T-10 已入库 `bca7bc2` | 下一消费者 T-11 / T-14 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-10 `bca7bc2` + T-13 `ee2db41` 入库。主 AI 独立定点 189/189 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-09 Evidence 回写 `dd1de15`。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08/T-12 复审均 APPROVED p0=0（`review-t08-r2.md` / `review-t12-r2.md`）。T-09 冻结公告已落。并行派 T-10 / T-13。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08 CHANGE 入库 `bc2b4e2`，T-12 CHANGE 入库 `6b5d29b`。主 AI 独立 90/90 + 132/132 + 全量 17/317 · 17/95 · E2E 13，均为 EXIT=0。未勾选尾：复审 → T-09 / T-10 / T-13 → T-29。

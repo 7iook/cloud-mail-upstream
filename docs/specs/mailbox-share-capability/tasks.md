@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W0/W1 收口 · T-12 复审通过 · T-09 冻结 · T-10/T-13 并行 |
+| 状态 Status | in-progress · W1 收口 · T-10/T-13 已入库 · 待审查 · T-11/T-14 next |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -222,13 +222,29 @@
 
 ### W2 · 读路径与 Binding CRUD(依赖 T-08 冻结的 ShareContext;文件不冲突时 T-10/T-12 可与 W1 后半并行起跑)
 
-- [ ] T-10 scoped repository 集合化 + per-binding window + message_limit DESC 截断
-  - [ ]* T-10.1 红:`mail-worker/test/share-scoped-email-repository.spec.js` —— 集合封闭性 property:任意 ctx/参数组合只返回现存 Binding 集合内的行,每行满足所属 Binding 独立 `window_start_email_id` 下界 + `account_id > 0` + `is_del=NORMAL` + `status != SAVING`(P-BIND-01);`messageLimit=N` 各邮箱投 N+2 封 → 各返回最新 N(DESC),N=1 合法;`onlyMessagesAfterCreated=false` → 下界 0 仍受 N 截断;零邮件 → 空集不报错
+- [x] T-10 scoped repository 集合化 + per-binding window + message_limit DESC 截断
+  - **Evidence**
+    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/share-scoped-email-repository.spec.js --no-cache` → EXIT=1（12 failed / 1 passed / 13）；绿同命令 → EXIT=0（13/13）；主 AI 独立定点 `mail-share-service.spec.js` + repo + `share-api.spec.js` + `share-integration.spec.js` → EXIT=0（189/189）；全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/src/service/share-scoped-email-repository.js:39-157` · `mail-worker/test/share-scoped-email-repository.spec.js` · 消费方 DESC：`mail-worker/test/share-api.spec.js:447,451` · `mail-worker/test/share-integration.spec.js:766`
+    - AC: AC-MAIL-01, AC-MAIL-02, AC-MAIL-03, AC-MAIL-09, AC-EDGE-06, AC-EDGE-07
+    - commit: bca7bc2
+    - decision: bindings[] 非空只认集合、垫片回落；N 截断在 SQL `row_number`；游标 `email_id < cursor`；ASC 黄金断言随 DESC 改写
+  - [x]* T-10.1 红:`mail-worker/test/share-scoped-email-repository.spec.js` —— 集合封闭性 property:任意 ctx/参数组合只返回现存 Binding 集合内的行,每行满足所属 Binding 独立 `window_start_email_id` 下界 + `account_id > 0` + `is_del=NORMAL` + `status != SAVING`(P-BIND-01);`messageLimit=N` 各邮箱投 N+2 封 → 各返回最新 N(DESC),N=1 合法;`onlyMessagesAfterCreated=false` → 下界 0 仍受 N 截断;零邮件 → 空集不报错
     - **P-BIND-01: Binding 集合封闭性** _Validates: AC-MAIL-01, AC-MAIL-02, AC-MAIL-06_
     - **P-SCOPE-03: message_limit 服务端封闭性** _Validates: AC-MAIL-03, AC-MAIL-04, AC-MAIL-05, AC-EDGE-06_
     - _Requirements: AC-MAIL-01, AC-MAIL-02, AC-MAIL-03, AC-MAIL-09, AC-EDGE-07_
-  - [ ] T-10.2 绿:改造 `mail-worker/src/service/share-scoped-email-repository.js:60-92` —— 单值等值改 `inArray` + per-binding 下界、`email_id` DESC、`limit ≤ min(50, messageLimit)`;新增 `listForBinding(c, ctx, bindingId, cursor?, limit)`;N 截断在 SQL 内完成不在应用层
+    - **Evidence**
+      - verify: 红（执行者）→ EXIT=1（12 failed / 1 passed / 13）
+      - files: `mail-worker/test/share-scoped-email-repository.spec.js`
+      - AC: AC-MAIL-01, AC-MAIL-02, AC-MAIL-03, AC-MAIL-09
+      - commit: bca7bc2
+  - [x] T-10.2 绿:改造 `mail-worker/src/service/share-scoped-email-repository.js:60-92` —— 单值等值改 `inArray` + per-binding 下界、`email_id` DESC、`limit ≤ min(50, messageLimit)`;新增 `listForBinding(c, ctx, bindingId, cursor?, limit)`;N 截断在 SQL 内完成不在应用层
     - _Requirements: AC-MAIL-01, AC-MAIL-02, AC-MAIL-03_
+    - **Evidence**
+      - verify: 绿 repo spec → EXIT=0（13/13）；主 AI 全量 17/349
+      - files: `mail-worker/src/service/share-scoped-email-repository.js:83-157`
+      - AC: AC-MAIL-01, AC-MAIL-02, AC-MAIL-03
+      - commit: bca7bc2
 
 - [ ] T-11 投影层(掩码/OTP 裁剪/Binding 标识)+ 详情/附件可见集复查
   - [ ]* T-11.1 红:`mail-worker/test/share-mail-service.spec.js` —— 掩码封闭性+幂等 property(`show_full_address` 双态下系统生成的绑定邮箱身份字段形状,发件人不掩码、含址正文原样,P-MASK-01);`code` 键存在 IFF `otp_extraction_enabled=true` 且值恒等 `email.code` 原值含空串(P-OTP-04);投影白名单键集合断言(新增 Binding 标识/掩码地址,无 `user_id`/`account_id` 原值/`is_del`/`status`)
@@ -265,12 +281,28 @@
       - AC: AC-CAP-01, AC-CAP-06, AC-CAP-10, AC-LIFE-10, AC-LIFE-11
       - commit: b6f5a28
 
-- [ ] T-13 bindings 增删:全有或全无原子命令 + `PUT /mailShare/bindings` 端点
-  - [ ]* T-13.1 红:`mail-worker/test/mail-share-service.spec.js` —— add 单语句条件 `INSERT ... SELECT`(account 存活/归属),与 account 删除并发 → 零行 + `SHARE_ACCOUNT_FORBIDDEN`;重复绑定 → `SHARE_BINDING_DUPLICATE`(UNIQUE 兜底);remove 三重谓词 `binding_id+share_id+owner`,跨分享/跨租户 bindingId 混入 → 整单 `SHARE_BINDING_FORBIDDEN` 零残留;删光 → REVOKED;增删后立即拉取结果集与新集合一致(P-BIND-02 property);V2=false 时 1→N 拒绝;超 50 → `SHARE_BINDING_LIMIT_EXCEEDED`
+- [x] T-13 bindings 增删:全有或全无原子命令 + `PUT /mailShare/bindings` 端点
+  - **Evidence**
+    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` → EXIT=1（21 failed / 132 passed / 153）；绿同命令 → EXIT=0（155/155）；主 AI 独立定点 155 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/src/service/mail-share-service.js:505-557,664-840` · `mail-worker/src/api/mail-share-api.js:35-39` · `mail-worker/test/mail-share-service.spec.js`
+    - AC: AC-BIND-02, AC-BIND-03, AC-BIND-04, AC-BIND-07, AC-BIND-08, AC-BIND-10, AC-BIND-12, AC-CAP-13, AC-LIFE-10, AC-LIFE-11
+    - commit: ee2db41
+    - decision: 复用 `prepareBindingInsert`；0 行 INSERT 靠归属计数 + DELETE 守卫互锁；同 account 同时 add+remove 判 DUPLICATE
+  - [x]* T-13.1 红:`mail-worker/test/mail-share-service.spec.js` —— add 单语句条件 `INSERT ... SELECT`(account 存活/归属),与 account 删除并发 → 零行 + `SHARE_ACCOUNT_FORBIDDEN`;重复绑定 → `SHARE_BINDING_DUPLICATE`(UNIQUE 兜底);remove 三重谓词 `binding_id+share_id+owner`,跨分享/跨租户 bindingId 混入 → 整单 `SHARE_BINDING_FORBIDDEN` 零残留;删光 → REVOKED;增删后立即拉取结果集与新集合一致(P-BIND-02 property);V2=false 时 1→N 拒绝;超 50 → `SHARE_BINDING_LIMIT_EXCEEDED`
     - **P-BIND-02: Binding 增删即时性** _Validates: AC-BIND-03, AC-BIND-08, AC-EDGE-04_
     - _Requirements: AC-BIND-02, AC-BIND-03, AC-BIND-04, AC-BIND-07, AC-BIND-08, AC-BIND-10, AC-BIND-12, AC-CAP-13_
-  - [ ] T-13.2 绿:`mail-share-service.js` 新增 bindings 变更(同一 `c.env.db.batch()`:add 条件 INSERT + remove + window 快照 + 双写主表 + 删空转 REVOKED);`mail-worker/src/api/mail-share-api.js` 新增 `PUT /mailShare/bindings`
+    - **Evidence**
+      - verify: 红（执行者）→ EXIT=1（21 failed / 132 passed / 153）
+      - files: `mail-worker/test/mail-share-service.spec.js`
+      - AC: AC-BIND-02, AC-BIND-07, AC-BIND-10, AC-BIND-12, AC-CAP-13
+      - commit: ee2db41
+  - [x] T-13.2 绿:`mail-share-service.js` 新增 bindings 变更(同一 `c.env.db.batch()`:add 条件 INSERT + remove + window 快照 + 双写主表 + 删空转 REVOKED);`mail-worker/src/api/mail-share-api.js` 新增 `PUT /mailShare/bindings`
     - _Requirements: AC-BIND-02, AC-BIND-12, AC-LIFE-10_
+    - **Evidence**
+      - verify: 绿 spec → EXIT=0（155/155）；主 AI 全量 17/349
+      - files: `mail-worker/src/service/mail-share-service.js:781-840` · `mail-worker/src/api/mail-share-api.js:35-39`
+      - AC: AC-BIND-02, AC-BIND-12, AC-LIFE-10
+      - commit: ee2db41
 
 - [ ] T-14 status 水位端点 `GET /share/mailboxes/status`(无游标,R2-A2)
   - [ ]* T-14.1 红:`mail-worker/test/share-api.spec.js` + `share-integration.spec.js` —— API 面断言不接受 `sinceEmailId`/任何游标参数;返回每 Binding 在 VisibleWindow ∩ message_limit ∩ 排除条件内的 `latestEmailId`(无可见邮件为 null)+ 可选 `latestReceivedAt`;窗口外/被 N 滚出邮件注入 → 水位不反映(侧信道封闭);与 mails 同周期调用零配额、同 token 同范围;`/share/mailboxes/statusX` 前缀近似不豁免
@@ -391,6 +423,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-10 `bca7bc2` + T-13 `ee2db41` 勾选。主 AI 独立定点 189/189 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI:T-09 Evidence `commit` 回写 `dd1de15`。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08/T-12 复审 APPROVED p0=0。T-09 冻结公告已落。并行派 T-10 / T-13。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08 审查 CHANGE 入库 `bc2b4e2`（AuthKey enable 谓词 + KV 绑 cv）；T-12 审查 CHANGE 入库 `6b5d29b`（旧指纹双向兼容 + flag 值域）。主 AI 独立 定点 90/90 + mail-share 132/132 + 全量 worker 17/317、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-09 / T-10 / T-13 → T-29。
