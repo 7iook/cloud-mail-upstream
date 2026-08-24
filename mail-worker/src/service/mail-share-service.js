@@ -267,6 +267,25 @@ function placeholders(list) {
 	return list.map(() => '?').join(', ');
 }
 
+// P0-1:预读到的 Binding 集合就是本次命令的乐观锁。写入侧统一用这一对谓词表达
+// 「集合恰好还是快照那一份」—— 没有快照之外的行 + 行数相等 ⇒ 集合相等(binding_id 全局唯一)。
+// `allowedAccounts` 让同批在前的 INSERT 落下的新行不算「集合外」。
+// id 列表走 `json_each(?)` 而不是展开成第二组 IN:D1 每条语句最多 100 个绑定参数
+// (https://developers.cloudflare.com/d1/platform/limits/),而 SHARE_BINDING_LIMIT=50
+// 是契约允许的合法上界 —— 每个集合最多展开一次占位符是这条路径上的硬预算。
+function snapshotPredicate(shareRef, allowedAccounts) {
+	const accountEscape = allowedAccounts
+		? `AND snap.account_id NOT IN (SELECT value FROM json_each(?))`
+		: '';
+	return `NOT EXISTS (
+				SELECT 1 FROM mail_share_binding snap
+				WHERE snap.share_id = ${shareRef}
+					AND snap.binding_id NOT IN (SELECT value FROM json_each(?))
+					${accountEscape}
+			)
+			AND (SELECT COUNT(*) FROM mail_share_binding snap WHERE snap.share_id = ${shareRef}) = ?`;
+}
+
 async function countOwnedAccounts(c, accountIds, userId) {
 	const row = await c.env.db.prepare(`
 		SELECT COUNT(*) AS owned FROM account
@@ -498,52 +517,48 @@ function prepareShareInsert(c, values) {
 
 // 一条语句同时满足三条 AC:AC-CAP-07(per-binding 原子快照)、AC-CAP-08(false 写 0)、
 // AC-BIND-10(条件 INSERT,account 存活且归属)。share 未插入 → `ms.lid = ?` 零行 →
-// binding 零行,不需要额外守卫。`ORDER BY a.account_id` 让 AUTOINCREMENT 的 binding_id
+// binding 零行,不需要额外守卫。`ORDER BY account_id` 让 AUTOINCREMENT 的 binding_id
 // 顺序等于 accountIds 的升序,主 Binding 与主表初值因此恒等。
-// WHERE 里的归属计数谓词让本语句自身「全有或全无」:只要有一个 account 在预检之后被删掉,
-// 整条语句零行而不是插一半 —— D1 的 batch 只在语句报错时回滚,插一半不报错,会就地提交。
+// 「全有或全无」由 `COUNT(*) OVER () AS matched = ?` 表达:只要有一个 account 在预检之后被
+// 删掉,匹配行数就对不上,整条语句零行而不是插一半 —— D1 的 batch 只在语句报错时回滚,
+// 插一半不报错,会就地提交。窗口计数复用 JOIN 已经展开的那一组占位符,不再为归属计数展开
+// 第二组 IN(N=48 时 2N+5 就撞上 D1 的 100 个绑定参数,合法上界反而不可达)。
+// 窗口函数强制内层先物化,所以快照谓词恒在任何一行落库之前求值。create 传空快照
+// (`'[]'` / 0)—— 同批新建的 share 此刻本就没有 Binding,两个写入口因此共用同一段 SQL 文本。
 function prepareBindingInsert(c, values) {
-	const owned = placeholders(values.accountIds);
 	return c.env.db.prepare(`
 		INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id)
-		SELECT ms.share_id, a.account_id,
-			CASE WHEN ? = 1
-				THEN (SELECT COALESCE(MAX(e.email_id), 0) FROM email e WHERE e.account_id = a.account_id)
-				ELSE 0 END
-		FROM mail_share ms
-		JOIN account a ON a.account_id IN (${owned})
-			AND a.user_id = ? AND a.is_del = ${isDel.NORMAL}
-		WHERE ms.lid = ?
-		AND (
-			SELECT COUNT(*) FROM account
-			WHERE account_id IN (${owned}) AND user_id = ? AND is_del = ${isDel.NORMAL}
-		) = ?
-		ORDER BY a.account_id ASC
+		SELECT share_id, account_id, window_start_email_id FROM (
+			SELECT ms.share_id AS share_id, a.account_id AS account_id,
+				CASE WHEN ? = 1
+					THEN (SELECT COALESCE(MAX(e.email_id), 0) FROM email e WHERE e.account_id = a.account_id)
+					ELSE 0 END AS window_start_email_id,
+				COUNT(*) OVER () AS matched
+			FROM mail_share ms
+			JOIN account a ON a.account_id IN (${placeholders(values.accountIds)})
+				AND a.user_id = ? AND a.is_del = ${isDel.NORMAL}
+			WHERE ms.lid = ?
+			AND ${snapshotPredicate('ms.share_id', false)}
+		)
+		WHERE matched = ?
+		ORDER BY account_id ASC
 	`).bind(
 		values.onlyMessagesAfterCreated,
 		...values.accountIds,
 		values.userId,
 		values.lid,
-		...values.accountIds,
-		values.userId,
+		values.snapshotIds,
+		values.snapshotCount,
 		values.accountIds.length
 	);
 }
 
 // AC-BIND-12 的三重资源谓词:binding_id + share_id + owner(经 mail_share 回查 user_id)。
-// 同批还有 add 时再挂一条「新增行确已落库」的守卫 —— 0 行 INSERT 不报错也就不触发回滚,
-// DELETE 必须自己看得见 add 的结果,否则会单独提交成半单变更。
+// 再挂同款快照谓词,期望行数取「快照 + 同批 add」——它同时顶掉了原来那条独立的 add 守卫:
+// 0 行 INSERT 不报错也就不触发回滚,行数对不上时 DELETE 自己必须零行,否则会单独提交成
+// 半单变更。快照谓词按 DELETE 之前的状态求值一次(SQLite 先收集 rowid 再删),
+// 所以一条命令删多个 Binding 不会从第二行起自我否定。
 function prepareBindingDelete(c, values) {
-	const guardSql = values.addAccountIds.length
-		? `AND (
-				SELECT COUNT(*) FROM mail_share_binding added
-				WHERE added.share_id = mail_share_binding.share_id
-					AND added.account_id IN (${placeholders(values.addAccountIds)})
-			) = ?`
-		: '';
-	const guardBinds = values.addAccountIds.length
-		? [...values.addAccountIds, values.addAccountIds.length]
-		: [];
 	return c.env.db.prepare(`
 		DELETE FROM mail_share_binding
 		WHERE binding_id IN (${placeholders(values.bindingIds)})
@@ -552,8 +567,27 @@ function prepareBindingDelete(c, values) {
 				SELECT 1 FROM mail_share ms
 				WHERE ms.share_id = mail_share_binding.share_id AND ms.user_id = ?
 			)
-			${guardSql}
-	`).bind(...values.bindingIds, values.shareId, values.userId, ...guardBinds);
+			AND ${snapshotPredicate('mail_share_binding.share_id', true)}
+	`).bind(
+		...values.bindingIds,
+		values.shareId,
+		values.userId,
+		values.snapshotIds,
+		JSON.stringify(values.addAccountIds),
+		values.snapshotCount + values.addAccountIds.length
+	);
+}
+
+// P0-1 的乐观锁本体,恒为 batch 的第一条语句:D1 的 batch 是一个事务,CAS 命中之后
+// 集合在批内就不会再动。同列自赋值 —— 这条语句只回答「预读快照还成立吗」,不碰
+// credentials_version / access_count / account_id / window_start_email_id 这些有语义的列。
+// changes=0 即本次命令输掉了竞争;写入语句各自带同款谓词,所以输的一方零残留。
+function prepareBindingCas(c, values) {
+	return c.env.db.prepare(`
+		UPDATE mail_share SET remark = remark
+		WHERE share_id = ? AND user_id = ? AND status = 'ACTIVE'
+			AND ${snapshotPredicate('mail_share.share_id', false)}
+	`).bind(values.shareId, values.userId, values.snapshotIds, values.snapshotCount);
 }
 
 // Expand 阶段双写(design.md「迁移/发布协议」步骤 1 / AC-LIFE-10 + R2):主表 `account_id` 与
@@ -626,7 +660,8 @@ async function insertShareAndIdempotency(c, values) {
 	}
 	const shareIndex = statements.length;
 	statements.push(prepareShareInsert(c, values));
-	statements.push(prepareBindingInsert(c, values));
+	// 同批新建的 share 此刻没有任何 Binding,空快照即它的写入侧前置条件。
+	statements.push(prepareBindingInsert(c, { ...values, snapshotIds: '[]', snapshotCount: 0 }));
 	statements.push(syncPrimaryAccountId(c, { lid: values.lid }));
 	if (values.idempotencyKey) {
 		statements.push(prepareIdempotencyInsert(c, values));
@@ -790,8 +825,13 @@ const mailShareService = {
 			await assertOwnedAccounts(c, add, userId);
 		}
 
-		const statements = [];
+		// 预读到的集合原样进写入侧:任何一条写语句看到的集合与这份快照不符,整批零变更。
+		const snapshotIds = JSON.stringify(current.map((binding) => binding.bindingId));
+		const snapshotCount = current.length;
+
+		const statements = [prepareBindingCas(c, { shareId, userId, snapshotIds, snapshotCount })];
 		let addIndex = -1;
+		let removeIndex = -1;
 		if (add.length) {
 			addIndex = statements.length;
 			// 同一条 INSERT…SELECT,与 create 共用:窗口快照口径取本分享的 only_messages_after_created
@@ -800,11 +840,16 @@ const mailShareService = {
 				onlyMessagesAfterCreated: share.only_messages_after_created,
 				accountIds: add,
 				userId,
-				lid: share.lid
+				lid: share.lid,
+				snapshotIds,
+				snapshotCount
 			}));
 		}
 		if (remove.length) {
-			statements.push(prepareBindingDelete(c, { bindingIds: remove, shareId, userId, addAccountIds: add }));
+			removeIndex = statements.length;
+			statements.push(prepareBindingDelete(c, {
+				bindingIds: remove, shareId, userId, addAccountIds: add, snapshotIds, snapshotCount
+			}));
 		}
 		// AC-BIND-04:删空即撤销。谓词读同批 DELETE 之后的真实状态,不信预检算出的投影数。
 		statements.push(prepareRevoke(c, `share_id = ? AND user_id = ? AND NOT EXISTS (
@@ -815,10 +860,20 @@ const mailShareService = {
 
 		try {
 			const results = await c.env.db.batch(statements);
-			// 与 account 删除并发时 INSERT 是零行而不是报错;DELETE 的守卫已让整批零变更,
+			// CAS 落空 = 预读的集合已被并发命令改写,写入语句的同款谓词已让整批零变更。
+			// 调用方必须重读再决定,不能拿同一份 remove 列表原样重试 —— 那些 bindingId
+			// 可能已经不存在,重试只会变成一个语义完全不同的 SHARE_BINDING_FORBIDDEN。
+			if (!results[0].meta.changes) {
+				throw new BizError('SHARE_BINDING_CONFLICT');
+			}
+			// 与 account 删除并发时 INSERT 是零行而不是报错;DELETE 的谓词已让整批零变更,
 			// 这里只负责把它翻译成 AC-BIND-10 的错误码。
 			if (addIndex >= 0 && results[addIndex].meta.changes !== add.length) {
 				throw new BizError('SHARE_ACCOUNT_FORBIDDEN');
+			}
+			// CAS 命中之后集合在批内不会再动,所以 remove 少命中只可能是谓词自身拦下了整批。
+			if (removeIndex >= 0 && results[removeIndex].meta.changes !== remove.length) {
+				throw new BizError('SHARE_BINDING_CONFLICT');
 			}
 		} catch (err) {
 			if (err instanceof BizError) {

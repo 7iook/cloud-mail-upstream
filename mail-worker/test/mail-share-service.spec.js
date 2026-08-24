@@ -1457,6 +1457,44 @@ function killAccountOnBatch(accountId) {
 	});
 }
 
+// 把「预读之后 Binding 集合被并发命令改写」塞进预检与 batch 之间。用代理而不是两个
+// Promise，是因为这里要钉的是单条命令的写入侧谓词，不该依赖调度顺序。
+function driftBindingsOnBatch(mutate) {
+	const realBatch = env.db.batch.bind(env.db);
+	return new Proxy(env.db, {
+		get(target, prop) {
+			if (prop === 'batch') {
+				return async (statements) => {
+					await mutate();
+					return realBatch(statements);
+				};
+			}
+			const value = target[prop];
+			return typeof value === 'function' ? value.bind(target) : value;
+		}
+	});
+}
+
+// D1 每条语句最多 100 个绑定参数：https://developers.cloudflare.com/d1/platform/limits/
+const D1_MAX_BOUND_PARAMS = 100;
+const BULK_ACC_BASE = 909300;
+
+function bindSlots(sql) {
+	return (String(sql).match(/\?/g) || []).length;
+}
+
+// 上限用例必须用真实的自有 account：合成 id 在 assertOwnedAccounts 就被拒，
+// 根本走不到 SQL，也就证不了绑定参数预算。
+async function seedOwnedAccounts(count) {
+	const accountIds = [];
+	for (let index = 0; index < count; index += 1) {
+		const accountId = BULK_ACC_BASE + index;
+		await ensureAccount({ accountId, email: `t09-bulk-${index}@example.com`, userId: USER_A });
+		accountIds.push(accountId);
+	}
+	return accountIds;
+}
+
 const OWNER_EMAIL = 't13-owner@example.com';
 
 async function ownerJwt() {
@@ -1829,6 +1867,101 @@ describe('mailShareService.updateBindings (T-13)', () => {
 		expect(bindingInserts[0]).toBe(createInsert);
 	});
 
+	// ── P0-1：预读快照必须进写入侧，否则并发替换能提交出第三种集合 ──────────────
+	// V2=false 下两条命令各自算出 projected=1，栅栏都不触发。任何合法串行次序的终态
+	// 只能是 {C} 或 {D}；缺了写入侧快照，第二批的 INSERT 会成功、DELETE 落 0 行却被
+	// 当成成功，终态变成 {C,D} —— 一个 V2=false 根本不允许存在的 multi 分享。
+	it('lets only one of two concurrent replacements win (AC-BIND-12, AC-LIFE-11)', async () => {
+		await seedOwners();
+		await ensureAccount({ accountId: ACC_D, email: MAIL_D, userId: USER_A });
+		const share = await seedShareWithBindings([ACC_A]);
+
+		const settled = await Promise.allSettled([
+			mailShareService.updateBindings(ctx(), {
+				shareId: share.shareId, add: [ACC_C], remove: [share.bindingIds[0]]
+			}, USER_A),
+			mailShareService.updateBindings(ctx(), {
+				shareId: share.shareId, add: [ACC_D], remove: [share.bindingIds[0]]
+			}, USER_A)
+		]);
+
+		const won = settled.filter((outcome) => outcome.status === 'fulfilled');
+		expect(won).toHaveLength(1);
+		expect(settled.filter((outcome) => outcome.status === 'rejected')
+			.map((outcome) => outcome.reason.message)).toEqual(['SHARE_BINDING_CONFLICT']);
+
+		const rows = await listBindings(share.shareId);
+		expect(rows).toHaveLength(1);
+		expect([ACC_C, ACC_D]).toContain(rows[0].account_id);
+		expect(won[0].value.shareType).toBe('single');
+		const row = await readShareRow(share.shareId);
+		expect(row.status).toBe('ACTIVE');
+		expect(row.account_id).toBe(rows[0].account_id);
+	});
+
+	it('cannot let two concurrent adds push the count past SHARE_BINDING_LIMIT (AC-CAP-13)', async () => {
+		await seedOwners();
+		await ensureAccount({ accountId: ACC_D, email: MAIL_D, userId: USER_A });
+		const filler = Array.from({ length: SHARE_BINDING_LIMIT - 2 }, (_unused, index) => 993500 + index);
+		const share = await seedShareWithBindings([ACC_A, ...filler]);
+
+		const settled = await Promise.allSettled([
+			mailShareService.updateBindings(v2ctx(), { shareId: share.shareId, add: [ACC_C] }, USER_A),
+			mailShareService.updateBindings(v2ctx(), { shareId: share.shareId, add: [ACC_D] }, USER_A)
+		]);
+
+		expect(settled.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+		expect(settled.filter((outcome) => outcome.status === 'rejected')
+			.map((outcome) => outcome.reason.message)).toEqual(['SHARE_BINDING_CONFLICT']);
+		expect(await listBindings(share.shareId)).toHaveLength(SHARE_BINDING_LIMIT);
+	});
+
+	it('refuses a remove whose pre-read set gained a binding, with zero residue (AC-BIND-12)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const message = await catchBiz(mailShareService.updateBindings({
+			env: shareEnv({
+				db: driftBindingsOnBatch(() => seedBindingRow({ shareId: share.shareId, accountId: 993999 }))
+			})
+		}, { shareId: share.shareId, remove: [share.bindingIds[0]] }, USER_A));
+
+		expect(message).toBe('SHARE_BINDING_CONFLICT');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A, ACC_C, 993999]);
+		expect((await readShareRow(share.shareId)).status).toBe('ACTIVE');
+	});
+
+	it('refuses a remove whose pre-read set lost a binding, with zero residue (AC-BIND-12)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const message = await catchBiz(mailShareService.updateBindings({
+			env: shareEnv({
+				db: driftBindingsOnBatch(() => env.db.prepare('DELETE FROM mail_share_binding WHERE binding_id = ?')
+					.bind(share.bindingIds[1]).run())
+			})
+		}, { shareId: share.shareId, remove: [share.bindingIds[0]] }, USER_A));
+
+		expect(message).toBe('SHARE_BINDING_CONFLICT');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+	});
+
+	// 一条命令删多个 Binding：集合谓词必须按 DELETE 之前的状态求值一次，
+	// 逐行重算会让第二行起全部落空，变成半提交。
+	it('removes several bindings in one command (AC-BIND-12)', async () => {
+		await seedOwners();
+		await ensureAccount({ accountId: ACC_D, email: MAIL_D, userId: USER_A });
+		const share = await seedShareWithBindings([ACC_A, ACC_C, ACC_D]);
+
+		const result = await mailShareService.updateBindings(ctx(), {
+			shareId: share.shareId,
+			remove: [share.bindingIds[0], share.bindingIds[1]]
+		}, USER_A);
+
+		expect(result.bindings.map((binding) => binding.accountId)).toEqual([ACC_D]);
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_D]);
+	});
+
 	it('serves PUT /mailShare/bindings over HTTP for the owner', async () => {
 		await seedOwners();
 		const jwt = await ownerJwt();
@@ -1842,5 +1975,48 @@ describe('mailShareService.updateBindings (T-13)', () => {
 		const forbidden = await putBindings(jwt, { shareId: share.shareId, remove: [88882222] });
 		expect(forbidden.json.message).toBe('SHARE_BINDING_FORBIDDEN');
 		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+	});
+});
+
+// ── P1-1 · D1 每条语句最多 100 个绑定参数 ─────────────────────────────────────
+// SHARE_BINDING_LIMIT=50 是契约允许的合法上界，所以两个写入口在 N=50 时都必须过得去。
+// 本地 miniflare 不强制这条生产限制，因此除了「跑得通」还要直接数占位符。
+describe('D1 bound-parameter budget on the share write path (P1-1)', () => {
+	it.each([48, SHARE_BINDING_LIMIT])('creates a share with %i real owned mailboxes', async (count) => {
+		const accountIds = await seedOwnedAccounts(count);
+
+		const created = await mailShareService.create(v2ctx(), { accountIds, durationSeconds: 3600 }, USER_A);
+
+		expect(created.shareType).toBe('multi');
+		expect(created.bindings.map((binding) => binding.accountId)).toEqual(accountIds);
+		expect(await listBindings(created.shareId)).toHaveLength(count);
+	});
+
+	it('keeps every create statement under the limit at SHARE_BINDING_LIMIT', async () => {
+		const accountIds = await seedOwnedAccounts(SHARE_BINDING_LIMIT);
+		const probe = batchProbe();
+
+		await mailShareService.create({
+			env: shareEnv({ db: probe.db, SHARE_CAPABILITY_V2: 'true' })
+		}, { accountIds, durationSeconds: 3600, idempotencyKey: 'bulk-cap' }, USER_A);
+
+		expect(probe.seen.filter((sql) => bindSlots(sql) > D1_MAX_BOUND_PARAMS)).toEqual([]);
+		const bindingInsert = probe.seen.find((sql) => /INSERT\s+INTO\s+mail_share_binding/i.test(sql));
+		expect(bindSlots(bindingInsert)).toBeLessThanOrEqual(D1_MAX_BOUND_PARAMS);
+	});
+
+	it('keeps the largest legal replacement under the limit', async () => {
+		const accountIds = await seedOwnedAccounts(SHARE_BINDING_LIMIT * 2);
+		const seated = accountIds.slice(0, SHARE_BINDING_LIMIT);
+		const incoming = accountIds.slice(SHARE_BINDING_LIMIT);
+		const share = await seedShareWithBindings(seated);
+		const probe = batchProbe();
+
+		const result = await mailShareService.updateBindings({
+			env: shareEnv({ db: probe.db, SHARE_CAPABILITY_V2: 'true' })
+		}, { shareId: share.shareId, add: incoming, remove: share.bindingIds }, USER_A);
+
+		expect(result.bindings.map((binding) => binding.accountId)).toEqual(incoming);
+		expect(probe.seen.filter((sql) => bindSlots(sql) > D1_MAX_BOUND_PARAMS)).toEqual([]);
 	});
 });
