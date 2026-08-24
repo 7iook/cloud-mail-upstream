@@ -14,6 +14,17 @@ const encoder = new TextEncoder();
 // R3-A5 / AC-CAP-13:每分享 Binding 数量硬上限,create 与 bindings 两个写入口共用。
 export const SHARE_BINDING_LIMIT = 50;
 
+// R1-F2 的 list 分页口径:`size` 默认 20 / 上限 100;无参调用是兼容期的 deprecated 全量
+// 转储,不套默认分页(前端 `request/mail-share.js:34` 至今不带参数),只压一条硬上限。
+const LIST_DEFAULT_SIZE = 20;
+const LIST_MAX_SIZE = 100;
+const LIST_DEPRECATED_CAP = 500;
+
+// AC-LIFE-01:落库只有 ACTIVE/REVOKED,四态是实时算的。筛选因此不能直接比 status 列,
+// 必须在 SQL 里重算同一条优先级链,而且 `total` 与结果集要用同一份 CASE ——
+// 用「先取页再在内存里筛」会让 total 与筛选结果对不上。
+const OWNER_STATUSES = ['ACTIVE', 'EXPIRED', 'REVOKED', 'ACCESS_LIMIT_REACHED'];
+
 // AC-LIFE-11:滚动发布窗口内旧 Worker 无法执行的策略写入。message_limit 与前四条同构 ——
 // 旧 Worker 不认识该列,落库即「可见集被放宽到窗口内全部邮件」。
 export const SHARE_V2_INTENT = {
@@ -106,6 +117,21 @@ function publicOrigin(c) {
 
 function isRowId(value) {
 	return Number.isSafeInteger(value) && value > 0;
+}
+
+// 布尔要显式挡掉:`Number(true) === 1` 会把 `shareId: true` 变成一次对 share_id=1 的
+// 越权探测。不合法一律折成 0,调用方按「不存在」处理(不新增可区分错误码)。
+function toShareId(value) {
+	const id = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+	return isRowId(id) ? id : 0;
+}
+
+function hasKey(params, key) {
+	return params != null && Object.prototype.hasOwnProperty.call(params, key);
+}
+
+function hasValue(params, key) {
+	return hasKey(params, key) && params[key] != null && params[key] !== '';
 }
 
 // AC-CAP-06:值域封在归一化边界,不是转换之后。`assertCreateBody` 只看得见转换后的数值,
@@ -339,7 +365,62 @@ function assertCreateBody(c, body) {
 	}
 }
 
-function projectOwnerRow(row, mailbox, now) {
+// Owner 面唯一的列清单。凭据物料(`sec_hmac` / `pepper_kid` / `auth_key_hash` /
+// `auth_key_kid`)与 `credentials_version` 一律不进 SELECT —— 取不到就漏不掉。
+const OWNER_ROW_COLUMNS = `
+	ms.share_id, ms.lid, ms.user_id, ms.account_id, ms.name, ms.remark, ms.status,
+	ms.window_start_email_id, ms.create_time, ms.expires_at, ms.delete_at,
+	ms.access_count, ms.last_access_at, ms.revoked_at,
+	ms.max_sessions, ms.message_limit, ms.only_messages_after_created,
+	ms.otp_extraction_enabled, ms.auto_refresh, ms.refresh_interval_ms,
+	ms.show_full_address, ms.auth_key_enabled
+`;
+
+// `share-auth-service.effectiveStatus` 的 SQL 孪生:同一条优先级链
+// REVOKED > EXPIRED > ACCESS_LIMIT_REACHED > ACTIVE,`expires_at` 与 `now` 同为
+// `YYYY-MM-DD HH:mm:ss`,字典序比较与 JS 侧逐字一致。唯一的绑定参数是 now。
+const OWNER_STATUS_CASE = `CASE
+	WHEN ms.status = 'REVOKED' THEN 'REVOKED'
+	WHEN ms.expires_at <= ? THEN 'EXPIRED'
+	WHEN ms.max_sessions IS NOT NULL AND ms.access_count >= ms.max_sessions THEN 'ACCESS_LIMIT_REACHED'
+	ELSE 'ACTIVE'
+END`;
+
+function toOwnerRow(row) {
+	return {
+		shareId: row.share_id,
+		lid: row.lid,
+		userId: row.user_id,
+		accountId: row.account_id,
+		name: row.name,
+		remark: row.remark,
+		status: row.status,
+		windowStartEmailId: row.window_start_email_id,
+		createTime: row.create_time,
+		expiresAt: row.expires_at,
+		deleteAt: row.delete_at,
+		accessCount: row.access_count,
+		lastAccessAt: row.last_access_at,
+		revokedAt: row.revoked_at,
+		maxSessions: row.max_sessions,
+		messageLimit: row.message_limit,
+		onlyMessagesAfterCreated: row.only_messages_after_created,
+		otpExtractionEnabled: row.otp_extraction_enabled,
+		autoRefresh: row.auto_refresh,
+		refreshIntervalMs: row.refresh_interval_ms,
+		authKeyEnabled: row.auth_key_enabled,
+		showFullAddress: row.show_full_address
+	};
+}
+
+function toBoolean(value) {
+	return value === 1 || value === '1' || value === true;
+}
+
+// 列表行与详情共用一套字段名(详情 = 列表行 + bindings 明细),两处分叉出两套键名
+// 是前端最容易踩的坑。`maxSessions` 必须在这里出现:`effectiveStatus` 拿不到它时
+// ACCESS_LIMIT_REACHED 那条分支恒不可达,AC-ADMIN-04/09 会假绿。
+function projectOwnerRow(row, mailbox, now, bindings = []) {
 	return {
 		shareId: row.shareId,
 		lid: row.lid,
@@ -350,13 +431,26 @@ function projectOwnerRow(row, mailbox, now) {
 		remark: row.remark,
 		status: row.status,
 		effectiveStatus: shareAuthService.effectiveStatus(row, now),
+		shareType: shareTypeOf(bindings),
 		windowStartEmailId: row.windowStartEmailId,
 		createTime: row.createTime,
 		expiresAt: row.expiresAt,
 		deleteAt: row.deleteAt,
+		// D4/R1-A1:物理列名 `access_count` 不改,`usedSessions` 是新增的 DTO 别名。
+		// 两个键并存,删掉 `accessCount` 会打红三条 list 基线断言。
 		accessCount: row.accessCount,
+		usedSessions: row.accessCount,
+		maxSessions: row.maxSessions == null ? null : row.maxSessions,
+		messageLimit: row.messageLimit == null ? null : row.messageLimit,
+		onlyMessagesAfterCreated: toBoolean(row.onlyMessagesAfterCreated),
+		otpExtractionEnabled: toBoolean(row.otpExtractionEnabled),
+		autoRefresh: toBoolean(row.autoRefresh),
+		refreshIntervalMs: row.refreshIntervalMs,
+		showFullAddress: toBoolean(row.showFullAddress),
+		authKeyEnabled: toBoolean(row.authKeyEnabled),
 		lastAccessAt: row.lastAccessAt,
-		revokedAt: row.revokedAt
+		revokedAt: row.revokedAt,
+		bindings
 	};
 }
 
@@ -386,6 +480,48 @@ async function loadBindings(c, shareId) {
 		WHERE share_id = ? ORDER BY binding_id ASC
 	`).bind(shareId).all();
 	return (rows.results || []).map((row) => ({ bindingId: row.binding_id, accountId: row.account_id }));
+}
+
+// Owner 面的 Binding 摘要,按 share 分组。两条硬约束决定了这个形状:
+// ① 摘要绝不能 JOIN 进 list 主查询 —— LIMIT/OFFSET 会作用在展开后的行上,
+//    一个 5 邮箱的分享就吃掉 5 个名额;
+// ② shareId 列表走 `json_each(?)` 而不是展开 `IN (?,?,…)` —— size 上限恰是 100,
+//    而 D1 每条语句最多 100 个绑定参数,展开即越界。
+async function loadBindingSummaries(c, shareIds) {
+	const grouped = new Map();
+	if (!shareIds.length) {
+		return grouped;
+	}
+	const rows = await c.env.db.prepare(`
+		SELECT b.share_id, b.binding_id, b.account_id, a.email AS mailbox
+		FROM mail_share_binding b
+		LEFT JOIN account a ON a.account_id = b.account_id
+		WHERE b.share_id IN (SELECT value FROM json_each(?))
+		ORDER BY b.share_id ASC, b.binding_id ASC
+	`).bind(JSON.stringify(shareIds)).all();
+	for (const row of rows.results || []) {
+		const list = grouped.get(row.share_id) || [];
+		list.push({ bindingId: row.binding_id, accountId: row.account_id, mailbox: row.mailbox || '' });
+		grouped.set(row.share_id, list);
+	}
+	return grouped;
+}
+
+// get / update 的读出口。谓词只有 `share_id + user_id`:AC-ADMIN-09 要求 EXPIRED /
+// REVOKED / ACCESS_LIMIT_REACHED 行仍可读可审计,套上 `loadMutableShare` 的 ACTIVE
+// 谓词会直接把审计面砍掉。他人 shareId 与不存在共用 `SHARE_NOT_FOUND`。
+async function loadOwnerDetail(c, shareId, userId) {
+	const row = shareId ? await c.env.db.prepare(`
+		SELECT ${OWNER_ROW_COLUMNS}, a.email AS mailbox
+		FROM mail_share ms
+		LEFT JOIN account a ON a.account_id = ms.account_id
+		WHERE ms.share_id = ? AND ms.user_id = ?
+	`).bind(shareId, userId).first() : null;
+	if (!row) {
+		throw new BizError('SHARE_NOT_FOUND');
+	}
+	const bindings = (await loadBindingSummaries(c, [shareId])).get(shareId) || [];
+	return projectOwnerRow(toOwnerRow(row), row.mailbox, nowText(), bindings);
 }
 
 function firstCreateResponse(c, row, sec, authKey, bindings) {
@@ -696,6 +832,127 @@ async function insertShareAndIdempotency(c, values) {
 	throw new BizError('SHARE_LIMIT_EXCEEDED');
 }
 
+// patch 语义与 create 归一化恰好相反,所以**不能**复用 `normalizeCreateBody`:
+// 后者是「缺省即 DDL 默认值」,用在 patch 上会把 Owner 没提交的 otp_extraction_enabled
+// 悄悄打回 1、把 max_sessions 悄悄清成 NULL。这里一律以「键在不在」判在场
+// (`hasOwnProperty`,不是真值判断),「键不存在 = 不改」与「键存在且为 null = 清空」
+// 必须可区分。顺带:`normalizeCreateBody` 的字段顺序是幂等指纹的一部分,也不许反过来改它。
+function toPatchFlag(value) {
+	const flag = FLAG_TOKENS.get(value);
+	if (flag === undefined) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	return flag;
+}
+
+function toPatchCount(value) {
+	const count = toNullableCount(value);
+	if (count != null && count < 1) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	return count;
+}
+
+function toPatchInterval(value) {
+	const ms = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+	if (!Number.isSafeInteger(ms) || ms < MIN_REFRESH_INTERVAL_MS) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	return ms;
+}
+
+function toPatchText(value) {
+	return value == null ? '' : String(value);
+}
+
+// design.md:303 的可变字段白名单,一字不多。SET 子句只从这张表生成 ——
+// 禁止 `Object.keys(patch)` 拼 SQL,否则 lid / sec_hmac / expires_at / auth_key_* /
+// credentials_version / status / user_id / account_id / window_start_email_id
+// 全都成了可写列。`onlyMessagesAfterCreated` 刻意不在表内:改它会让主表与 Binding 的
+// window 下界与新口径失配,而重算窗口是 create/bindings 两条写入口的语义。
+const UPDATE_FIELDS = [
+	{ key: 'name', column: 'name', read: toPatchText },
+	{ key: 'remark', column: 'remark', read: toPatchText },
+	{ key: 'maxSessions', column: 'max_sessions', read: toPatchCount },
+	{ key: 'messageLimit', column: 'message_limit', read: toPatchCount },
+	{ key: 'otpExtractionEnabled', column: 'otp_extraction_enabled', read: toPatchFlag },
+	{ key: 'autoRefresh', column: 'auto_refresh', read: toPatchFlag },
+	{ key: 'refreshIntervalMs', column: 'refresh_interval_ms', read: toPatchInterval },
+	{ key: 'showFullAddress', column: 'show_full_address', read: toPatchFlag }
+];
+
+function normalizeUpdateBody(params) {
+	const patch = [];
+	for (const field of UPDATE_FIELDS) {
+		if (!hasKey(params, field.key)) {
+			continue;
+		}
+		patch.push({ key: field.key, column: field.column, value: field.read(params[field.key]) });
+	}
+	return patch;
+}
+
+// 顺序即语义,与 `assertCreateBody` 同构:值域(已在 normalize 里逐字段抛出)在前,
+// 栅栏在后。update 侧恰好且只有两条 intent —— AuthKey 归 resetAuthKey 单入口、
+// accountIds 归 bindings,都不在白名单里。
+// 触发条件是「设为有限值」而不是「键出现在 patch 里」:显式 null 是取消限制,
+// 旧 Worker 语义完全兼容,放行。少接 MESSAGE_LIMIT 这条就是绕过栅栏写 message_limit
+// 的后门 —— 旧 Worker 不认识该列,落库即可见集被放宽到窗口内全部邮件。
+function assertUpdatePatch(c, patch) {
+	const setsFinite = (key) => patch.some((item) => item.key === key && item.value != null);
+	if (setsFinite('maxSessions')) {
+		assertCapabilityV2(c, SHARE_V2_INTENT.FINITE_MAX_SESSIONS);
+	}
+	if (setsFinite('messageLimit')) {
+		assertCapabilityV2(c, SHARE_V2_INTENT.MESSAGE_LIMIT);
+	}
+}
+
+// AC-EDGE-14:配额纪元基线只建立一次。判据取**旧值** —— SQLite 单条 UPDATE 的所有 SET
+// 表达式都读更新前的行值,所以 `max_sessions IS NULL` 在这条语句里恒指旧值,与 SET 子句
+// 的先后顺序无关。别把它「优化」成先 SELECT 再判:那就是一次先读后写。
+function prepareUpdate(c, values) {
+	const assignments = values.patch.map((item) => `${item.column} = ?`);
+	if (values.resetUsedSessions) {
+		assignments.push('access_count = CASE WHEN max_sessions IS NULL THEN 0 ELSE access_count END');
+	}
+	return c.env.db.prepare(`
+		UPDATE mail_share
+		SET ${assignments.join(', ')}
+		WHERE share_id = ? AND user_id = ? AND status = 'ACTIVE' AND expires_at > ?
+	`).bind(...values.patch.map((item) => item.value), values.shareId, values.userId, nowText());
+}
+
+// 入参抗污染:`size='abc'` / `0` / `-1` / `page=true` 一律钳到默认或上限,而不是抛错 ——
+// 前端传一个脏参数不该把整页打死。`page`/`size` 都缺席才走 deprecated 全量转储。
+function clampPositive(value, fallback, max) {
+	const num = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+	if (!Number.isSafeInteger(num) || num < 1) {
+		return fallback;
+	}
+	return Math.min(num, max);
+}
+
+function normalizeListPaging(params) {
+	if (!hasValue(params, 'page') && !hasValue(params, 'size')) {
+		return { paged: false, limit: LIST_DEPRECATED_CAP, offset: 0 };
+	}
+	const size = clampPositive(params.size, LIST_DEFAULT_SIZE, LIST_MAX_SIZE);
+	const page = clampPositive(params.page, 1, Number.MAX_SAFE_INTEGER);
+	return { paged: true, page, size, limit: size, offset: (page - 1) * size };
+}
+
+function normalizeListStatus(params) {
+	if (!hasValue(params, 'status')) {
+		return null;
+	}
+	const status = String(params.status).toUpperCase();
+	if (!OWNER_STATUSES.includes(status)) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	return status;
+}
+
 // 变更入口只认 effectiveStatus=ACTIVE 的本人分享(AC-BIND-02)。他人 / 不存在 / 已撤销 /
 // 已过期共用 revoke 的 `SHARE_NOT_FOUND`,不新增可区分错误码。
 async function loadMutableShare(c, shareId, userId) {
@@ -894,36 +1151,100 @@ const mailShareService = {
 		};
 	},
 
-	async list(c, _params, userId) {
+	// AC-ADMIN-02:单条详情 = 列表行 + Binding 明细 + 全部配置,非 ACTIVE 行同样可读。
+	async get(c, params, userId) {
+		return loadOwnerDetail(c, toShareId(params && params.shareId), userId);
+	},
+
+	// AC-ADMIN-03 / AC-EDGE-14:白名单 patch。「下次 Visitor 请求生效」不需要额外动作 ——
+	// 读路径每请求回源查库,落库即生效。
+	async update(c, params, userId) {
+		const shareId = toShareId(params && params.shareId);
+		// 改配置只对活分享有意义,与 updateBindings 同一把锁;他人/已撤销/已过期共用
+		// SHARE_NOT_FOUND(存在性探针封闭)。
+		await loadMutableShare(c, shareId, userId);
+		const patch = normalizeUpdateBody(params);
+		assertUpdatePatch(c, patch);
+		if (patch.length) {
+			const resetUsedSessions = patch.some((item) => item.key === 'maxSessions' && item.value != null)
+				&& toFlag(params.resetUsedSessions, 1) === 1;
+			const applied = await prepareUpdate(c, { patch, resetUsedSessions, shareId, userId }).run();
+			// 预检与写入之间被并发 revoke / 过期赶上:零变更,按不存在处置。
+			if (!applied.meta.changes) {
+				throw new BizError('SHARE_NOT_FOUND');
+			}
+		}
+		return loadOwnerDetail(c, shareId, userId);
+	},
+
+	// AC-ADMIN-07:物理删除。两张子表都没有 FOREIGN KEY,D1 也不开 ON DELETE CASCADE,
+	// 级联全靠这三条语句。顺序是子表在前、主表在后:子表的归属谓词要经 mail_share 回查
+	// user_id,主表行一旦先删,归属判据就消失了。同一个 batch 才有原子性。
+	// 谓词只有 `share_id + user_id`(不带 status/expires_at)—— 删的往往正是
+	// REVOKED / EXPIRED 行,套上 revoke 的活跃谓词就删不掉了。
+	async delete(c, params, userId) {
+		const shareId = toShareId(params && params.shareId);
+		if (!shareId) {
+			throw new BizError('SHARE_NOT_FOUND');
+		}
+		const results = await c.env.db.batch([
+			c.env.db.prepare(`
+				DELETE FROM mail_share_binding
+				WHERE share_id = ? AND EXISTS (
+					SELECT 1 FROM mail_share ms WHERE ms.share_id = ? AND ms.user_id = ?
+				)
+			`).bind(shareId, shareId, userId),
+			c.env.db.prepare(`
+				DELETE FROM share_idempotency WHERE share_id = ? AND user_id = ?
+			`).bind(shareId, userId),
+			c.env.db.prepare(`
+				DELETE FROM mail_share WHERE share_id = ? AND user_id = ?
+			`).bind(shareId, userId)
+		]);
+		if (!results[results.length - 1].meta.changes) {
+			throw new BizError('SHARE_NOT_FOUND');
+		}
+		return { shareId };
+	},
+
+	async list(c, params, userId) {
+		const now = nowText();
+		const status = normalizeListStatus(params);
+		const paging = normalizeListPaging(params);
+		const filterSql = status ? ` AND ${OWNER_STATUS_CASE} = ?` : '';
+		const filterBinds = status ? [now, status] : [];
+
+		// `total` 与结果集共用同一条 CASE 与同一个 now,所以分页后两者仍然自洽;
+		// 单独数一次而不是 `COUNT(*) OVER ()`,是为了让越界页(空结果集)也报得出真实总数。
+		const counted = await c.env.db.prepare(`
+			SELECT COUNT(*) AS total FROM mail_share ms
+			WHERE ms.user_id = ?${filterSql}
+		`).bind(userId, ...filterBinds).first();
+
 		const rows = await c.env.db.prepare(`
-			SELECT
-				ms.share_id, ms.lid, ms.user_id, ms.account_id, ms.name, ms.remark,
-				ms.status, ms.window_start_email_id, ms.create_time, ms.expires_at,
-				ms.delete_at, ms.access_count, ms.last_access_at, ms.revoked_at,
-				a.email AS mailbox
+			SELECT ${OWNER_ROW_COLUMNS}, a.email AS mailbox
 			FROM mail_share ms
 			LEFT JOIN account a ON a.account_id = ms.account_id
-			WHERE ms.user_id = ?
+			WHERE ms.user_id = ?${filterSql}
 			ORDER BY ms.share_id DESC
-		`).bind(userId).all();
-		const now = nowText();
-		const list = (rows.results || []).map((row) => projectOwnerRow({
-			shareId: row.share_id,
-			lid: row.lid,
-			userId: row.user_id,
-			accountId: row.account_id,
-			name: row.name,
-			remark: row.remark,
-			status: row.status,
-			windowStartEmailId: row.window_start_email_id,
-			createTime: row.create_time,
-			expiresAt: row.expires_at,
-			deleteAt: row.delete_at,
-			accessCount: row.access_count,
-			lastAccessAt: row.last_access_at,
-			revokedAt: row.revoked_at
-		}, row.mailbox, now));
-		return { list, total: list.length };
+			LIMIT ? OFFSET ?
+		`).bind(userId, ...filterBinds, paging.limit, paging.offset).all();
+
+		const results = rows.results || [];
+		const bindings = await loadBindingSummaries(c, results.map((row) => row.share_id));
+		const list = results.map((row) => projectOwnerRow(
+			toOwnerRow(row), row.mailbox, now, bindings.get(row.share_id) || []
+		));
+		const response = { list, total: counted.total };
+		if (paging.paged) {
+			response.page = paging.page;
+			response.size = paging.size;
+		} else {
+			// 无参调用不是分页,而是「不分页 + 硬顶 500 行」;`total` 仍给真实总数,
+			// `total > list.length` 即被截断。前端应改走 page/size。
+			response.deprecated = true;
+		}
+		return response;
 	},
 
 	async revoke(c, params, userId) {

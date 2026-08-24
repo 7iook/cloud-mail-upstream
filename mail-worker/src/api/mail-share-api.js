@@ -32,6 +32,22 @@ app.get('/mailShare/list', withShare(async (c) => {
 	return shareJson(c, shareResult.ok(data));
 }));
 
+app.get('/mailShare/get', withShare(async (c) => {
+	const data = await mailShareService.get(c, c.req.query(), userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
+app.put('/mailShare/update', withShare(async (c) => {
+	const body = await c.req.json();
+	const data = await mailShareService.update(c, body, userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
+app.delete('/mailShare/delete', withShare(async (c) => {
+	const data = await mailShareService.delete(c, c.req.query(), userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
 app.put('/mailShare/bindings', withShare(async (c) => {
 	const body = await c.req.json();
 	const data = await mailShareService.updateBindings(c, body, userContext.getUserId(c));

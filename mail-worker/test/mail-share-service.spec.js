@@ -1497,12 +1497,32 @@ async function seedOwnedAccounts(count) {
 
 const OWNER_EMAIL = 't13-owner@example.com';
 
+// T-15：`/mailShare/list` 在 `requirePermsExact` 里，所以 HTTP 用例的 Owner 必须真的
+// 持有 `share:manage`（`user.type` 即 role_id）。新加的 get/update/delete 三条尚未进
+// 那张表（归 T-17），本 helper 一并授权，等 T-17 收编后无需再改。
+const SHARE_PERM_ID = 37;
+const SHARE_ROLE_ID = 98;
+
 async function ownerJwt() {
+	await env.db.prepare(`
+		INSERT OR IGNORE INTO perm (perm_id, name, perm_key, pid, type, sort)
+		VALUES (?, 'share-manage', 'share:manage', 0, 2, 0)
+	`).bind(SHARE_PERM_ID).run();
+	await env.db.prepare(`
+		INSERT OR IGNORE INTO role (role_id, name, send_type, is_default)
+		VALUES (?, 'share-only', 'count', 0)
+	`).bind(SHARE_ROLE_ID).run();
+	const bound = await env.db.prepare('SELECT id FROM role_perm WHERE role_id = ? AND perm_id = ?')
+		.bind(SHARE_ROLE_ID, SHARE_PERM_ID).first();
+	if (!bound) {
+		await env.db.prepare('INSERT INTO role_perm (role_id, perm_id) VALUES (?, ?)')
+			.bind(SHARE_ROLE_ID, SHARE_PERM_ID).run();
+	}
 	await env.db.prepare('DELETE FROM user WHERE user_id = ? OR email = ?').bind(USER_A, OWNER_EMAIL).run();
 	await env.db.prepare(`
 		INSERT INTO user (user_id, email, type, password, salt, status, is_del)
-		VALUES (?, ?, 0, 'x', 'x', 0, 0)
-	`).bind(USER_A, OWNER_EMAIL).run();
+		VALUES (?, ?, ?, 'x', 'x', 0, 0)
+	`).bind(USER_A, OWNER_EMAIL, SHARE_ROLE_ID).run();
 	const token = crypto.randomUUID();
 	const jwt = await jwtUtils.generateToken({ env }, { userId: USER_A, token });
 	await env.kv.put(KvConst.AUTH_INFO + USER_A, JSON.stringify({
@@ -2018,5 +2038,705 @@ describe('D1 bound-parameter budget on the share write path (P1-1)', () => {
 
 		expect(result.bindings.map((binding) => binding.accountId)).toEqual(incoming);
 		expect(probe.seen.filter((sql) => bindSlots(sql) > D1_MAX_BOUND_PARAMS)).toEqual([]);
+	});
+});
+
+// ── T-15 · Owner API：get / update / delete + list 分页与新投影 ───────────────
+// 分享行一律 seedShareRow + seedBindingRow 直接造：本任务要测的是「已存在的行被读 /
+// 改 / 删」，create 的栅栏与幂等是另一个写入口的语义。
+
+const LIST_DEPRECATED_CAP = 500;
+
+function sqlTime(offsetSeconds = 0) {
+	return new Date(Date.now() + offsetSeconds * 1000).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// 四态各造一行，供 status 筛选与 effectiveStatus 投影两组用例共用。
+async function seedFourStates() {
+	const active = await seedShareRow({ userId: USER_A, accountId: ACC_A, name: 'st-active' });
+	const expired = await seedShareRow({
+		userId: USER_A, accountId: ACC_A, name: 'st-expired', expiresAt: '2001-01-01 00:00:00'
+	});
+	const revoked = await seedShareRow({
+		userId: USER_A, accountId: ACC_A, name: 'st-revoked', status: 'REVOKED', revokedAt: sqlTime(-60)
+	});
+	const capped = await seedShareRow({
+		userId: USER_A, accountId: ACC_A, name: 'st-capped', maxSessions: 2, accessCount: 2
+	});
+	return { active, expired, revoked, capped };
+}
+
+// 一条语句造 N 行：分页硬上限要 500+ 行才验得到，逐条 INSERT 会把用例拖成分钟级。
+async function seedBulkShares(count, { userId = USER_A, accountId = ACC_A, prefix = 't15-bulk' } = {}) {
+	await env.db.prepare(`
+		WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < ?)
+		INSERT INTO mail_share (lid, sec_hmac, pepper_kid, user_id, account_id, name, expires_at, delete_at)
+		SELECT ? || '-' || n, 'x', 'v1', ?, ?, ? || '-' || n, ?, ?
+		FROM seq
+	`).bind(count, prefix, userId, accountId, prefix, sqlTime(3600), sqlTime(7200)).run();
+}
+
+async function seedIdempotencyRow(shareId, userId, key) {
+	await env.db.prepare(`
+		INSERT INTO share_idempotency (user_id, idempotency_key, operation, request_fingerprint, share_id, created_at)
+		VALUES (?, ?, 'create', 'fp', ?, ?)
+	`).bind(userId, key, shareId, sqlTime(0)).run();
+}
+
+async function countIdempotency(shareId) {
+	const row = await env.db.prepare('SELECT COUNT(*) AS n FROM share_idempotency WHERE share_id = ?')
+		.bind(shareId).first();
+	return row.n;
+}
+
+async function ownerApi(method, path, { jwt, body } = {}) {
+	const headers = { Authorization: jwt, 'accept-language': 'en' };
+	if (body !== undefined) {
+		headers['content-type'] = 'application/json';
+	}
+	const response = await SELF.fetch(`http://example.com/api${path}`, {
+		method,
+		headers,
+		body: body === undefined ? undefined : JSON.stringify(body)
+	});
+	return { status: response.status, json: await response.json() };
+}
+
+describe('mailShareService.get (T-15)', () => {
+	it('returns the detail, the binding list and the full config for an owned share (AC-ADMIN-02)', async () => {
+		await seedOwners();
+		const share = await seedShareRow({
+			userId: USER_A,
+			accountId: ACC_A,
+			name: 'desk',
+			remark: 'front door',
+			maxSessions: 7,
+			messageLimit: 3,
+			onlyMessagesAfterCreated: 0,
+			otpExtractionEnabled: 0,
+			autoRefresh: 0,
+			refreshIntervalMs: 15000,
+			showFullAddress: 1,
+			accessCount: 2
+		});
+		const first = await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+		const second = await seedBindingRow({ shareId: share.shareId, accountId: ACC_C });
+
+		const detail = await mailShareService.get(ctx(), { shareId: share.shareId }, USER_A);
+
+		expect(detail).toMatchObject({
+			shareId: share.shareId,
+			lid: share.lid,
+			userId: USER_A,
+			mailbox: MAIL_A,
+			name: 'desk',
+			remark: 'front door',
+			status: 'ACTIVE',
+			effectiveStatus: 'ACTIVE',
+			shareType: 'multi',
+			maxSessions: 7,
+			messageLimit: 3,
+			usedSessions: 2,
+			// T12：物理列名不改，`usedSessions` 是新增别名，两个键必须并存。
+			accessCount: 2,
+			onlyMessagesAfterCreated: false,
+			otpExtractionEnabled: false,
+			autoRefresh: false,
+			refreshIntervalMs: 15000,
+			showFullAddress: true,
+			authKeyEnabled: false
+		});
+		expect(detail.bindings).toEqual([
+			{ bindingId: first, accountId: ACC_A, mailbox: MAIL_A },
+			{ bindingId: second, accountId: ACC_C, mailbox: MAIL_C }
+		]);
+	});
+
+	it('still serves EXPIRED, REVOKED and ACCESS_LIMIT_REACHED rows for audit (AC-ADMIN-09)', async () => {
+		await seedOwners();
+		const states = await seedFourStates();
+
+		const seen = {};
+		for (const [key, row] of Object.entries(states)) {
+			seen[key] = (await mailShareService.get(ctx(), { shareId: row.shareId }, USER_A)).effectiveStatus;
+		}
+
+		expect(seen).toEqual({
+			active: 'ACTIVE',
+			expired: 'EXPIRED',
+			revoked: 'REVOKED',
+			capped: 'ACCESS_LIMIT_REACHED'
+		});
+	});
+
+	it('answers SHARE_NOT_FOUND for another owner, a missing row and a malformed id (AC-ADMIN-02)', async () => {
+		await seedOwners();
+		const theirs = await seedShareRow({ userId: USER_B, accountId: ACC_B });
+		await seedBindingRow({ shareId: theirs.shareId, accountId: ACC_B });
+
+		for (const shareId of [theirs.shareId, 88881111, 0, -1, 'abc', null, undefined, true]) {
+			expect(await catchBiz(mailShareService.get(ctx(), { shareId }, USER_A))).toBe('SHARE_NOT_FOUND');
+		}
+	});
+
+	it('never hands back a credential column (AC-SEC-09)', async () => {
+		await seedOwners();
+		const share = await seedShareRow({
+			userId: USER_A,
+			accountId: ACC_A,
+			secHmac: 't15-secret-hmac-value',
+			authKeyEnabled: 1,
+			authKeyHash: 't15-secret-key-hash',
+			authKeyKid: 'v9',
+			credentialsVersion: 4
+		});
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+
+		const detail = await mailShareService.get(ctx(), { shareId: share.shareId }, USER_A);
+		const serialized = JSON.stringify(detail);
+
+		expect(serialized).not.toContain('t15-secret-hmac-value');
+		expect(serialized).not.toContain('t15-secret-key-hash');
+		expect(Object.keys(detail)).not.toContain('secHmac');
+		expect(Object.keys(detail)).not.toContain('authKeyHash');
+		expect(Object.keys(detail)).not.toContain('authKeyKid');
+		expect(Object.keys(detail)).not.toContain('pepperKid');
+		// 前端 AuthKey 区只需要状态，不需要任何密钥物料。
+		expect(detail.authKeyEnabled).toBe(true);
+	});
+});
+
+describe('mailShareService.update (T-15)', () => {
+	async function seedConfigured(overrides = {}) {
+		const share = await seedShareRow({
+			userId: USER_A,
+			accountId: ACC_A,
+			name: 'before',
+			remark: 'note',
+			maxSessions: 5,
+			messageLimit: 3,
+			onlyMessagesAfterCreated: 0,
+			otpExtractionEnabled: 0,
+			autoRefresh: 0,
+			refreshIntervalMs: 15000,
+			showFullAddress: 1,
+			accessCount: 2,
+			...overrides
+		});
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+		return share;
+	}
+
+	it('writes only the keys present in the patch (AC-ADMIN-03)', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+
+		await mailShareService.update(ctx(), { shareId: share.shareId, name: 'after' }, USER_A);
+
+		// 缺席的键必须原样留下，不能回落 DDL 默认值（patch ≠ create 归一）。
+		expect(await readShareRow(share.shareId)).toMatchObject({
+			name: 'after',
+			remark: 'note',
+			max_sessions: 5,
+			message_limit: 3,
+			only_messages_after_created: 0,
+			otp_extraction_enabled: 0,
+			auto_refresh: 0,
+			refresh_interval_ms: 15000,
+			show_full_address: 1,
+			access_count: 2
+		});
+	});
+
+	it('accepts an empty patch as a no-op that returns the current detail', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+		const before = await readShareRow(share.shareId);
+
+		const detail = await mailShareService.update(ctx(), { shareId: share.shareId }, USER_A);
+
+		expect(detail.shareId).toBe(share.shareId);
+		expect(await readShareRow(share.shareId)).toEqual(before);
+	});
+
+	it('writes every whitelisted field (AC-ADMIN-03)', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+
+		const detail = await mailShareService.update(v2ctx(), {
+			shareId: share.shareId,
+			name: 'renamed',
+			remark: 'moved',
+			maxSessions: 9,
+			messageLimit: 4,
+			otpExtractionEnabled: true,
+			autoRefresh: true,
+			refreshIntervalMs: 8000,
+			showFullAddress: false
+		}, USER_A);
+
+		expect(await readShareRow(share.shareId)).toMatchObject({
+			name: 'renamed',
+			remark: 'moved',
+			max_sessions: 9,
+			message_limit: 4,
+			otp_extraction_enabled: 1,
+			auto_refresh: 1,
+			refresh_interval_ms: 8000,
+			show_full_address: 0
+		});
+		expect(detail).toMatchObject({
+			name: 'renamed',
+			maxSessions: 9,
+			messageLimit: 4,
+			otpExtractionEnabled: true,
+			refreshIntervalMs: 8000,
+			showFullAddress: false
+		});
+	});
+
+	it('leaves lid, sec, expiry, AuthKey, cv and the binding-derived columns untouched (AC-AUTH-07)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({
+			authKeyEnabled: 1,
+			authKeyHash: 't15-hash',
+			authKeyKid: 'v9',
+			credentialsVersion: 3,
+			windowStartEmailId: 41
+		});
+		const before = await readShareRow(share.shareId);
+
+		await mailShareService.update(ctx(), {
+			shareId: share.shareId,
+			name: 'renamed',
+			lid: 'hijacked-lid',
+			secHmac: 'hijacked',
+			sec_hmac: 'hijacked',
+			pepperKid: 'hijacked',
+			expiresAt: '2099-01-01 00:00:00',
+			expires_at: '2099-01-01 00:00:00',
+			deleteAt: '2099-01-01 00:00:00',
+			status: 'REVOKED',
+			userId: USER_B,
+			accountId: ACC_B,
+			windowStartEmailId: 0,
+			onlyMessagesAfterCreated: 1,
+			authKeyEnabled: 0,
+			authKeyHash: null,
+			authKeyKid: null,
+			credentialsVersion: 99,
+			accessCount: 0
+		}, USER_A);
+
+		const after = await readShareRow(share.shareId);
+		expect(after.name).toBe('renamed');
+		for (const column of [
+			'lid', 'sec_hmac', 'pepper_kid', 'expires_at', 'delete_at', 'status', 'user_id',
+			'account_id', 'window_start_email_id', 'only_messages_after_created',
+			'auth_key_enabled', 'auth_key_hash', 'auth_key_kid', 'credentials_version', 'access_count'
+		]) {
+			expect([column, after[column]]).toEqual([column, before[column]]);
+		}
+	});
+
+	it('takes effect on the next visitor session (AC-ADMIN-03)', async () => {
+		await seedOwners();
+		// 走真实创建以拿到 sec 明文；pepper 必须与 Worker env 同源，否则 HTTP 侧验不过。
+		const workerCtx = ctx({
+			SHARE_SEC_PEPPER: env.SHARE_SEC_PEPPER,
+			SHARE_SEC_PEPPER_KID: env.SHARE_SEC_PEPPER_KID
+		});
+		const created = await mailShareService.create(workerCtx, createParams(), USER_A);
+
+		const before = await SELF.fetch('http://example.com/api/share/session', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ lid: created.lid, sec: created.sec })
+		}).then((response) => response.json());
+		expect(before.data.config).toMatchObject({ refreshIntervalMs: 3000, otpExtractionEnabled: true });
+
+		await mailShareService.update(ctx(), {
+			shareId: created.shareId,
+			refreshIntervalMs: 9000,
+			otpExtractionEnabled: false,
+			showFullAddress: true
+		}, USER_A);
+
+		const after = await SELF.fetch('http://example.com/api/share/session', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ lid: created.lid, sec: created.sec })
+		}).then((response) => response.json());
+		expect(after.data.config).toMatchObject({ refreshIntervalMs: 9000, otpExtractionEnabled: false });
+		expect(after.data.mailboxes[0].address).toBe(MAIL_A);
+	});
+
+	it('zeroes used sessions when max_sessions is first set from NULL (AC-EDGE-14)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ maxSessions: null, accessCount: 4 });
+
+		const detail = await mailShareService.update(v2ctx(), { shareId: share.shareId, maxSessions: 3 }, USER_A);
+
+		expect((await readShareRow(share.shareId)).access_count).toBe(0);
+		expect(detail).toMatchObject({ usedSessions: 0, maxSessions: 3, effectiveStatus: 'ACTIVE' });
+	});
+
+	it('keeps the count when the owner explicitly opts out of the reset (AC-EDGE-14)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ maxSessions: null, accessCount: 4 });
+
+		const detail = await mailShareService.update(v2ctx(), {
+			shareId: share.shareId, maxSessions: 2, resetUsedSessions: false
+		}, USER_A);
+
+		expect((await readShareRow(share.shareId)).access_count).toBe(4);
+		expect(detail.effectiveStatus).toBe('ACCESS_LIMIT_REACHED');
+	});
+
+	it('never re-zeroes the count once max_sessions is already finite (AC-EDGE-14)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ maxSessions: 5, accessCount: 3 });
+
+		await mailShareService.update(v2ctx(), {
+			shareId: share.shareId, maxSessions: 10, resetUsedSessions: true
+		}, USER_A);
+
+		expect((await readShareRow(share.shareId)).access_count).toBe(3);
+	});
+
+	it('accepts lowering max_sessions to at most used_sessions (AC-ADMIN-04)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ maxSessions: 10, accessCount: 7 });
+
+		const detail = await mailShareService.update(v2ctx(), { shareId: share.shareId, maxSessions: 3 }, USER_A);
+
+		expect(await readShareRow(share.shareId)).toMatchObject({ max_sessions: 3, access_count: 7 });
+		expect(detail.effectiveStatus).toBe('ACCESS_LIMIT_REACHED');
+	});
+
+	it('clearing a quota is not a reset trigger and needs no capability flag (AC-LIFE-11)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ maxSessions: 5, messageLimit: 3, accessCount: 6 });
+
+		const detail = await mailShareService.update(ctx(), {
+			shareId: share.shareId, maxSessions: null, messageLimit: null
+		}, USER_A);
+
+		expect(await readShareRow(share.shareId)).toMatchObject({
+			max_sessions: null, message_limit: null, access_count: 6
+		});
+		expect(detail.effectiveStatus).toBe('ACTIVE');
+	});
+
+	// exec-t12-note 第 5 条点名的后门：update 少接 MESSAGE_LIMIT 就是绕过栅栏写 message_limit。
+	it('gates exactly the two finite-value writes the old Worker cannot run (AC-LIFE-11)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ maxSessions: null, messageLimit: null });
+
+		expect(await catchBiz(mailShareService.update(ctx(), {
+			shareId: share.shareId, maxSessions: 3
+		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		expect(await catchBiz(mailShareService.update(ctx(), {
+			shareId: share.shareId, messageLimit: 3
+		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		expect(await readShareRow(share.shareId)).toMatchObject({ max_sessions: null, message_limit: null });
+
+		// 白名单里其余六项与栅栏无关：V2=false 下必须照常落库。
+		await mailShareService.update(ctx(), {
+			shareId: share.shareId,
+			name: 'ok',
+			remark: 'ok',
+			otpExtractionEnabled: true,
+			autoRefresh: true,
+			refreshIntervalMs: 5000,
+			showFullAddress: true
+		}, USER_A);
+		expect(await readShareRow(share.shareId)).toMatchObject({ name: 'ok', refresh_interval_ms: 5000 });
+	});
+
+	it('rejects out-of-range values even with the capability flag on', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+
+		for (const patch of [
+			{ refreshIntervalMs: 2999 },
+			{ refreshIntervalMs: 'fast' },
+			{ maxSessions: 0 },
+			{ maxSessions: -1 },
+			{ maxSessions: true },
+			{ messageLimit: 0 },
+			{ messageLimit: 1.5 },
+			{ otpExtractionEnabled: 2 },
+			{ autoRefresh: 'yes' },
+			{ showFullAddress: null }
+		]) {
+			expect(await catchBiz(mailShareService.update(v2ctx(), {
+				shareId: share.shareId, ...patch
+			}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		}
+		expect(await readShareRow(share.shareId)).toMatchObject({
+			refresh_interval_ms: 15000, max_sessions: 5, message_limit: 3, otp_extraction_enabled: 0
+		});
+	});
+
+	it('refuses another owner, a revoked row and an expired row alike (AC-MGMT-07)', async () => {
+		await seedOwners();
+		const theirs = await seedShareRow({ userId: USER_B, accountId: ACC_B, name: 'theirs' });
+		const revoked = await seedShareRow({ userId: USER_A, accountId: ACC_A, status: 'REVOKED' });
+		const expired = await seedShareRow({
+			userId: USER_A, accountId: ACC_A, expiresAt: '2001-01-01 00:00:00'
+		});
+
+		for (const shareId of [theirs.shareId, revoked.shareId, expired.shareId, 88881111, 'abc']) {
+			expect(await catchBiz(mailShareService.update(ctx(), {
+				shareId, name: 'hijack'
+			}, USER_A))).toBe('SHARE_NOT_FOUND');
+		}
+		expect((await readShareRow(theirs.shareId)).name).toBe('theirs');
+	});
+});
+
+describe('mailShareService.delete (T-15)', () => {
+	it('removes the share, its bindings and its idempotency rows in one batch (AC-ADMIN-07)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+		await seedIdempotencyRow(share.shareId, USER_A, 't15-del-key');
+		const probe = batchProbe();
+
+		const result = await mailShareService.delete({ env: shareEnv({ db: probe.db }) }, {
+			shareId: share.shareId
+		}, USER_A);
+
+		expect(result.shareId).toBe(share.shareId);
+		expect(probe.batchCount()).toBe(1);
+		expect(await readShareRow(share.shareId)).toBe(null);
+		expect(await listBindings(share.shareId)).toEqual([]);
+		expect(await countIdempotency(share.shareId)).toBe(0);
+	});
+
+	it('deletes rows the revoke path can no longer touch', async () => {
+		await seedOwners();
+		const revoked = await seedShareWithBindings([ACC_A], { status: 'REVOKED', revokedAt: sqlTime(-60) });
+		const expired = await seedShareWithBindings([ACC_C], { expiresAt: '2001-01-01 00:00:00' });
+
+		await mailShareService.delete(ctx(), { shareId: revoked.shareId }, USER_A);
+		await mailShareService.delete(ctx(), { shareId: expired.shareId }, USER_A);
+
+		expect(await readShareRow(revoked.shareId)).toBe(null);
+		expect(await readShareRow(expired.shareId)).toBe(null);
+		expect(await listBindings(revoked.shareId)).toEqual([]);
+		expect(await listBindings(expired.shareId)).toEqual([]);
+	});
+
+	it('leaves another owner rows completely alone (AC-MGMT-07)', async () => {
+		await seedOwners();
+		const theirs = await seedShareRow({ userId: USER_B, accountId: ACC_B });
+		await seedBindingRow({ shareId: theirs.shareId, accountId: ACC_B });
+		await seedIdempotencyRow(theirs.shareId, USER_B, 't15-their-key');
+
+		expect(await catchBiz(mailShareService.delete(ctx(), { shareId: theirs.shareId }, USER_A)))
+			.toBe('SHARE_NOT_FOUND');
+
+		expect(await readShareRow(theirs.shareId)).not.toBe(null);
+		expect(await listBindings(theirs.shareId)).toHaveLength(1);
+		expect(await countIdempotency(theirs.shareId)).toBe(1);
+	});
+
+	it('is not idempotent by accident: the second delete is SHARE_NOT_FOUND', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+
+		await mailShareService.delete(ctx(), { shareId: share.shareId }, USER_A);
+
+		for (const shareId of [share.shareId, 88881111, 0, 'abc']) {
+			expect(await catchBiz(mailShareService.delete(ctx(), { shareId }, USER_A))).toBe('SHARE_NOT_FOUND');
+		}
+	});
+});
+
+describe('mailShareService.list paging and projection (T-15)', () => {
+	it('carries shareType, four-state effectiveStatus, quota and binding summaries (AC-ADMIN-01)', async () => {
+		await seedOwners();
+		const share = await seedShareRow({
+			userId: USER_A, accountId: ACC_A, name: 'listed', maxSessions: 9, messageLimit: 2, accessCount: 4
+		});
+		const first = await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+		const second = await seedBindingRow({ shareId: share.shareId, accountId: ACC_C });
+
+		const listed = await mailShareService.list(ctx(), {}, USER_A);
+
+		expect(listed.total).toBe(1);
+		expect(listed.list[0]).toMatchObject({
+			shareId: share.shareId,
+			shareType: 'multi',
+			effectiveStatus: 'ACTIVE',
+			usedSessions: 4,
+			accessCount: 4,
+			maxSessions: 9,
+			messageLimit: 2
+		});
+		expect(listed.list[0].bindings).toEqual([
+			{ bindingId: first, accountId: ACC_A, mailbox: MAIL_A },
+			{ bindingId: second, accountId: ACC_C, mailbox: MAIL_C }
+		]);
+	});
+
+	// T2：投影不喂 maxSessions 时这条分支恒不可达，AC-ADMIN-04/09 会假绿。
+	it('can actually reach ACCESS_LIMIT_REACHED in the list projection (AC-ADMIN-09)', async () => {
+		await seedOwners();
+		await seedFourStates();
+
+		const listed = await mailShareService.list(ctx(), {}, USER_A);
+		const byName = Object.fromEntries(listed.list.map((row) => [row.name, row.effectiveStatus]));
+
+		expect(byName).toEqual({
+			'st-active': 'ACTIVE',
+			'st-expired': 'EXPIRED',
+			'st-revoked': 'REVOKED',
+			'st-capped': 'ACCESS_LIMIT_REACHED'
+		});
+		// 存储态仍只有两值（AC-LIFE-01）。
+		expect(new Set(listed.list.map((row) => row.status))).toEqual(new Set(['ACTIVE', 'REVOKED']));
+	});
+
+	it('filters on the computed state and counts with the same CASE (AC-ADMIN-01)', async () => {
+		await seedOwners();
+		await seedFourStates();
+		await seedShareRow({ userId: USER_A, accountId: ACC_A, name: 'st-active-2' });
+
+		for (const [status, names] of Object.entries({
+			ACTIVE: ['st-active', 'st-active-2'],
+			EXPIRED: ['st-expired'],
+			REVOKED: ['st-revoked'],
+			ACCESS_LIMIT_REACHED: ['st-capped']
+		})) {
+			const listed = await mailShareService.list(ctx(), { status }, USER_A);
+			expect(listed.list.map((row) => row.name).sort()).toEqual([...names].sort());
+			// total 走同一条 CASE，不是分页后的 list.length。
+			expect(listed.total).toBe(names.length);
+		}
+		expect(await catchBiz(mailShareService.list(ctx(), { status: 'PENDING' }, USER_A)))
+			.toBe('SHARE_INVALID_CONFIG');
+	});
+
+	it('pages with size 20 by default and a stable share_id DESC order (AC-ADMIN-01)', async () => {
+		await seedOwners();
+		await seedBulkShares(25);
+		const all = await mailShareService.list(ctx(), {}, USER_A);
+		const expected = all.list.map((row) => row.shareId);
+
+		const firstPage = await mailShareService.list(ctx(), { page: 1 }, USER_A);
+		const secondPage = await mailShareService.list(ctx(), { page: 2 }, USER_A);
+
+		expect(firstPage).toMatchObject({ total: 25, page: 1, size: 20 });
+		expect(firstPage.list).toHaveLength(20);
+		expect(secondPage.list).toHaveLength(5);
+		expect([...firstPage.list, ...secondPage.list].map((row) => row.shareId)).toEqual(expected);
+		expect(expected).toEqual([...expected].sort((left, right) => right - left));
+	});
+
+	it('caps size at 100 and clamps polluted paging params instead of failing', async () => {
+		await seedOwners();
+		await seedBulkShares(3);
+
+		const cases = [
+			[{ size: 200 }, { page: 1, size: 100 }],
+			[{ size: '100' }, { page: 1, size: 100 }],
+			[{ size: 'abc' }, { page: 1, size: 20 }],
+			[{ size: 0 }, { page: 1, size: 20 }],
+			[{ size: -1 }, { page: 1, size: 20 }],
+			[{ size: '1e3' }, { page: 1, size: 100 }],
+			[{ size: 1.5 }, { page: 1, size: 20 }],
+			[{ page: true, size: 5 }, { page: 1, size: 5 }],
+			[{ page: '0', size: 5 }, { page: 1, size: 5 }],
+			[{ page: '2', size: 2 }, { page: 2, size: 2 }]
+		];
+		for (const [params, expected] of cases) {
+			const listed = await mailShareService.list(ctx(), params, USER_A);
+			expect([params, { page: listed.page, size: listed.size }]).toEqual([params, expected]);
+			expect(listed.total).toBe(3);
+		}
+	});
+
+	it('keeps the no-arg dump deprecated and hard-capped at 500 rows (R1-F2)', async () => {
+		await seedOwners();
+		await seedBulkShares(LIST_DEPRECATED_CAP + 5);
+
+		const dump = await mailShareService.list(ctx(), {}, USER_A);
+
+		expect(dump.list).toHaveLength(LIST_DEPRECATED_CAP);
+		expect(dump.total).toBe(LIST_DEPRECATED_CAP + 5);
+		expect(dump.deprecated).toBe(true);
+		expect(dump.page).toBeUndefined();
+		// 老前端 `http.get('/mailShare/list')` 不带参数，形状不许改。
+		expect(dump.list[0].shareId).toBeGreaterThan(dump.list[dump.list.length - 1].shareId);
+	});
+
+	it('does not let a multi-binding share eat extra page slots (T8)', async () => {
+		await seedOwners();
+		await ensureAccount({ accountId: ACC_D, email: MAIL_D, userId: USER_A });
+		await seedShareWithBindings([ACC_A], { lid: 't15-slot-1' });
+		await seedShareWithBindings([ACC_C], { lid: 't15-slot-2' });
+		// 最后建的分享 share_id 最大，在 DESC 首页；它的 3 条 Binding 必须只占一个名额。
+		const wide = await seedShareWithBindings([ACC_A, ACC_C, ACC_D], { lid: 't15-slot-wide' });
+
+		const page = await mailShareService.list(ctx(), { page: 1, size: 2 }, USER_A);
+
+		expect(page.list).toHaveLength(2);
+		expect(page.total).toBe(3);
+		const wideRow = page.list.find((row) => row.shareId === wide.shareId);
+		expect(wideRow.bindings).toHaveLength(3);
+		expect(wideRow.shareType).toBe('multi');
+	});
+
+	it('loads binding summaries through json_each and stays inside the D1 parameter budget (T9)', async () => {
+		await seedOwners();
+		await seedBulkShares(100);
+		const probe = sqlProbe();
+
+		const listed = await mailShareService.list({ env: shareEnv({ db: probe.db }) }, { size: 100 }, USER_A);
+
+		expect(listed.list).toHaveLength(100);
+		expect(probe.seen.some((sql) => /json_each/i.test(sql) && /mail_share_binding/i.test(sql))).toBe(true);
+		expect(probe.seen.filter((sql) => bindSlots(sql) > D1_MAX_BOUND_PARAMS)).toEqual([]);
+	});
+});
+
+describe('owner API surface for get / update / delete (T-15)', () => {
+	it('serves the three new endpoints over HTTP for the owner', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const detail = await ownerApi('GET', `/mailShare/get?shareId=${share.shareId}`, { jwt });
+		expect(detail.json.code).toBe(200);
+		expect(detail.json.data).toMatchObject({ shareId: share.shareId, shareType: 'multi' });
+
+		const updated = await ownerApi('PUT', '/mailShare/update', {
+			jwt,
+			body: { shareId: share.shareId, name: 'renamed', remark: 'via http' }
+		});
+		expect(updated.json.data).toMatchObject({ name: 'renamed', remark: 'via http' });
+
+		const removed = await ownerApi('DELETE', `/mailShare/delete?shareId=${share.shareId}`, { jwt });
+		expect(removed.json.data.shareId).toBe(share.shareId);
+
+		const gone = await ownerApi('GET', `/mailShare/get?shareId=${share.shareId}`, { jwt });
+		expect(gone.json.message).toBe('SHARE_NOT_FOUND');
+		expect(await listBindings(share.shareId)).toEqual([]);
+	});
+
+	it('serves the paged list over HTTP without breaking the no-arg shape', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		await seedBulkShares(3);
+
+		const paged = await ownerApi('GET', '/mailShare/list?page=1&size=2', { jwt });
+		expect(paged.json.data).toMatchObject({ total: 3, page: 1, size: 2 });
+		expect(paged.json.data.list).toHaveLength(2);
+
+		const dump = await ownerApi('GET', '/mailShare/list', { jwt });
+		expect(dump.json.data.total).toBe(3);
+		expect(dump.json.data.list).toHaveLength(3);
 	});
 });
