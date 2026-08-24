@@ -97,6 +97,17 @@ describe('T-05 security share path auth', () => {
 		it('GET /share/mails/extra without JWT still requires JWT', async () => {
 			requireJwt(await readBody(await api('GET', '/share/mails/extra')));
 		});
+
+		// T-14 只加一条精确豁免，近似路径必须继续走 JWT（AC-SEC-03）。
+		it.each([
+			'/share/mailboxes/statusX',
+			'/share/mailboxes/status/extra',
+			'/share/mailboxes/statu',
+			'/share/mailboxes',
+			'/share/mailbox/status'
+		])('GET %s without JWT still requires JWT', async (path) => {
+			requireJwt(await readBody(await api('GET', path)));
+		});
 	});
 
 	describe('visitor JWT exemption is exact method + path', () => {
@@ -104,13 +115,18 @@ describe('T-05 security share path auth', () => {
 			['POST', '/share/session'],
 			['GET', '/share/mails'],
 			['GET', '/share/mail'],
-			['GET', '/share/attachment']
+			['GET', '/share/attachment'],
+			['GET', '/share/mailboxes/status']
 		])('%s %s without JWT is not JWT-gated', async (method, path) => {
 			notRequireJwt(await readBody(await api(method, path)));
 		});
 
 		it('GET /share/mails with query string is not JWT-gated', async () => {
 			notRequireJwt(await readBody(await api('GET', '/share/mails?cursor=1&limit=20')));
+		});
+
+		it('GET /share/mailboxes/status with a cursor-shaped query string is not JWT-gated', async () => {
+			notRequireJwt(await readBody(await api('GET', '/share/mailboxes/status?sinceEmailId=1&cursor=2')));
 		});
 	});
 
@@ -120,6 +136,8 @@ describe('T-05 security share path auth', () => {
 			['DELETE', '/share/mail'],
 			['PUT', '/share/session'],
 			['GET', '/share/session'],
+			['POST', '/share/mailboxes/status'],
+			['DELETE', '/share/mailboxes/status'],
 			['POST', '/mailShare/create'],
 			['GET', '/mailShare/list'],
 			['DELETE', '/mailShare/revoke']

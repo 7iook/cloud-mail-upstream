@@ -36,12 +36,26 @@ function toScope(binding) {
 	return { bindingId: resolveRowId(binding.bindingId), accountId, windowStartEmailId };
 }
 
-function resolveScopes(ctx) {
+function resolveBindings(ctx) {
 	if (!ctx) {
 		return [];
 	}
-	const bindings = Array.isArray(ctx.bindings) && ctx.bindings.length > 0 ? ctx.bindings : [ctx];
-	return bindings.map(toScope).filter(Boolean);
+	return Array.isArray(ctx.bindings) && ctx.bindings.length > 0 ? ctx.bindings : [ctx];
+}
+
+function resolveScopes(ctx) {
+	return resolveBindings(ctx).map(toScope).filter(Boolean);
+}
+
+/**
+ * The identifier the visitor page keys its local watermark map on, so it has to be
+ * the same value `buildShareContext` handed out — including the 0 that stands for the
+ * pre-Binding single-mailbox shape. `resolveRowId` cannot serve here: it maps 0 to
+ * null because a real row id is never 0.
+ */
+function toBindingKey(binding) {
+	const id = Number(binding && binding.bindingId);
+	return Number.isSafeInteger(id) && id >= 0 ? id : null;
 }
 
 function resolveMessageLimit(ctx) {
@@ -137,6 +151,47 @@ const shareScopedEmailRepository = {
 		const scopes = resolveScopes(ctx).filter((scope) => scope.bindingId != null && scope.bindingId === id);
 		const messageLimit = resolveMessageLimit(ctx);
 		return selectVisible(c, scopes, messageLimit, cursor, resolveLimit(limit, messageLimit));
+	},
+
+	/**
+	 * The watermark reader behind `GET /share/mailboxes/status`: one row per binding,
+	 * newest first mail inside the very same VisibleWindow ∩ latest-N ∩ exclusions the
+	 * list path reads through. `visible.row_no = 1` *is* the per-account maximum the
+	 * window function already ranked, so the newest mail and its createTime come out of
+	 * one statement — no GROUP BY, and no per-binding query fan-out.
+	 */
+	async latestByBinding(c, ctx) {
+		const bindings = resolveBindings(ctx)
+			.map((binding) => ({ key: toBindingKey(binding), scope: toScope(binding) }))
+			.filter((item) => item.scope);
+		if (bindings.length === 0) {
+			return [];
+		}
+		const { ranked, truncation } = visibleSubquery(
+			c,
+			bindings.map((item) => item.scope),
+			resolveMessageLimit(ctx)
+		);
+
+		const rows = await orm(c)
+			.select({
+				accountId: ranked.accountId,
+				emailId: ranked.emailId,
+				createTime: ranked.createTime
+			})
+			.from(ranked)
+			.where(and(truncation, sql`${ranked.rowNo} = 1`))
+			.all();
+
+		const latest = new Map((rows || []).map((head) => [head.accountId, head]));
+		return bindings.map(({ key, scope }) => {
+			const head = latest.get(scope.accountId);
+			return {
+				bindingId: key,
+				latestEmailId: head ? head.emailId : null,
+				latestReceivedAt: head && head.createTime != null ? head.createTime : null
+			};
+		});
 	},
 
 	async getById(c, ctx, mailId) {

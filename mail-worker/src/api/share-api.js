@@ -4,6 +4,7 @@ import shareResult from '../model/share-result';
 import shareAttachmentService from '../service/share-attachment-service';
 import shareAuthService from '../service/share-auth-service';
 import shareMailService from '../service/share-mail-service';
+import shareScopedEmailRepository from '../service/share-scoped-email-repository';
 import {
 	SHARE_READ_RATE_LIMITER,
 	SHARE_READ_RETRY_AFTER_SECONDS,
@@ -70,6 +71,15 @@ app.get('/share/mails', shareRateLimit(SHARE_READ_RATE_LIMITER, SHARE_READ_RETRY
 		? String(list[list.length - 1].mailId)
 		: null;
 	return shareJson(c, shareResult.ok({ list, nextCursor }));
+}));
+
+// Deliberately reads no query parameter (R2-A2): a single global cursor cannot express
+// per-binding consumption, so `sinceEmailId`/`cursor` are neither honoured nor rejected —
+// the watermark is the same for every caller and hasNew is computed on the client.
+app.get('/share/mailboxes/status', shareRateLimit(SHARE_READ_RATE_LIMITER, SHARE_READ_RETRY_AFTER_SECONDS), withShare(async (c) => {
+	const ctx = await shareAuthService.resolveSession(c, readSessionToken(c));
+	const mailboxes = await shareScopedEmailRepository.latestByBinding(c, ctx);
+	return shareJson(c, shareResult.ok({ mailboxes, serverTime: new Date().toISOString() }));
 }));
 
 app.get('/share/mail', shareRateLimit(SHARE_READ_RATE_LIMITER, SHARE_READ_RETRY_AFTER_SECONDS), withShare(async (c) => {

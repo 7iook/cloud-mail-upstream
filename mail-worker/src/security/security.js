@@ -23,6 +23,7 @@ const excludePrefixes = [
 const excludeExact = [
 	{ method: 'GET', path: '/setting/websiteConfig' },
 	{ method: 'POST', path: '/share/session' },
+	{ method: 'GET', path: '/share/mailboxes/status' },
 	{ method: 'GET', path: '/share/mails' },
 	{ method: 'GET', path: '/share/mail' },
 	{ method: 'GET', path: '/share/attachment' }

@@ -10,8 +10,12 @@ const OWNER_EMAIL = 't24-owner@example.com';
 const MAILBOX = 't24-box@example.com';
 const OTHER_BOX = 't24-other@example.com';
 const UNAVAILABLE = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
+// T-11 grew the projection by the Binding identity and the masked mailbox address;
+// `code` is still here because these journeys run with otp_extraction_enabled on.
 const VISITOR_MAIL_KEYS = [
 	'mailId',
+	'bindingId',
+	'mailboxAddress',
 	'senderName',
 	'senderAddress',
 	'subject',
@@ -765,5 +769,144 @@ describe('T-24 mail share backend integration', () => {
 		const all = [...page1.json.data.list, ...page2.json.data.list].map((row) => row.mailId);
 		expect(all).toEqual([ids[2], ids[1], ids[0]]);
 		expect(new Set(all).size).toBe(ids.length);
+	});
+});
+
+// ── T-14 · status 水位端点（design.md「Status 水位协议」· D16 · R2-A2）─────────
+// 追加在文件末尾，既有用例一行不动。Binding 行直接写库：多邮箱 create 走 V2 栅栏，
+// 而这里要测的是「已经有 N 条 Binding 的分享」被访客轮询时的水位。
+describe('GET /share/mailboxes/status', () => {
+	async function addBinding(shareId, accountId, windowStartEmailId = 0) {
+		const row = await env.db.prepare(`
+			INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id)
+			VALUES (?, ?, ?)
+			RETURNING binding_id
+		`).bind(shareId, accountId, windowStartEmailId).first();
+		return row.binding_id;
+	}
+
+	async function status(bearer, query = '') {
+		return jsonApi('GET', `/share/mailboxes/status${query}`, { bearer });
+	}
+
+	async function shareRow(shareId) {
+		return env.db.prepare(
+			'SELECT access_count, last_access_at, status FROM mail_share WHERE share_id = ?'
+		).bind(shareId).first();
+	}
+
+	it('answers every binding of one share in a single poll that costs no quota (D16, AC-EDGE-11)', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const otherAccountId = await insertAccount(OTHER_BOX, ownerUser.userId);
+		const created = await createShare(accountId);
+		const secondBindingId = await addBinding(created.json.data.shareId, otherAccountId);
+		const firstId = await insertEmail(accountId, ownerUser.userId, { subject: 't24-status-first' });
+		const secondId = await insertEmail(otherAccountId, ownerUser.userId, { subject: 't24-status-second' });
+		const session = await openSession(created);
+		const bearer = session.json.data.sessionToken;
+		const firstBindingId = session.json.data.mailboxes[0].bindingId;
+		const before = await shareRow(created.json.data.shareId);
+
+		const polled = await status(bearer);
+
+		expect(polled.status).toBe(200);
+		expect(polled.headers.get('Cache-Control')).toBe('no-store');
+		expect(polled.json.data.mailboxes).toEqual([
+			{ bindingId: firstBindingId, latestEmailId: firstId, latestReceivedAt: expect.any(String) },
+			{ bindingId: secondBindingId, latestEmailId: secondId, latestReceivedAt: expect.any(String) }
+		]);
+		expect(Number.isNaN(Date.parse(polled.json.data.serverTime))).toBe(false);
+		// 同 token 同范围：水位集合恰是 mails 里每个邮箱的最大 mailId。
+		const mails = await jsonApi('GET', '/share/mails?limit=50', { bearer });
+		expect(mails.json.data.list.map((row) => row.mailId).sort((a, b) => a - b))
+			.toEqual([firstId, secondId]);
+		expect(await shareRow(created.json.data.shareId)).toEqual(before);
+	});
+
+	it('returns the same watermark with or without cursor-shaped query params (R2-A2)', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const created = await createShare(accountId);
+		await insertEmail(accountId, ownerUser.userId, { subject: 't24-status-old' });
+		const latestId = await insertEmail(accountId, ownerUser.userId, { subject: 't24-status-new' });
+		const session = await openSession(created);
+		const bearer = session.json.data.sessionToken;
+
+		const plain = await status(bearer);
+		const junk = await Promise.all([
+			status(bearer, `?sinceEmailId=${latestId}`),
+			status(bearer, '?sinceEmailId=0&cursor=1'),
+			status(bearer, '?cursor=not-a-number&limit=1')
+		]);
+
+		expect(plain.json.data.mailboxes[0].latestEmailId).toBe(latestId);
+		for (const item of junk) {
+			expect(item.status).toBe(200);
+			expect(item.json.data.mailboxes).toEqual(plain.json.data.mailboxes);
+		}
+	});
+
+	it('never lets out-of-window, rolled-out or excluded mail move the watermark (AC-SEC-03)', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const foreignAccountId = await insertAccount(OTHER_BOX, ownerUser.userId);
+		const belowId = await insertEmail(accountId, ownerUser.userId, { subject: 't24-status-below' });
+		const created = await createShare(accountId);
+		await env.db.prepare('UPDATE mail_share SET message_limit = 1 WHERE share_id = ?')
+			.bind(created.json.data.shareId).run();
+		const session = await openSession(created);
+		const bearer = session.json.data.sessionToken;
+
+		// 窗口之下已有一封，水位仍必须是 null —— 存在性不得泄露。
+		expect((await status(bearer)).json.data.mailboxes[0].latestEmailId).toBeNull();
+
+		const rolledOutId = await insertEmail(accountId, ownerUser.userId, { subject: 't24-status-rolled' });
+		expect((await status(bearer)).json.data.mailboxes[0].latestEmailId).toBe(rolledOutId);
+
+		const visibleId = await insertEmail(accountId, ownerUser.userId, { subject: 't24-status-visible' });
+		await insertEmail(accountId, ownerUser.userId, {
+			subject: 't24-status-saving',
+			status: emailConst.status.SAVING
+		});
+		await insertEmail(accountId, ownerUser.userId, {
+			subject: 't24-status-deleted',
+			isDelValue: isDel.DELETE
+		});
+		await insertEmail(foreignAccountId, ownerUser.userId, { subject: 't24-status-foreign' });
+
+		const after = await status(bearer);
+		expect(after.json.data.mailboxes).toEqual([
+			{
+				bindingId: session.json.data.mailboxes[0].bindingId,
+				latestEmailId: visibleId,
+				latestReceivedAt: expect.any(String)
+			}
+		]);
+		// message_limit=1 把 rolledOut 滚出可见集，水位与 mails 一起改口径。
+		const mails = await jsonApi('GET', '/share/mails?limit=50', { bearer });
+		expect(mails.json.data.list.map((row) => row.mailId)).toEqual([visibleId]);
+		expect(mails.json.data.list.map((row) => row.mailId)).not.toContain(belowId);
+	});
+
+	it('seals status exactly like the other visitor routes after revoke (AC-VISIT-04)', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const created = await createShare(accountId);
+		const mailId = await insertEmail(accountId, ownerUser.userId, { subject: 't24-status-sealed' });
+		const att = await insertAttachment(accountId, ownerUser.userId, mailId, 't24-status.txt');
+		const session = await openSession(created);
+		const bearer = session.json.data.sessionToken;
+		expect((await status(bearer)).json.data.mailboxes[0].latestEmailId).toBe(mailId);
+
+		await jsonApi('DELETE', `/mailShare/revoke?shareId=${created.json.data.shareId}`, {
+			token: ownerJwt
+		});
+
+		expectIdenticalUnavailable(await Promise.all([
+			status(bearer),
+			status(bearer, '?sinceEmailId=1'),
+			status('not-a-session-token'),
+			jsonApi('GET', '/share/mailboxes/status'),
+			jsonApi('GET', '/share/mails', { bearer }),
+			jsonApi('GET', `/share/mail?mailId=${mailId}`, { bearer }),
+			jsonApi('GET', `/share/attachment?mailId=${mailId}&attachmentId=${att.attId}`, { bearer })
+		]));
 	});
 });

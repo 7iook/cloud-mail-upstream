@@ -382,4 +382,134 @@ describe('shareScopedEmailRepository', () => {
 			.toEqual([A.arrived, A.third, A.second]);
 		expect(await shareScopedEmailRepository.getById(c, rolling, A.first)).toBeNull();
 	});
+
+	// ── T-14 · 每 Binding 水位（status 端点的唯一读者）──────────────────────────
+	// isolatedStorage 每条用例回滚一次，所以上一条插入的 A.arrived 在这里已不存在：
+	// A 的可见最新一封恒为 A.third。
+
+	it('latestByBinding reports the newest visible mail of every binding (AC-OTP-09)', async () => {
+		const ctx = context({ bindings: [bindingA(), bindingB()] });
+
+		expect(await shareScopedEmailRepository.latestByBinding(c, ctx)).toEqual([
+			{ bindingId: BINDING_A, latestEmailId: A.third, latestReceivedAt: expect.any(String) },
+			{ bindingId: BINDING_B, latestEmailId: B.third, latestReceivedAt: expect.any(String) }
+		]);
+	});
+
+	it('latestByBinding returns null for a binding with zero visible mail (AC-EDGE-07)', async () => {
+		const empty = { bindingId: BINDING_EMPTY, accountId: ACCOUNT_EMPTY, windowStartEmailId: 0 };
+
+		expect(await shareScopedEmailRepository.latestByBinding(c, context({ bindings: [empty] })))
+			.toEqual([{ bindingId: BINDING_EMPTY, latestEmailId: null, latestReceivedAt: null }]);
+		expect(await shareScopedEmailRepository.latestByBinding(c, context({
+			bindings: [bindingA(), empty, bindingB()]
+		}))).toEqual([
+			{ bindingId: BINDING_A, latestEmailId: A.third, latestReceivedAt: expect.any(String) },
+			{ bindingId: BINDING_EMPTY, latestEmailId: null, latestReceivedAt: null },
+			{ bindingId: BINDING_B, latestEmailId: B.third, latestReceivedAt: expect.any(String) }
+		]);
+	});
+
+	it('latestByBinding never lets excluded mail move the watermark (AC-SEC-03)', async () => {
+		// 900022/900023/900024 的 email_id 都大于 A.third，若过滤条件漏一条水位立刻穿帮。
+		expect(POISON.savingNormal).toBeGreaterThan(A.third);
+		expect(POISON.userDeleted).toBeGreaterThan(A.third);
+
+		const inWindow = await shareScopedEmailRepository.latestByBinding(c, context({
+			bindings: [bindingA(), bindingB()]
+		}));
+		expect(inWindow.map((item) => item.latestEmailId)).toEqual([A.third, B.third]);
+
+		// 窗口下界抬到最新一封之上：窗口外与被排除的邮件都不得把水位顶起来。
+		expect(await shareScopedEmailRepository.latestByBinding(c, context({
+			bindings: [bindingA(A.third), bindingB(B.third)]
+		}))).toEqual([
+			{ bindingId: BINDING_A, latestEmailId: null, latestReceivedAt: null },
+			{ bindingId: BINDING_B, latestEmailId: null, latestReceivedAt: null }
+		]);
+
+		// account_id=0 与不在 bindings 里的邮箱同样不产生水位。
+		expect(await shareScopedEmailRepository.latestByBinding(c, context({
+			bindings: [{ bindingId: BINDING_A, accountId: 0, windowStartEmailId: 0 }]
+		}))).toEqual([]);
+	});
+
+	it('latestByBinding stays inside the same latest-N truncation as list (AC-MAIL-03)', async () => {
+		for (const messageLimit of [1, 2, 3]) {
+			const ctx = context({ bindings: [bindingA(), bindingB()], messageLimit });
+			const rows = await shareScopedEmailRepository.list(c, ctx, null, 50);
+			const expected = new Map();
+			for (const row of rows) {
+				if (!expected.has(row.accountId)) {
+					expected.set(row.accountId, row.emailId);
+				}
+			}
+			expect(await shareScopedEmailRepository.latestByBinding(c, ctx)).toEqual([
+				{
+					bindingId: BINDING_A,
+					latestEmailId: expected.get(ACCOUNT_A),
+					latestReceivedAt: expect.any(String)
+				},
+				{
+					bindingId: BINDING_B,
+					latestEmailId: expected.get(ACCOUNT_B),
+					latestReceivedAt: expect.any(String)
+				}
+			]);
+		}
+	});
+
+	it('latestByBinding pairs latestReceivedAt with the row that owns the watermark', async () => {
+		const ctx = context({ bindings: [bindingA(), bindingB()] });
+		const [a, b] = await shareScopedEmailRepository.latestByBinding(c, ctx);
+
+		expect(a.latestReceivedAt).toBe(
+			(await shareScopedEmailRepository.getById(c, ctx, a.latestEmailId)).createTime
+		);
+		expect(b.latestReceivedAt).toBe(
+			(await shareScopedEmailRepository.getById(c, ctx, b.latestEmailId)).createTime
+		);
+	});
+
+	it('latestByBinding keeps the legacy bindingId 0 and refuses an unusable ctx', async () => {
+		expect(await shareScopedEmailRepository.latestByBinding(c, context({
+			bindings: [{ bindingId: 0, accountId: ACCOUNT_A, windowStartEmailId: WINDOW_A }]
+		}))).toEqual([
+			{ bindingId: 0, latestEmailId: A.third, latestReceivedAt: expect.any(String) }
+		]);
+
+		for (const ctx of [null, undefined, {}, context({ bindings: [] })]) {
+			expect(await shareScopedEmailRepository.latestByBinding(c, ctx)).toEqual([]);
+		}
+	});
+
+	// ponytail：水位是一条 SQL，不是「每个 Binding 查一次」。
+	it('latestByBinding costs exactly one query regardless of the binding count', async () => {
+		const many = [
+			bindingA(),
+			bindingB(),
+			{ bindingId: BINDING_EMPTY, accountId: ACCOUNT_EMPTY, windowStartEmailId: 0 }
+		];
+		const seen = [];
+		const prepare = env.db.prepare.bind(env.db);
+		const db = new Proxy(env.db, {
+			get(target, prop) {
+				if (prop === 'prepare') {
+					return (sql) => {
+						seen.push(String(sql));
+						return prepare(sql);
+					};
+				}
+				const value = Reflect.get(target, prop);
+				return typeof value === 'function' ? value.bind(target) : value;
+			}
+		});
+
+		const rows = await shareScopedEmailRepository.latestByBinding({ env: { ...env, db } }, context({
+			bindings: many
+		}));
+
+		expect(rows).toHaveLength(many.length);
+		expect(seen).toHaveLength(1);
+	});
 });
