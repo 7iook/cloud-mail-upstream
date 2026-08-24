@@ -5,7 +5,7 @@
 | 任务 | T-07(T-07.1 红 + T-07.2 绿) |
 | 分支 | `cursor/mailbox-share-capability-dcb6` |
 | 起点 HEAD | `9b98dec`(会话开工时读到 `6c6f618`,执行期间同仓另一执行者推进到 `0d20768` → `9b98dec`,均为 docs commit,不含 W1 代码) |
-| commit | **无**(按指令不提交) |
+| commit | `c2087ce` |
 | 白名单外改动 | 无 |
 
 ---
@@ -163,4 +163,4 @@ W1 串行约定下 `share-auth-service.js` 单 owner 无冲突;`share-api.js` �
 
 ## Update Log
 
-- 2026-08-24 · 主 AI:T07-R1 CHANGE。KV 查询前移到 `loadLiveAccount` 之后、快照配额/`assertAllowed` 之前;补 `max_sessions=1` 重放用例。主 AI 独立复跑 `share-auth-service.spec.js` → EXIT=0(34/34,含 AC-SESS-10 触顶重放);`share-api.spec.js` → EXIT=0(7/7,含 HTTP 重放)。R-T07-5 裁定由 T-26 承载,非漏登记。未勾选尾:T-08 / T-12 → T-29。
+- 2026-08-24 · 主 AI:T-07 入库 `c2087ce`。T07-R1 CHANGE。主 AI 独立复跑 34/34 + 7/7 EXIT=0。R-T07-5 裁定由 T-26 承载。未勾选尾:T-08 / T-12 → T-29。
