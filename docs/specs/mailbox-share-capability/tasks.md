@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W5 T-24 APPROVED · T-25 实现派出 |
+| 状态 Status | in-progress · W5 T-24 APPROVED · T-25 待审 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -607,6 +607,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-25 入库 `2e6754d`。独立复跑 vue 定点 5/65 · 全量 22/218；worker 定点 2/38 · 全量 18/626；E2E 13。未勾选（等审查）。未勾选尾：T-25 → T-29。
 - 2026-08-24 · 主 AI:T-24 R2 不需要（`review-t24.md` APPROVED p0=0）。主 AI 独立定点 22+1；全量 vue 21/189、worker 18/619、E2E 13。未勾选尾：T-25 → T-29。
 - 2026-08-24 · 主 AI:T-24 实现待审查（ShareOtpCard 抽取 + applyShareConfig）。未勾选。未勾选尾：T-24 审查 / T-25 → T-29。
 - 2026-08-24 · 主 AI:T-25 侦察已落（`recon-t25-tabs.md`）。Fog-1 否决零后端：接线 `listForBinding`；Fog-2 status 函数划给 T-25；Fog-3 composable 零改。未派 T-25（等 T-24 APPROVED）。未勾选尾：T-24 → T-29。

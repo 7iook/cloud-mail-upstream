@@ -186,7 +186,7 @@
 
 ## Update Log
 
-- 2026-08-24 · 主 AI：T-25 实现回（tabs + watermark + listForBinding）。未勾选（等独立复跑 + 审查）。热区仍为 T-25 写者直至 APPROVED。未勾选尾：T-25 → T-29。
+- 2026-08-24 · 主 AI：T-25 入库 `2e6754d`。独立复跑 vue 定点 5/65 · 全量 22/218；worker 定点 2/38 · 全量 18/626；E2E 13。`useSharePolling.js` 空 diff。未勾选（等审查）。未勾选尾：T-25 → T-29。
 - 2026-08-24 · 主 AI：派出 T-25 实现（tabs + watermark + listForBinding）。热区 `index.vue` / `request/share.js` / `share-api.js` 现为 T-25 写者。未勾选尾：T-25 → T-29。
 - 2026-08-24 · 主 AI：T-24 APPROVED p0=0（`review-t24.md`）。主 AI 独立 22+1 · vue 21/189 · worker 18/619 · E2E 13。未勾选尾：T-25 → T-29。
 - 2026-08-24 · 主 AI：T-24 实现待审查。未勾选。未勾选尾：T-24 审查 / T-25 → T-29。
