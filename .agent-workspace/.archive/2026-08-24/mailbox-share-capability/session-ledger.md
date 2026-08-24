@@ -57,6 +57,8 @@
 | W3 | T-17 perm 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t17-perm.md` |
 | W3 | T-16 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t16.md` |
 | W3 | T-17 perm 8 条 | ✅ 已提交 `d18f027` | generalPurpose≈executor | 主 AI 独立 148/148 · 全量 18/577 |
+| W3 | T-17 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t17.md` |
+| W3 | T-18 级联侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t18-cascade.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -113,6 +115,8 @@
 | T16-HTTP | CHANGE:HTTP enable 用 `worker.fetch(req, env)` 喂测试 env，SELF.fetch 改 env 无效 | exec-t16-note；不改 wrangler-vitest.toml |
 | T17-BOTH | HOLD:T-17 必须同时扩 `premKey` 与 `requirePermsExact`，只加一张会自锁或空转 | recon-t17-perm |
 | T17-ADMIN | HOLD:admin 邮箱绕过 perm 的正向契约用例本轮不补 | 与负向种子禁 admin 贴边；登记债等单独任务 |
+| T18-DUAL | CHANGE:级联双臂 — Binding 为主，无 Binding 遗留行回落主表 `account_id` | recon-t18；两臂互斥，不造第二真源 |
+| T18-ORPHAN-REVOKE | CHANGE:cleanup 孤儿补偿后剩 0 活邮箱则 REVOKED | 与成功态「剩 0 则撤销」对齐，避免占活跃名额 |
 
 ## 冲突热区占用
 
@@ -128,6 +132,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-17 审查 APPROVED。T-18 侦察已落。T18-DUAL / T18-ORPHAN-REVOKE 已裁。未勾选尾：T-18 → T-29。
 - 2026-08-24 · 主 AI：T-16 审查 APPROVED。T-17 `d18f027` 入库。主 AI 独立 148/148 + 全量 18/577 · 17/95 · E2E 13。未勾选尾：T-17 审查 / T-18 → T-29。
 - 2026-08-24 · 主 AI：T-16 `3bb1d55` 入库。主 AI 独立 219/219 + 全量 18/465 · 17/95 · E2E 13。T-17 侦察已落（premKey 与 requirePermsExact 必须同改）。未勾选尾：T-16 审查 / T-17 → T-29。
 - 2026-08-24 · 主 AI：T-15 R2 APPROVED p0=0。未勾选尾：T-16 → T-29。

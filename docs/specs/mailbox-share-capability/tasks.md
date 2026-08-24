@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W3 T-16/T-17 已入库 · 下一波 T-18 |
+| 状态 Status | in-progress · W3 T-17 R2 APPROVED · 下一波 T-18 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -409,7 +409,7 @@
     - AC: AC-ADMIN-10, AC-SEC-02, AC-SEC-04, AC-SEC-10
     - commit: d18f027
     - decision: `requirePermsExact` 与 `premKey['share:manage']` 同加 5 条；Visitor token 打 Owner 断言 401 不是 SHARE_FORBIDDEN；`excludeExact` 零改动；admin 后门用例推迟（T17-ADMIN HOLD）
-    - review: pending
+    - review: `review-t17.md` APPROVED p0=0
   - [x]* T-17.1 红:`mail-worker/test/security-share.spec.js` —— 移除 `share:manage` → 8 条 `/mailShare/*` 全 `SHARE_FORBIDDEN`;Visitor 端点带 JWT 无 share token → 拒,share token 访问 Owner 端点 → 拒;Visitor 面路由枚举零写端点;`/share-evil` 前缀封闭性基线保持
     - _Requirements: AC-ADMIN-10, AC-SEC-02, AC-SEC-04, AC-SEC-10_
     - **Evidence**
@@ -518,6 +518,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-17 审查 APPROVED p0=0。T-18 侦察已落。裁决 T18-DUAL（Binding 为主、无 Binding 回落主表）与 T18-ORPHAN-REVOKE（补偿后剩 0 则撤销）。未勾选尾：T-18 → T-29。
 - 2026-08-24 · 主 AI:T-16 审查 APPROVED p0=0。T-17 `d18f027` 勾选。主 AI 独立定点 148/148 + 全量 worker 18/577、vue 17/95、E2E 13。未勾选尾：T-17 审查 / T-18 → T-29。
 - 2026-08-24 · 主 AI:T-16 `3bb1d55` 勾选。主 AI 独立定点 219/219 + 全量 worker 18/465、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-16 审查 / T-17 → T-29。
 - 2026-08-24 · 主 AI:T-15 R2 APPROVED p0=0。未勾选尾：T-16 → T-29。
