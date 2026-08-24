@@ -94,6 +94,12 @@
 | T13-DUP | HOLD:同一 account 同时出现在 add+remove → `SHARE_BINDING_DUPLICATE` | 同批 INSERT 在 DELETE 前；想重绑分两次 |
 | T13-P0-1 | CHANGE:batch 写入侧钉死预检 Binding 集合；并发双替换不得变成 1→N | 审查 P0-1；D1 0-row DELETE 不回滚 |
 | T13-P1-1 | CHANGE:`prepareBindingInsert` 绑定预算压到 ≤100；N=48/50 真实 owned 回归 | 官方 D1 Maximum bound parameters per query = 100 |
+| T11-P1-1 | CHANGE:`maskAddress` 拒绝多 `@` 与空白，双态均 `***` | review-t11；formal `local@domain` |
+| T14-R2 | HOLD:`share-api` 直调 repo 不另造 status service | review-t14 APPROVED |
+| T15-STATUS | CHANGE:list 实现 `status?` 计算态筛选（design API 表有） | recon-t15；与分页 total 同一 CASE |
+| T15-V2 | CHANGE:update 同时接 FINITE_MAX_SESSIONS 与 MESSAGE_LIMIT | exec-t12-note 第 5 条 |
+| T15-PATCH | HOLD:禁止 update 复用 `normalizeCreateBody` | 缺省会重置未提交字段 |
+| T15-PERM | HOLD:`security.js` 新路径留给 T-17 | 与 T-13 bindings 同形缺口 |
 
 ## 冲突热区占用
 
@@ -109,6 +115,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-11 P1-1 `e63998e`。T-14 审查 APPROVED。T-15 侦察已落。未勾选尾：T-11 复审 / T-15 → T-29。
 - 2026-08-24 · 主 AI：T-11 `bee72b6` + T-14 `d6fa50b` 入库。T-13 R2 APPROVED。主 AI 独立 135/135 + 全量 18/410 · 17/95 · E2E 13。未勾选尾：T-11/T-14 审查 → T-15 → T-29。
 - 2026-08-24 · 主 AI：T-13 CHANGE 入库 `22d9832`。T-08 R2 APPROVED p0=0。主 AI 独立 164/164 + 全量 17/358 · 17/95 · E2E 13。未勾选尾：T-13 复审 / T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-10 审查 APPROVED p0=0。T-13 审查 NEEDS_CHANGES：P0-1/P1-1 均 CHANGE。未勾选尾：T-13 审查修复 → T-11 / T-14 → T-29。

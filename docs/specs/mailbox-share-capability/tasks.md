@@ -251,8 +251,9 @@
     - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/share-mail-service.spec.js test/share-attachment-service.spec.js --no-cache` → EXIT=1（19 failed / 26 passed / 45）；绿同命令 → EXIT=0（45/45）；主 AI 独立定点含 api/integration/status → EXIT=0（135/135）；全量 worker 18/410、vue 17/95、E2E 13，均为 EXIT=0
     - files: `mail-worker/src/service/share-mail-service.js:15-22,78-101,152-180` · `mail-worker/src/service/share-attachment-service.js:111-172` · `mail-worker/test/share-mail-service.spec.js` · `mail-worker/test/share-attachment-service.spec.js`
     - AC: AC-MAIL-04, AC-MAIL-05, AC-MAIL-06, AC-MAIL-07, AC-MAIL-08, AC-OTP-01, AC-OTP-02, AC-OTP-03, AC-SEC-05, AC-EDGE-06, AC-EDGE-08
-    - commit: bee72b6
+    - commit: e63998e
     - decision: 字段名 `bindingId`/`mailboxAddress`；`code` 仅 `otpExtractionEnabled === true`；附件先 `getById` 再查 att；不改 ShareContext / `email.js`
+    - review: `review-t11.md` NEEDS_CHANGES → P1-1 CHANGE `e63998e`；复审 pending
   - [x]* T-11.1 红:`mail-worker/test/share-mail-service.spec.js` —— 掩码封闭性+幂等 property(`show_full_address` 双态下系统生成的绑定邮箱身份字段形状,发件人不掩码、含址正文原样,P-MASK-01);`code` 键存在 IFF `otp_extraction_enabled=true` 且值恒等 `email.code` 原值含空串(P-OTP-04);投影白名单键集合断言(新增 Binding 标识/掩码地址,无 `user_id`/`account_id` 原值/`is_del`/`status`)
     - **P-MASK-01: 身份字段掩码封闭性与幂等** _Validates: AC-MAIL-08_
     - **P-OTP-04: code 字段条件存在性** _Validates: AC-OTP-01, AC-OTP-02_
@@ -466,6 +467,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-11 P1-1 CHANGE 入库 `e63998e`（非法地址多 `@`/空白 → `***`）。T-14 审查 APPROVED p0=0。未勾选尾：T-11 复审 / T-15 → T-29。
 - 2026-08-24 · 主 AI:T-11 `bee72b6` + T-14 `d6fa50b` 勾选。T-13 R2 APPROVED（`7a91fac`）。主 AI 独立定点 135/135 + 全量 worker 18/410、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11/T-14 审查 → T-15 → T-29。
 - 2026-08-24 · 主 AI:T-13 审查 CHANGE 入库 `22d9832`（CAS 快照谓词 + INSERT 绑定 N+6）。T-08 R2 APPROVED p0=0。主 AI 独立 mail-share 164/164 + 全量 worker 17/358、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-13 复审 / T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI:T-10 `bca7bc2` + T-13 `ee2db41` 勾选。主 AI 独立定点 189/189 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11 / T-14 → T-29。
