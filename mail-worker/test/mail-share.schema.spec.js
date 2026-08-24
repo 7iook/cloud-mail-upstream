@@ -141,7 +141,8 @@ describe('mail_share_binding drizzle schema (design.md Data Models)', () => {
 
 describe('primary account_id read fence (AC-BIND-01, AC-LIFE-10)', () => {
 	it('freezes share-auth-service.js at its three post-T-08 row.accountId reads', () => {
-		// T-08 集合化后只剩 3 处，全部落在「零 Binding 行回落到主表」兼容分支。
+		// T-08 集合化后只剩 3 处：`assertAllowed` 的 `row.accountId > 0`(所有 establish/resolve
+		// 都经过),以及 `loadLiveBindings` 里「零 Binding 行回落到主表」兼容分支的两处。
 		// 棘轮只许降不许升：不得出现第 4 处主表 account_id 直读。
 		expect(countPrimaryAccountReads(shareAuthSource)).toBe(3);
 	});

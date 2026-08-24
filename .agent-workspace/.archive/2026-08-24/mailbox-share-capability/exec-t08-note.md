@@ -298,6 +298,30 @@ mail-worker/test/share-auth-service.spec.js        | 713 ++++++++++++++++++++-
 
 ## Update Log
 
+- 2026-08-24 · executor:落地 T-08 代码审查三条 CHANGE(review-t08.md 过筛表),**未提交**。
+  改动文件:`share-auth-service.js`(生产)、`share-auth-service.spec.js`(+2 用例)、
+  `mail-share.schema.spec.js`(仅注释)、`design.md`(Session 幂等节 KV 契约 bullet 补一句交叉语义)。
+  - **T08-C1**:`consumeSessionQuota(c, shareId, expectedCv, now, expectedAuthKeyEnabled)`,
+    WHERE 增补 `eq(mailShare.authKeyEnabled, expectedAuthKeyEnabled)`(整数 0/1,列 NOT NULL DEFAULT 0);
+    调用点传 `row.authKeyEnabled` 快照。落空仍走既有 `denyQuota(..., 'quota_race')` → `SHARE_UNAVAILABLE`。
+    enable 仍不 bump cv。
+  - **T08-I1**:`readReplayCache(c, lid, key, row)`(原 `shareId` 形参并入 `row`),KV 命中后
+    `verifyToken` 并要求 `(payload.cv ?? 0) === row.credentialsVersion`,stale-cv / 校验失败按 miss;
+    随后的成功签发用同 key `put` 覆盖旧值。未绑定 `authKeyEnabled`,同 Key 重放不受影响。
+  - **T08-M1**:围栏注释改为点名 `:284 assertAllowed` 与 `loadLiveBindings` 回落两处,棘轮保持 `toBe(3)`。
+  - 红(仅测试先落盘,生产代码未改):
+    `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js test/share-api.spec.js test/share-attachment-service.spec.js --no-cache`
+    → **3 files / 2 failed | 79 passed (81) · EXIT=1**。两条红点即新增用例
+    `refuses when the Owner enables the AuthKey between the snapshot and the gate` 与
+    `treats a replay cache entry from an older cv as a miss and re-enters on the new key`。
+    日志:`/opt/cursor/artifacts/t08_change_red.log`。
+  - 绿(同命令):**3 files / 81 passed (81) · EXIT=0**,日志 `/opt/cursor/artifacts/t08_change_green.log`。
+  - 围栏:`pnpm --dir mail-worker exec vitest run test/mail-share.schema.spec.js --no-cache`
+    → **1 file / 9 passed (9) · EXIT=0**,日志 `/opt/cursor/artifacts/t08_change_fence.log`。
+  - 全量:`pnpm --dir mail-worker test --no-cache` → **17 files / 317 passed (317) · EXIT=0**,
+    日志 `/opt/cursor/artifacts/t08_change_full_worker.log`。**口径**:该次全量跑在同一工作树上,
+    树内同时存在另一执行者未提交的 T-12 CHANGE 改动(`mail-share-service.js` /
+    `mail-share-service.spec.js`,本次零触碰),因此 317 不是 T-08 单独的基线数。
 - 2026-08-24 · 主 AI:工件审查 `exec-t08-note.review1.sub.md` NEEDS_CHANGES。A1 CHANGE（统一最终快照 vs 历史 288/289）；A2 HOLD（scoped 成功态=后端 AC-AUTH-*，访客 UI 属 T-26，同 T07-A1）；A3 HOLD（W1-ctx：T-10/T-11 才消费 ShareContext，禁止 T-08 假接线）；A4 HOLD（新 key 触顶拒发已由 T-06 AC-SESS-01/11 覆盖）。
 - 2026-08-24 · 主 AI:入库 `5a81065`（含围栏 4→3，R-T08-1 已收口）。独立复跑三 spec 79/79 + 全量 17/289 EXIT=0。vue 17/95 EXIT=0。
 - 2026-08-24 · executor:T-08 落盘未提交。三 spec 红 17/79 → 绿 79/79 EXIT=0。全量 288/289,

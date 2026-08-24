@@ -819,6 +819,35 @@ describe('shareAuthService session quota gate', () => {
 		expect(row.last_access_at).toBeNull();
 	});
 
+	it('refuses when the Owner enables the AuthKey between the snapshot and the gate (AC-AUTH-01, AC-AUTH-07)', async () => {
+		await ensureAccount();
+		const lid = randomLid('gate-auth-enable');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const enabling = ctx({
+			db: injectingDb(env.db, {
+				before: async () => {
+					await env.db.prepare(`
+						UPDATE mail_share
+						SET auth_key_enabled = 1, auth_key_hash = ?, auth_key_kid = 'v2'
+						WHERE share_id = ?
+					`).bind(await hmacHex(PEPPER_V2, AUTH_KEY), shareId).run();
+				}
+			})
+		});
+
+		// The snapshot saw auth_key_enabled = 0, so the second factor was skipped, and
+		// enable deliberately does not bump credentials_version (AC-AUTH-07). Only the
+		// gate predicate can stop this request from minting an unkeyed token on a share
+		// that is keyed by the time the slot is spent.
+		expect(await catchFail(shareAuthService.establishSession(enabling, lid, sec))).toBe(UNAVAILABLE_BODY);
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(0);
+		expect(row.last_access_at).toBeNull();
+		expect(row.credentials_version).toBe(0);
+	});
+
 	it('refuses with zero consumption when revoke or expiry commits before the gate (AC-EDGE-13)', async () => {
 		await ensureAccount();
 
@@ -1537,6 +1566,44 @@ describe('shareAuthService credentials_version', () => {
 		expect(cv1).toBeGreaterThan(0);
 		expect(await catchFail(shareAuthService.resolveSession(c, second.sessionToken))).toBe(UNAVAILABLE_BODY);
 		expect(await catchFail(shareAuthService.resolveSession(c, first.sessionToken))).toBe(UNAVAILABLE_BODY);
+	});
+
+	it('treats a replay cache entry from an older cv as a miss and re-enters on the new key (AC-EDGE-05, AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('cv-idem-stale');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec });
+		const kv = recordingKv();
+		const c = ctx({ kv: kv.binding });
+		const key = 'cv-idem-stale-key';
+
+		const first = await shareAuthService.establishSession(
+			c, lid, sec, { authKey: AUTH_KEY, idempotencyKey: key }
+		);
+		expect(decodeTokenPayload(first.sessionToken).cv).toBe(0);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const nextKey = 't08-auth-key-reset-value';
+		expect(await bumpCredentialsVersion(shareId, { authKey: nextKey })).toBe(1);
+
+		// Same Idempotency-Key, new key: the cached cv=0 token is dead on arrival, so
+		// replaying it would answer a valid credential with a token that cannot resolve.
+		const second = await shareAuthService.establishSession(
+			c, lid, sec, { authKey: nextKey, idempotencyKey: key }
+		);
+		expect(second.sessionToken).not.toBe(first.sessionToken);
+		expect(decodeTokenPayload(second.sessionToken).cv).toBe(1);
+		expect((await quotaRow(shareId)).access_count).toBe(2);
+		expect((await shareAuthService.resolveSession(c, second.sessionToken)).shareId).toBe(shareId);
+		expect(await catchFail(shareAuthService.resolveSession(c, first.sessionToken))).toBe(UNAVAILABLE_BODY);
+
+		// The fresh issue overwrote the entry, so a genuine retry replays the live token.
+		expect(kv.store.get(estKey(lid, key))).toContain(second.sessionToken);
+		const replay = await shareAuthService.establishSession(
+			c, lid, sec, { authKey: nextKey, idempotencyKey: key }
+		);
+		expect(replay).toEqual(second);
+		expect((await quotaRow(shareId)).access_count).toBe(2);
 	});
 
 	it('resolves a pre-T-08 token with no cv as version 0 (AC-AUTH-04)', async () => {

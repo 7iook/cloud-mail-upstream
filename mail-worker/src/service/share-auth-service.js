@@ -423,8 +423,11 @@ function denyQuota(shareId, reason) {
 // that commits after the snapshot loses the race instead of being written over. The
 // credentials_version predicate doubles as a snapshot-freshness guard: a stale read
 // (today impossible, D1 only replicates behind the Sessions API) can never win here.
+// auth_key_enabled needs its own predicate because enabling the factor deliberately
+// does not bump credentials_version (AC-AUTH-07), so an enable that commits after a
+// keyless snapshot would otherwise still mint an unkeyed token on a keyed share.
 // An empty RETURNING therefore means "someone else changed the world"; refuse.
-async function consumeSessionQuota(c, shareId, expectedCv, now) {
+async function consumeSessionQuota(c, shareId, expectedCv, now, expectedAuthKeyEnabled) {
 	return await orm(c).update(mailShare).set({
 		accessCount: sql`${mailShare.accessCount} + 1`,
 		lastAccessAt: now
@@ -433,6 +436,7 @@ async function consumeSessionQuota(c, shareId, expectedCv, now) {
 		eq(mailShare.status, 'ACTIVE'),
 		gt(mailShare.expiresAt, now),
 		eq(mailShare.credentialsVersion, expectedCv),
+		eq(mailShare.authKeyEnabled, expectedAuthKeyEnabled),
 		or(isNull(mailShare.maxSessions), sql`${mailShare.accessCount} < ${mailShare.maxSessions}`)
 	)).returning({ accessCount: mailShare.accessCount });
 }
@@ -452,14 +456,21 @@ function readIdempotencyKey(options) {
 // surface with it, so a read failure degrades to "cache miss" and a write failure to
 // "this attempt has no replay protection". Only shareId and a fixed reason reach the
 // log — the cache key embeds the lid, so the key itself must never be logged.
-async function readReplayCache(c, lid, key, shareId) {
+// A hit only counts when the cached token still carries the row's current cv: after a
+// reset or disable the visitor arrives with the new key, and replaying the pre-bump
+// token would answer a valid credential with a session that dies on its first resolve
+// (AC-EDGE-05). Enable does not bump cv, so a same-key replay stays a hit (AC-AUTH-07).
+async function readReplayCache(c, lid, key, row) {
 	try {
 		const cached = await c.env.kv.get(replayCacheKey(lid, key), { type: 'json' });
 		if (cached && cached.sessionToken) {
-			return cached;
+			const payload = await verifyToken(c, cached.sessionToken);
+			if (payload && (payload.cv == null ? 0 : payload.cv) === row.credentialsVersion) {
+				return cached;
+			}
 		}
 	} catch {
-		logShareEvent(SHARE_EVENT.SYSTEM_ERROR, { shareId, reason: 'replay_cache_read_failed' });
+		logShareEvent(SHARE_EVENT.SYSTEM_ERROR, { shareId: row.shareId, reason: 'replay_cache_read_failed' });
 	}
 	return null;
 }
@@ -520,7 +531,7 @@ async function establishSession(c, lid, sec, options = {}) {
 	}
 	const idempotencyKey = readIdempotencyKey(options);
 	if (idempotencyKey) {
-		const replayed = await readReplayCache(c, lidText, idempotencyKey, row.shareId);
+		const replayed = await readReplayCache(c, lidText, idempotencyKey, row);
 		if (replayed) {
 			return replayed;
 		}
@@ -537,7 +548,7 @@ async function establishSession(c, lid, sec, options = {}) {
 	const now = nowText();
 	let applied;
 	try {
-		applied = await consumeSessionQuota(c, row.shareId, row.credentialsVersion, now);
+		applied = await consumeSessionQuota(c, row.shareId, row.credentialsVersion, now, row.authKeyEnabled);
 	} catch (err) {
 		// AC-SESS-11: a gate that never landed must refuse, not hand out an unmetered
 		// session the way the old fire-and-forget accounting did.
