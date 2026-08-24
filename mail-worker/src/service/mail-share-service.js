@@ -1,6 +1,6 @@
 import { isDel } from '../const/entity-const';
 import BizError from '../error/biz-error';
-import dayjs from 'dayjs';
+import { toUtc } from '../utils/date-uitil';
 import shareAuthService from './share-auth-service';
 
 const CREATE_OP = 'create';
@@ -50,7 +50,7 @@ export const SHARE_EVENT = {
 // 前端(访客页倒计时、管理台失效时间)一律按 UTC 解析，所以写入方不能跟随进程时区 ——
 // 否则同一份代码在 Cloudflare(恒 UTC)与本地开发(UTC+8)会写出相差 8 小时的行。
 function nowText() {
-	return dayjs().format('YYYY-MM-DD HH:mm:ss');
+	return toUtc().format('YYYY-MM-DD HH:mm:ss');
 }
 
 function isShareDisabled(c) {
