@@ -1,0 +1,99 @@
+T-27 implement · E2E new visitor scenarios (W6)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Do NOT git commit / push / stash / switch branch.
+
+[交付契约]
+成功状态: NOT "more e2e files exist", BUT:
+- never-logged-in 浏览器打开 multi 链接，切原生 Tab，真投递 OTP 邮件，复制验证码，角标出现后被消费
+- max_sessions 耗尽后第二个隐身窗口进不来，已建会话仍可读
+- max_sessions=1 + POST /share/session 服务端已提交后响应丢失 → 同 Idempotency-Key 重试拿到同一 token，usedSessions 恒 1
+- 浏览中撤销 → 下一拍停轮询、清 share:session: 与 share:est-key:、同一不可用外壳；share:status: 仍在
+- AuthKey 错 Key 停表单且零配额，对 Key 进 ready；请求账本不含 sec/authKey/token
+- SHARE_CAPABILITY_V2=false 下四路受限写入被拒且零行落库；翻 true 后四路放行
+负向: 不改既有 12 个 spec 文件；不改 mail-vue / mail-worker 生产源；不把 SHARE_CAPABILITY_V2 写进 wrangler.toml 或 wrangler-e2e.toml；不断界面文案字面量。
+
+链路:
+  新 spec [to-build] → fixtures/share.js helpers [to-change, append] → harness control/worker-entry/constants [to-change, append]
+  真 worker + 真 Chromium [existing]
+  最终 sink: 访客 DOM data-* 钩子 + sessionStorage 三键 + Owner GET /mailShare/get usedSessions + Owner 写入信封
+真跑一次: node tests/e2e/run.mjs（必须含既有 13 passed + 新 spec； vitest 套件只回归、不替代 e2e）
+
+Read first, in this order:
+1. ponytail(lite) under $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/
+2. recon-t27-e2e.md **§13 first** (fog already decided — do not reopen), then §1–§12
+3. git log -p --follow tests/e2e/harness/worker-entry.js tests/e2e/harness/control.js tests/e2e/fixtures/share.js
+4. Current files: tests/e2e/README.md, wrangler-e2e.toml, playwright.config.js, specs/*.spec.js (read, do not edit the 12)
+
+## Fog rulings (execute as-is)
+
+- Fog-1 CHANGE A: capabilityV2Override + ONE Proxy (early-return only when BOTH overrides are null) + POST /__e2e__/capability-v2 + /seed resets both to null. wrangler-e2e.toml / start.mjs / playwright.config.js untouched. setCapabilityV2(true) writes 'true'; false writes 'false'.
+- Fog-2 CHANGE: page.route **/api/share/session → first hit route.fetch() then abort('failed'); later continue(). Zero harness endpoint. FIRST implementation action: prove this injection with a failing-then-green replay spec. If Playwright throws already-handled, STOP and report; do not edit isLostResponse; do not fulfill 599.
+- Fog-3 CHANGE: no second worker. Thin capability-v2-fence.spec.js, four paths only (not message_limit). File-head comment points at share-integration.spec.js:1148.
+- T27-BASELINE CHANGE: 12 existing spec files / 13 test() stay byte-stable. Do not rewrite them.
+- T27-FOUR HOLD: fence asserts the four tasked writes only.
+- T27-API CHANGE: export control.api() for error envelopes. createShare keeps throwing on non-200.
+- T27-COPY HOLD: use [data-share-copy] / [data-share-copy-result]=copied. No English copy strings.
+
+## TDD order (red then green; do not write a spec green on the first try)
+
+1. Prove Fog-2: visitor-session-replay.spec.js must first fail for a real reason (no helper yet / abort not wired), then green with dropFirstResponse. Assert the four observables in recon §3.3.
+2. worker-entry seed + capability-v2 endpoint + control.setCapabilityV2 / getShare / exported api + constants MAILBOX_2 / OTP_CODE_2 + fixtures helpers.
+3. visitor-multi-mailbox.spec.js (V2 on; ready THEN inject to MAILBOX_2; tabs / badge / copy / URL has no account ids or addresses).
+4. visitor-session-quota.spec.js (maxSessions:1; second context unavailable; first still ready; usedSessions===1).
+5. visitor-revoke-live.spec.js (default V2 false; after unavailable, poll requests==0; session+est-key gone; status remains; same shell as random lid). Extra POST from recoverFromUnavailable is frozen T-26 behavior — do not "fix" it.
+6. visitor-authkey.spec.js (wrong key stays authRequired, usedSessions===0; right key ready; est-key present then cleared; recordApiRequests has no sec/authKey/token in URL/headers; Idempotency-Key allowed).
+7. capability-v2-fence.spec.js (explicit setCapabilityV2(false) then four refuses + list total unchanged; then true and four 200s).
+
+## File whitelist (append-only except the 5 harness/fixture files)
+
+NEW:
+- tests/e2e/specs/visitor-multi-mailbox.spec.js
+- tests/e2e/specs/visitor-session-quota.spec.js
+- tests/e2e/specs/visitor-session-replay.spec.js
+- tests/e2e/specs/visitor-revoke-live.spec.js
+- tests/e2e/specs/visitor-authkey.spec.js
+- tests/e2e/specs/capability-v2-fence.spec.js
+
+CHANGE (append, keep existing exports/methods byte-stable in behavior):
+- tests/e2e/harness/worker-entry.js
+- tests/e2e/harness/control.js
+- tests/e2e/harness/constants.js
+- tests/e2e/fixtures/share.js
+- tests/e2e/README.md (one line for /__e2e__/capability-v2)
+
+FORBIDDEN:
+- mail-vue/**
+- mail-worker/src/**
+- mail-worker/wrangler.toml
+- tests/e2e/wrangler-e2e.toml
+- tests/e2e/run.mjs
+- tests/e2e/playwright.config.js
+- the existing 12 spec files
+- i18n files
+
+## Implementation notes (do not invent a second way)
+
+- world fixture already seeds every test → V2 starts false. Specs that need multi/AuthKey/quota must setCapabilityV2(true) after seed.
+- createShare default body stays accountId: seed.accountId. Multi specs pass { accountIds: [accountId, accountId2] }.
+- seed return adds accountId2 / mailbox2 only; do not rename accountId / mailbox.
+- usedSessions via GET /api/mailShare/get (control.getShare). No D1 probe endpoint.
+- newVisitor(browser) only for the second incognito in quota spec. Multi spec reuses the fixture page (already never-logged-in + clipboard).
+- dropFirstResponse must count browser-visible POSTs (page.on('request')), not route.fetch internals if they also emit.
+- No i18n string assertions. Compare shell text to shell text. Assert data-* / aria-* / storage keys / request ledger / OTP_CODE values.
+- After adding MAILBOX_2, keep /__e2e__/email default `to` = MAILBOX.
+- README: one line that capabilityV2Override is process-global and workers must stay 1.
+
+## Verify (always --no-cache for vitest; e2e is the contract)
+
+1. FIRST: node tests/e2e/run.mjs  (must keep the previous 13 passing, plus new specs)
+2. pnpm --dir mail-vue test -- --no-cache   (must stay 22/250; you must not have touched vue)
+3. pnpm --dir mail-worker test -- --no-cache (must stay 18/626; you must not have touched worker src)
+4. git diff --stat mail-vue mail-worker/src mail-worker/wrangler.toml tests/e2e/wrangler-e2e.toml  must be empty
+5. git diff --stat -- tests/e2e/specs/visitor-otp-copy.spec.js tests/e2e/specs/visitor-session.spec.js tests/e2e/specs/visitor-unavailable.spec.js  must be empty
+
+Write /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t27-note.md
+Include: how Fog-2 injection actually behaved (fetch+abort ok or blocked), test counts (old 13 + new N), leftover risks.
+
+Reply to user in Chinese.

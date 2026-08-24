@@ -1,0 +1,27 @@
+T-25 R2 review · only the P1 filter + fixes after review-t25.md
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Do NOT git commit / push / stash / switch branch / edit production code.
+
+First-round review: `.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t25.md`
+Main-AI filter (already written into that file's Update Log):
+- P1-1 CHANGE
+- P1-2 CHANGE
+- P1-3 CHANGE
+- P1-4 HOLD — do not reopen unless you have new evidence that empty-page list responses leak existence, or that SHARE_UNAVAILABLE would not kill the share on an AC-EDGE-04 binding-removal race.
+
+Inspect the post-filter diff on:
+- mail-vue/src/views/share/index.vue (advanceFromPage / selectTab / beginMailbox / isMulti / readyMailboxLabel)
+- mail-vue/src/views/share/index.spec.js (new AC-OTP-09 leave-before-tick test, stored-token tab hydrate test, whole-page plaintext assertion)
+
+Success: visitor with multiple bindings sees masked tabs, badge only after consuming a watermark, each tick 1 status + 1 mails, refresh of a stored token still gets tabs after the first status tick, multi page does not show the legacy plaintext mailbox.
+Negative: do not demand listForBinding return SHARE_UNAVAILABLE; do not edit useSharePolling.js; SHARE_CAPABILITY_V2 stays default false.
+
+You MAY run:
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/index.spec.js src/views/share/status-watermark.spec.js src/composables/useSharePolling.spec.js src/request/share.spec.js src/views/share/share-chunk.spec.js
+
+Write `/workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t25-r2.md`
+Format: VERDICT APPROVED | NEEDS_CHANGES; P0/P1/P2; file:line anchors; test evidence if run.
+
+Reply to user in Chinese.

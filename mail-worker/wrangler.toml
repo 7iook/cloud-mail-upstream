@@ -55,6 +55,9 @@ crons = ["0 16 * * *"]	#每天晚上12点执行每日任务,刷新分析缓存
 #domain = []				#邮件域名可可配置多个 示例: ["example1.com","example2.com"]
 #admin = ""				#管理员的邮箱	示例: admin@example.com
 #jwt_secret = ""			#jwt令牌的密钥,随便填一串字符串
+#SHARE_CAPABILITY_V2 = "false"	#分享全能力发布栅栏(AC-LIFE-11),缺省即 false,代码把「缺失」当 false
+						#只在 Dashboard 置 "true",且须先满足激活前置:迁移完成 + 回填重跑 + 无旧 Worker 在途 + 关键日志事件已有告警消费者
+						#此处保持注释:keep_vars 拦不住 toml 里显式写的值,取消注释会把 Dashboard 的 true 覆盖回 false
 
 [build]
 command = "pnpm --prefix ../mail-vue install && pnpm --prefix ../mail-vue run build"

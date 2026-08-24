@@ -1,0 +1,76 @@
+T-19 executor · Checkpoint: extend share-integration.spec.js (multi / quota / AuthKey HTTP chains)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD after docs commit will include T-18 73dc371 + Evidence. T-18 is APPROVED. You may write A8.
+
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit any file except:
+  mail-worker/test/share-integration.spec.js
+  .agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t19-note.md
+
+Read first:
+1. /workspace/.cursor/plugins/cache/7iook-cursor-team-plugins/55280841/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ponytail/SKILL.md (lite)
+2. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t19-checkpoint.md (authoritative; ignore its 577 baseline — T-18 landed, floor is now 18/598)
+3. mail-worker/test/share-integration.spec.js helpers: jsonWorker, jsonApi, createShare, openSession, savedEnv, cleanup, assertSecAbsentFromDatabase
+
+Success state (user view):
+NOT "more integration tests exist", BUT: an owner can create a two-mailbox share over HTTP, a visitor reads the merged inbox from one session; adding/removing a binding takes effect on the next pull without rebuilding the session; maxSessions stops new sessions while an already issued token still reads; AuthKey minted by create/resetAuthKey is the same secret the visitor must present; V2=false refuses multi/AuthKey/quota writes and leaves zero rows.
+Negative: do not rewrite the existing 17 cases; do not flip wrangler-vitest.toml; do not add production code; do not duplicate perm tests.
+
+## Already decided
+
+- T16-HTTP: flip SHARE_CAPABILITY_V2 only via jsonWorker (worker.fetch(req, env)). SELF.fetch cannot see process env mutations.
+- W0-R5: never write SHARE_CAPABILITY_V2=true into wrangler*.toml.
+- T-18 APPROVED: A8 is now in scope (delete one mailbox of a multi share, share stays ACTIVE, visitor still reads the survivor).
+- Do not add perm / SHARE_FORBIDDEN cases (security-share.spec.js owns AC-ADMIN-10).
+
+## Implementation rules (recon §4 + §5 + §7)
+
+- Append new describes at the file tail. Existing 17 cases: assertion text unchanged.
+- Helpers may only grow optional params with defaults (createShare: accountIds / authKeyEnabled / maxSessions; openSession: authKey / Idempotency-Key).
+- Add SHARE_CAPABILITY_V2 to savedEnv + cleanup restore. Flip in try/finally. vitest is singleWorker — a leaked true pollutes the suite.
+- cleanup() must also DELETE orphan mail_share_binding (share_id NOT IN mail_share). New mailboxes use t24-*@example.com prefix.
+- Need a third (and fourth if needed) mailbox via insertAccount() for add/remove.
+- Typical write shape: flip V2 → jsonWorker write → restore V2 → jsonApi read (proves already-issued links still work with the flag off).
+- Owner JWT already has share:manage (role_id=1). No new seeds for perm.
+- Production code change target = 0 lines. If an AC cannot pass without src changes, STOP and write the gap in exec-t19-note.md.
+
+## Required cases (recon §5; names may be shortened but keep AC coverage)
+
+Group A multi:
+A1 two-mailbox create → session mailboxes masked → /share/mails merged DESC, bindingId matches
+A2 per-binding window: two before + two after create; only the after pair visible
+A3 PUT bindings add Z then remove Y; same sessionToken; next pull reflects; removed mailId → SHARE_UNAVAILABLE
+A4 remove last binding → REVOKED + four visitor routes byte-identical SHARE_UNAVAILABLE
+A5 V2=false multi create and 1→N expand → SHARE_INVALID_CONFIG, zero new rows
+A6 foreign accountId → SHARE_ACCOUNT_FORBIDDEN, zero partial writes
+A7 DELETE /mailShare/delete clears mail_share + bindings + share_idempotency for that shareId
+A8 (T-18 now APPROVED) delete one mailbox of a multi share via account-service HTTP/service already used in this file if present; otherwise accountService.delete. Share stays ACTIVE; visitor still reads survivor; only that binding gone.
+
+Group B quota:
+B1 maxSessions=2: third session SHARE_UNAVAILABLE; first token mails+status still 200; access_count=2
+B2 maxSessions=1 concurrent Promise.all: exactly one success; access_count=1
+B3 same Idempotency-Key on last slot replays same sessionToken; access_count stays 1
+B4 polling status/mails does not increment access_count (last_access_at MAY change)
+B5 infinite share used 2 times then PUT maxSessions=2 (default reset) → usedSessions=0 and two more sessions allowed; other share {maxSessions:1, resetUsedSessions:false} after 1 use → ACCESS_LIMIT_REACHED
+B6 list?status=ACCESS_LIMIT_REACHED hits the row; usedSessions/maxSessions/shareType present; body has no sec plaintext
+
+Group C AuthKey:
+C1 create authKeyEnabled → 22-char base64url; missing/wrong key → SHARE_AUTH_REQUIRED (not UNAVAILABLE) and access_count unchanged; correct key 200 and +1
+C2 wrong sec + good key, and unknown lid + any key → byte-identical SHARE_UNAVAILABLE; correct sec + no key → SHARE_AUTH_REQUIRED
+C3 resetAuthKey reset kills live token; old key → AUTH_REQUIRED; new key 200 and consumes another quota slot
+C4 enable does not kill pre-enable session; disable does not require V2; extra old key after disable is ignored
+C5 plaintext never in get/list/session; assertSecAbsentFromDatabase(authKey)
+C6 jsonApi enable while V2=false → SHARE_INVALID_CONFIG; disable still allowed
+
+## Verify (must actually run, --no-cache)
+
+```
+pnpm --dir mail-worker exec vitest run test/share-integration.spec.js --no-cache
+pnpm --dir mail-worker exec vitest run test/share-api.spec.js test/mail-share-service.spec.js test/security-share.spec.js --no-cache
+```
+
+Record exact pass counts in exec-t19-note.md. Existing 17 must stay green. Floor: worker 18/598 only-increase; do not run/change vue or e2e except you may run them if cheap.
+
+Write exec-t19-note.md like exec-t18-note.md (Chinese ok): whitelist, red then green counts, V2 flip pattern, A8 result, any blocker. Do not commit.

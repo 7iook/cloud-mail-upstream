@@ -1,0 +1,59 @@
+T-22 R2 · re-review pending-close secret loss + fractional refresh interval
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Fix commit: 4648101 fix(vue): keep create wizard open until secrets land
+Parent impl: 5c9651f feat(vue): add share-admin create wizard and expand create
+Round-1 review: /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t22.md
+  Verdict was NEEDS_CHANGES; P0=0; P1-1 close during pending create loses secrets; P2-1 3000.5 misread as V2 miss.
+
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files. Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t22-r2.md
+
+You are a heterogeneous reviewer. Do not trust executor notes or the main AI narrative.
+Read the 4648101 diff and the current ShareCreateWizard files yourself. Run the tests yourself.
+
+## Original requirement
+
+T-22 create wizard: four presets, Idempotency-Key retry, V2 collide-then-degrade, one-shot shareUrl/authKey.
+
+Success state (user view):
+NOT "close is disabled in a test", BUT: an owner who clicks create and then tries to dismiss the dialog still sees the new link (and AuthKey if any) when the request finishes; a typo like 3000.5 does not grey the capability groups.
+Negative: no lost one-shot secrets; no false "capability inactive" from a non-integer refresh interval.
+
+## Already decided (do not reopen)
+
+- T22-V2-COLLIDE / T22-CREATE-EXPAND / T22-AFTER-T21 as in prompt.t22.review.txt
+- T22-P1-1 CHANGE: refuse every close path while submitting
+- T22-P2-1 CHANGE: localError requires safe integer >= 3000; input precision/step-strictly
+- PENDING_COPY is T-29
+
+## Scope of this R2
+
+Only decide whether P1-1 and P2-1 are closed, and whether 4648101 introduced a new P0.
+Do not re-litigate the round-1 PASS checklist unless a PASS item is now broken.
+
+## What to verify
+
+1. git show --stat 4648101 is wizard vue+spec only.
+2. onOpenChange(false) returns while submitting; footer close is disabled; dialog close-on-click-modal / close-on-press-escape / show-close are off while submitting.
+3. After the pending create resolves, secret-once is visible on the still-open dialog.
+4. refreshIntervalMs=3000.5 with fence intent does not call createMailShare and does not mark inactive.
+5. New tests are not vacuous (deferred promise + fractional interval).
+6. Production caller still exists (index.vue mounts the wizard).
+
+## Required tests (run yourself, --no-cache)
+
+pnpm --dir mail-vue exec vitest run src/views/share-admin/ShareCreateWizard.spec.js src/request/mail-share.spec.js src/views/email/ShareDialog.spec.js src/views/email/ShareIndicator.spec.js src/views/share-admin/index.spec.js src/views/share/share-chunk.spec.js --no-cache
+
+Also run:
+pnpm --dir mail-vue exec vitest run src/views/share-admin/ShareCreateWizard.spec.js --no-cache -t 'T22-P'
+
+Report file/test counts.
+
+## Output
+
+Write review-t22-r2.md with: Verdict APPROVED | NEEDS_CHANGES; for each of P1-1 / P2-1 write CLOSED or STILL OPEN with file:line; commands you actually ran.
+
+Reply to user in Chinese.

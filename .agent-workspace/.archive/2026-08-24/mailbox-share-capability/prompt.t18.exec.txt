@@ -1,0 +1,143 @@
+T-18 executor · cascade revoke via Binding + cleanup conservation
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD: af94a22 (T-17 APPROVED + T-18 recon already landed)
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit files outside the whitelist below.
+
+Read first (in this order), then implement TDD red→green:
+1. /workspace/.cursor/plugins/cache/7iook-cursor-team-plugins/55280841/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ponytail/SKILL.md  (lite: smallest correct SQL, no extra abstraction)
+2. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t18-cascade.md  (authoritative)
+3. Current functions:
+   - mail-worker/src/service/mail-share-service.js  revokeByAccountIds :1364-1381, prepareRevoke :460-467, syncPrimaryAccountId :737-758, prepareBindingInsert :665-691, SHARE_EVENT / logShareEvent :40-96
+   - mail-worker/src/service/mail-share-cleanup-service.js  whole file
+   - mail-worker/test/account-delete-share.spec.js
+   - mail-worker/test/mail-share-cleanup.spec.js
+   - mail-worker/test/v3-2-db.spec.js illegalBindingCount :66-77
+   - mail-worker/src/init/init.js backfill JOIN :96-100
+
+Success state (user view, do not invent):
+NOT "JOIN SQL exists", BUT: deleting a mailbox unbinds only that mailbox; a share with remaining live mailboxes stays ACTIVE and the visitor can still read those mailboxes; a share with 0 live mailboxes becomes REVOKED; expired-share cleanup deletes bindings in the same batch as the share row; leftover orphan bindings are swept; a zero-binding leftover ACTIVE share that is NOT in the deleted-account set stays ACTIVE.
+Negative: do not revoke other users' shares; do not revoke unrelated zero-binding leftover rows; do not write account_id=0/NULL; do not expand IN placeholders.
+
+## Already decided (do not reopen)
+
+- T18-DUAL CHANGE: cascade revoke is dual-arm. Binding arm is primary. Zero-binding leftover rows fall back to mail_share.account_id. Arms are mutually exclusive.
+- T18-ORPHAN-REVOKE CHANGE: cleanup orphan compensation, if 0 live mailboxes remain, sets the share REVOKED.
+
+## Whitelist (only these)
+
+1. mail-worker/src/service/mail-share-service.js
+   - Rewrite revokeByAccountIds function body only (keep the id-normalize loop :1365-1377 verbatim, including empty-set early return).
+   - Add private prepare* helpers next to syncPrimaryAccountId. Do NOT modify syncPrimaryAccountId, prepareRevoke, create, update, delete, updateBindings, resetAuthKey, list, revoke, revokeByAccountId wrapper.
+2. mail-worker/src/service/mail-share-cleanup-service.js  — rewrite cleanupExpired to one native SQL batch.
+3. mail-worker/test/account-delete-share.spec.js  — extend only; existing 5 tests stay byte-identical in assertion intent.
+4. mail-worker/test/mail-share-cleanup.spec.js  — extend only; existing 1 baseline test stays.
+5. .agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t18-note.md  — write this.
+
+Forbidden: security.js, init.js, share-auth-service.js, account-service.js, wrangler*.toml, share-api.js, mail-share-api.js, mail-share-service.spec.js, v3-2-db.spec.js, entity/*, mail-vue/**, tests/e2e/**, SHARE_EVENT object (no new event names).
+
+## Cascade SQL (same batch, this order)
+
+idsJson = JSON.stringify(normalized ids). One bind param per json_each(?). Never expand IN (?, ?, …).
+
+1) Revoke affected shares with no survivors — MUST go through prepareRevoke(c, whereSql, [idsJson, idsJson, idsJson]) so AND status='ACTIVE' + RETURNING stay SSOT.
+
+whereSql (recon §3.2-①):
+
+  (
+    EXISTS (SELECT 1 FROM mail_share_binding b
+            WHERE b.share_id = mail_share.share_id
+              AND b.account_id IN (SELECT value FROM json_each(?)))
+    OR (
+      NOT EXISTS (SELECT 1 FROM mail_share_binding b WHERE b.share_id = mail_share.share_id)
+      AND mail_share.account_id IN (SELECT value FROM json_each(?))
+    )
+  )
+  AND NOT EXISTS (SELECT 1 FROM mail_share_binding b
+                  WHERE b.share_id = mail_share.share_id
+                    AND b.account_id NOT IN (SELECT value FROM json_each(?)))
+
+2) Resync primary account_id / window_start_email_id excluding the dying set. EXISTS(survivor) + account_id > 0. Never write 0/NULL. Do not reuse/modify syncPrimaryAccountId; new helper. SQL = recon §3.2-②.
+
+3) DELETE FROM mail_share_binding WHERE account_id IN (SELECT value FROM json_each(?)) RETURNING share_id, account_id
+
+Order: 1 then 2 then 3. 1 and 2 must run before DELETE because they read dying rows.
+
+Hard facts to comment in the function:
+- Cascade always runs while the account row is still alive / still NORMAL. NEVER predicate on "account already deleted". Predicate is only accountId ∈ incoming set.
+- No try/catch. Fail-closed.
+- Keep empty-ids early return. Empty json_each + NOT IN is universally true and would revoke every zero-binding ACTIVE share.
+
+Return: { revoked, unbound }. revoked = statement 1 meta.changes (shares set REVOKED), NOT "affected shares". unbound = deleted binding count. Callers ignore extras.
+
+Events: reuse SHARE_EVENT.BINDING_CASCADE via logShareEvent. One line per affected share, not per binding. Fields like { shareId, reason: 'account_deleted', removedBindings: n, revoked: true|false }. No email / sec / authKey / token / IP. Do not pass event/ts (envelope overwrites them). Do not add SHARE_EVENT names (closed toEqual of 6).
+
+## Cleanup SQL (one c.env.db.batch(), native SQL; drizzle can be removed from this file)
+
+Context: c is { env } only. No c.get / isShareDisabled / publicOrigin.
+
+Keep IDEMPOTENCY_TTL_HOURS=24 and delete_at <= (not <).
+
+Statements (recon §4.2), main table LAST:
+
+1. DELETE bindings of due shares (share_id IN (SELECT share_id FROM mail_share WHERE delete_at <= ?))
+2. UPDATE ACTIVE shares that HAVE at least one binding AND zero live accounts → REVOKED + revoked_at. EXISTS(any binding) is mandatory (do not touch zero-binding leftover ACTIVE rows). Live = JOIN account a ON a.account_id = b.account_id AND a.is_del = 0 AND a.user_id = mail_share.user_id
+3. DELETE orphan bindings whose legality predicate fails. Predicate MUST be character-identical to prepareBindingInsert JOIN + init.js backfill + illegalBindingCount: account exists AND is_del=0 AND user_id matches share owner. This also covers dangling share_id (no mail_share row).
+4. After 3, remaining bindings are live. If a share's current account_id is no longer among remaining live bindings, resync account_id + window_start_email_id to min remaining binding_id with account_id > 0, guarded by EXISTS(survivor). Never write 0/NULL. Needed for B7 / AC-LIFE-10 on the compensation path (cascade already resyncs; cleanup is the crash/bypass path).
+5. DELETE share_idempotency WHERE created_at < ? OR share_id IN (SELECT share_id FROM mail_share WHERE delete_at <= ?)
+6. DELETE FROM mail_share WHERE delete_at <= ?
+
+Cleanup also logs BINDING_CASCADE per affected share; reason must be distinguishable from cascade ('orphan_sweep' / 'share_expired'). No PII.
+
+Do not add try/catch.
+
+## Tests — TDD: write failing tests, run once red, then implement.
+
+### account-delete-share.spec.js
+
+Fixtures to add (do not rewrite existing helpers' contracts):
+- v2ctx() like mail-share-service.spec.js:49-52 (SHARE_CAPABILITY_V2: 'true'). shareEnv() has no V2; multi create is SHARE_INVALID_CONFIG without it.
+- Third deletable mailbox for USER_A (PRIMARY_A is self-address and accountService.delete rejects delMyAccount). Keep PRIMARY_A + BOX_A + BOX_B; add BOX_C + MAIL_C.
+- cleanup() must also DELETE mail_share_binding for these users/shares (today it only deletes mail_share).
+- Existing 5 tests: only-extend, do not change assertions.
+
+Create multi shares via mailShareService.create(v2ctx(), { accountIds: [X, Y], durationSeconds: 3600, name }, userId).
+
+Cases A1–A11 from recon §6.1. A7 MUST expect REVOKED (T18-DUAL). A8 MUST stay ACTIVE.
+
+A11: 60 synthetic accountIds in one revokeByAccountIds call (bindings have no FK). Assert no "too many SQL variables". Count `?` in the prepared SQL if easier.
+
+Visitor assertions: remaining mailbox readable; do NOT claim "visitor can read deleted mailbox mail" (loadLiveBindings already filters that).
+
+### mail-share-cleanup.spec.js
+
+SEED TRAP: insertShare writes user_id=1, account_id=1 and there is NO account_id=1. Any binding on that seed is "illegal" and the orphan arm will delete it → B1 false-green. Keep the existing baseline test on insertShare unchanged. New cases MUST seed a real user + account first (copy ensureUser/ensureAccount from account-delete-share.spec.js).
+
+Cases B1–B10 from recon §6.2.
+B4: hard-delete account with raw SQL (bypass service), cron → binding gone, share REVOKED.
+B6: zero-binding ACTIVE not-due share stays ACTIVE.
+B7: 2 legal bindings, raw-SQL delete one account → only that binding gone, share ACTIVE, account_id = survivor if the dead one was primary (resync statement).
+B9: existing :52-82 test remains green unchanged.
+
+Drive cleanup via worker.scheduled({ cron: '0 16 * * *' }, env, {}) like the baseline, or mailShareCleanupService.cleanupExpired({ env }) for isolation. Prefer the cron path for B1/B9 so the scheduled wire stays proven.
+
+## Verify
+
+Must actually run, --no-cache:
+
+```
+pnpm --dir mail-worker exec vitest run test/account-delete-share.spec.js test/mail-share-cleanup.spec.js --no-cache
+pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js test/v3-2-db.spec.js test/mail-share.schema.spec.js --no-cache
+```
+
+Record exact pass counts in exec-t18-note.md. If worker full suite is cheap after that, run `pnpm --dir mail-worker test`. Baseline floor: 18 files / 577 tests, only-increase.
+
+Vitest can EXIT=0 with failures — trust the passed/failed counts.
+
+## exec-t18-note.md
+
+Same shape as exec-t17-note.md: whitelist diffs summary, red count then green count, SQL comments on order + dual-arm + "never use account-already-deleted", event field list, what you did not change. Chinese ok.
+
+Return to parent: files changed, targeted test counts (red then green), any blocker. Do not commit.

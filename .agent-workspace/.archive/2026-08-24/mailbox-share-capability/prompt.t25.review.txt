@@ -1,0 +1,48 @@
+T-25 code review · visitor multi-mailbox tabs + watermark + listForBinding
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Commit to review: 2e6754d (range 417ebf9..2e6754d)
+Do NOT git commit / push / stash / switch branch / edit production code.
+
+Read first:
+1. This prompt only (requirement). Do not treat exec-t25-note.md as evidence.
+2. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t25-tabs.md §11 (fog already decided).
+3. /workspace/docs/specs/mailbox-share-capability/tasks.md T-25 block.
+4. git show 2e6754d and the files below.
+
+Success the user must see:
+NOT "tabs exist", BUT a visitor with multiple bindings sees masked addresses as native tabs, a badge only after they have consumed a binding's watermark, and each poll tick is 1 status + at most 1 mails (never N-way). Single-mailbox page still lists/copies OTP the same way.
+Negative: visitor guard / init.js regex / /s/<lid>#<sec> / session.js / i18n files / ShareOtpCard props (no bindingId) / useSharePolling.js production source / assert-share-chunk.js gate body must be untouched. SHARE_CAPABILITY_V2 must stay default false.
+
+Fog contract:
+- Fog-1: GET /share/mails without bindingId keeps merged list(); with bindingId including 0 uses listForBinding. pollTick does NOT pass cursor. Advance watermark to max mailId in the returned page, not status.latestEmailId.
+- T25-TAB-LOAD: selectTab fetches immediately if that binding has no rows in mails.
+- T25-ACTIVE-0: even shareType=single, set activeBinding from mailboxes[0] (may be 0). Never `if (bindingId)`. pollTick must not return {list:[]} solely because activeBinding is null.
+- Fog-2: getShareMailboxesStatus lives in request/share.js. listShareMails optional bindingId via listParams. No second axios.
+- Fog-3: useSharePolling.js ZERO edits. Watermark tests in status-watermark.spec.js. composable spec +1 only. N-way assertion in index.spec.js.
+- T25-ALWAYS-FETCH: every tick 1 status + 1 mails for active binding (no cursor). Watermarks drive badges only; do not skip mails when !hasNew.
+- Old index.spec.js 22 it() bodies must be unchanged (setup/hoisted mock + AC-VISIT-10 file loop may extend).
+
+Inspect at least:
+- mail-worker/src/api/share-api.js GET /share/mails
+- mail-worker/src/service/share-mail-service.js listForBinding
+- mail-vue/src/request/share.js
+- mail-vue/src/views/share/status-watermark.js
+- mail-vue/src/views/share/index.vue pollTick / selectTab / applyShareConfig / beginMailbox / visibleMails
+- mail-vue/src/views/share/index.spec.js (old 22 vs new)
+- git diff --stat mail-vue/src/composables/useSharePolling.js (must be empty vs HEAD~)
+- ShareOtpCard.vue props still only mails/selected/enabled
+
+You MAY run (always --no-cache), do not treat SUB-reported counts as yours:
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/status-watermark.spec.js src/views/share/index.spec.js src/composables/useSharePolling.spec.js src/request/share.spec.js src/views/share/share-chunk.spec.js
+pnpm --dir mail-worker exec vitest run --no-cache test/share-api.spec.js test/share-mail-service.spec.js
+
+Write /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t25.md
+Format like review-t24.md:
+- First line: VERDICT APPROVED | NEEDS_CHANGES
+- P0 / P1 / P2 lists (empty allowed)
+- Independent verification with file:line anchors
+- Test evidence if you ran tests
+
+Reply to user in Chinese. Do not git commit.

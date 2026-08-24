@@ -32,6 +32,36 @@ app.get('/mailShare/list', withShare(async (c) => {
 	return shareJson(c, shareResult.ok(data));
 }));
 
+app.get('/mailShare/get', withShare(async (c) => {
+	const data = await mailShareService.get(c, c.req.query(), userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
+app.put('/mailShare/update', withShare(async (c) => {
+	const body = await c.req.json();
+	const data = await mailShareService.update(c, body, userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
+app.delete('/mailShare/delete', withShare(async (c) => {
+	const data = await mailShareService.delete(c, c.req.query(), userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
+// AuthKey 的唯一写入口(enable / reset / disable),POST 而非 PUT:它每次都铸一把新密钥,
+// 不是幂等的字段覆盖。明文只在这一次响应里出现。
+app.post('/mailShare/resetAuthKey', withShare(async (c) => {
+	const body = await c.req.json();
+	const data = await mailShareService.resetAuthKey(c, body, userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
+app.put('/mailShare/bindings', withShare(async (c) => {
+	const body = await c.req.json();
+	const data = await mailShareService.updateBindings(c, body, userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
 app.delete('/mailShare/revoke', withShare(async (c) => {
 	const data = await mailShareService.revoke(c, c.req.query(), userContext.getUserId(c));
 	return shareJson(c, shareResult.ok(data));

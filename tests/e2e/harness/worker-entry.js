@@ -9,6 +9,7 @@ import {
 	ATTACHMENT_NAME,
 	E2E_CONTROL_HEADER,
 	MAILBOX,
+	MAILBOX_2,
 	OTP_CODE,
 	OWNER_EMAIL,
 	SENDER_EMAIL,
@@ -18,15 +19,23 @@ import {
 const CONTROL_PREFIX = '/__e2e__/'
 let schemaReady = false
 let sessionTtlOverride = null
+// SHARE_CAPABILITY_V2 is absent from wrangler-e2e.toml on purpose, so the default state is
+// the production default (off) and a spec that forgets to open the gate goes red instead of
+// silently passing. One Proxy answers both overrides: a second layer would wrap this one and
+// make it impossible to tell which of them shadowed a var.
+let capabilityV2Override = null
 
-function envWithSessionTtl(env) {
-	if (sessionTtlOverride == null) {
+function envWithOverrides(env) {
+	if (sessionTtlOverride == null && capabilityV2Override == null) {
 		return env
 	}
 	return new Proxy(env, {
 		get(target, prop, receiver) {
-			if (prop === 'SHARE_SESSION_TTL') {
+			if (prop === 'SHARE_SESSION_TTL' && sessionTtlOverride != null) {
 				return sessionTtlOverride
+			}
+			if (prop === 'SHARE_CAPABILITY_V2' && capabilityV2Override != null) {
+				return capabilityV2Override
 			}
 			const value = Reflect.get(target, prop, receiver)
 			return typeof value === 'function' ? value.bind(target) : value
@@ -136,6 +145,15 @@ async function seedOwner(env) {
 		).bind(MAILBOX, 'e2e-box', userId).first()
 	}
 
+	// Same owner, second mailbox. Idempotent like the first one: `--persist-to .mf-state`
+	// keeps D1 across runs, so a bare INSERT would hit UNIQUE on the second run.
+	let account2 = await env.db.prepare('SELECT account_id FROM account WHERE email = ?').bind(MAILBOX_2).first()
+	if (!account2) {
+		account2 = await env.db.prepare(
+			'INSERT INTO account (email, name, user_id, is_del) VALUES (?, ?, ?, 0) RETURNING account_id'
+		).bind(MAILBOX_2, 'e2e-box-2', userId).first()
+	}
+
 	const sessionToken = crypto.randomUUID()
 	const jwt = await jwtUtils.generateToken({ env }, { userId, token: sessionToken })
 	await env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify({
@@ -144,7 +162,15 @@ async function seedOwner(env) {
 		refreshTime: new Date().toISOString()
 	}))
 	await enableCodeExtraction(env)
-	return { userId, accountId: account.account_id, ownerJwt: jwt, mailbox: MAILBOX, ownerEmail: OWNER_EMAIL }
+	return {
+		userId,
+		accountId: account.account_id,
+		accountId2: account2.account_id,
+		ownerJwt: jwt,
+		mailbox: MAILBOX,
+		mailbox2: MAILBOX_2,
+		ownerEmail: OWNER_EMAIL
+	}
 }
 
 async function handleControl(req, env, ctx, url) {
@@ -162,6 +188,7 @@ async function handleControl(req, env, ctx, url) {
 
 	if (req.method === 'POST' && route === '/seed') {
 		sessionTtlOverride = null
+		capabilityV2Override = null
 		const seeded = await seedOwner(env)
 		return json({ ok: true, ...seeded })
 	}
@@ -175,6 +202,14 @@ async function handleControl(req, env, ctx, url) {
 		}
 		sessionTtlOverride = String(Math.floor(seconds))
 		return json({ ok: true, seconds: Number(sessionTtlOverride) })
+	}
+
+	// 'false' rather than null for off: null means "not overridden", and the two must stay
+	// distinguishable now that /seed resets to null.
+	if (req.method === 'POST' && route === '/capability-v2') {
+		const body = await req.json()
+		capabilityV2Override = body && body.on ? 'true' : 'false'
+		return json({ ok: true, on: capabilityV2Override })
 	}
 
 	if (req.method === 'POST' && route === '/email') {
@@ -265,7 +300,7 @@ export default {
 				return json({ ok: false, error: detail }, 500)
 			}
 		}
-		return worker.fetch(req, envWithSessionTtl(env), ctx)
+		return worker.fetch(req, envWithOverrides(env), ctx)
 	},
 	email: worker.email,
 	scheduled: worker.scheduled

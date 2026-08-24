@@ -58,6 +58,10 @@ export function control(request, baseURL) {
 	}
 
 	return {
+		// Exported raw so a spec can assert a refusal envelope. Every named method below
+		// throws on a non-200 envelope, which is right for arranging a fixture and useless
+		// for a test whose subject is the refusal itself.
+		api,
 		async ready() {
 			const response = await request.get(`${root}/__e2e__/health`)
 			if (response.status() !== 200) {
@@ -91,6 +95,18 @@ export function control(request, baseURL) {
 			}
 			return out.json
 		},
+		// Process-global inside the worker, and /seed resets it, so every test starts with
+		// SHARE_CAPABILITY_V2 unset — the production default.
+		async setCapabilityV2(on) {
+			const out = await call('/__e2e__/capability-v2', {
+				method: 'POST',
+				body: { on: Boolean(on) }
+			})
+			if (!out.json || !out.json.ok) {
+				throw new Error(`e2e capability v2 failed: ${out.text}`)
+			}
+			return out.json
+		},
 		async expireShare(lid) {
 			const out = await call('/__e2e__/expire', { method: 'POST', body: { lid } })
 			if (!out.json || !out.json.ok) {
@@ -112,6 +128,17 @@ export function control(request, baseURL) {
 			})
 			if (!out.json || out.json.code !== 200) {
 				throw new Error(`create share failed: ${out.text}`)
+			}
+			return out.json.data
+		},
+		// usedSessions is the Owner-facing DTO alias of access_count, and the detail query
+		// has no ACTIVE predicate, so a share that hit its cap is still readable here.
+		async getShare(seed, shareId) {
+			const out = await api('GET', `/mailShare/get?shareId=${shareId}`, {
+				token: seed.ownerJwt
+			})
+			if (!out.json || out.json.code !== 200) {
+				throw new Error(`get share failed: ${out.text}`)
 			}
 			return out.json.data
 		},

@@ -1,0 +1,84 @@
+T-22 executor · share-admin create wizard (W4)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD includes T-21 APPROVED (00b0ae1 + 5af8675) and T-23 landed at 4f4cc65.
+Do NOT git commit / push / stash / switch branch.
+
+Read first (in this order):
+1. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/frontend-design/SKILL.md
+2. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/impeccable/SKILL.md
+3. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ui-ux-pro-max/SKILL.md
+4. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55280841/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ponytail/SKILL.md (lite)
+5. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t22-wizard.md (authoritative; T-21/T-23 have landed since it was written — re-read current files, do not trust recon line numbers)
+6. Current files: mail-vue/src/request/mail-share.js, mail-share.spec.js, views/share-admin/index.vue, views/email/ShareDialog.vue (pattern only), views/email/build-share-url.js
+
+Success state (user view):
+NOT "a wizard component exists", BUT: an owner with share:manage opens New share from the list header, picks one of four presets, submits with an Idempotency-Key, and on first success sees the link (and AuthKey if enabled) once; if the response is lost they retry the same key with the form locked; if V2 is off, gated fields disable after a real fence rejection and they can resubmit the leftover single-mailbox body.
+Negative: no preset id in the request; no second createMailShareV2; unknown must not pre-grey gated fields; a domain error must not be reported as "capability inactive"; ShareDialog's old four-key create must stay byte-identical.
+
+## Already decided (do not reopen)
+
+- T22-V2-COLLIDE CHANGE: collide then degrade. unknown does NOT pre-grey. No worker probe. No Vite constant. Skip list-row positive evidence (HOLD, extra).
+- T22-CREATE-EXPAND CHANGE: expand createMailShare in place. Forbidden: createMailShareV2, direct http.post from the wizard.
+- T22-AFTER-T21 CHANGE: T-21 already landed. T-22 does not touch status.js / ShareDetailDrawer.* / ShareRowActions.* / index.spec.js.
+- T23-HEX HOLD and ShareDialog jump are T-23's files. T-22 = 0 lines in views/email/**.
+- i18n: register keys in exec-t22-note.md only; tf() fallback like T-20/T-21. Reuse shareSecretOnce / shareReplayNoSecret. Do not invent a second pair.
+- No noMsg. No error-code → zh map. Extra inline copy only for SHARE_INVALID_CONFIG fence degrade.
+- Do not persist the idempotency key.
+
+## Allowed files
+
+NEW:
+- mail-vue/src/views/share-admin/ShareCreateWizard.vue
+- mail-vue/src/views/share-admin/presets.js
+- mail-vue/src/views/share-admin/ShareCreateWizard.spec.js
+- .agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t22-note.md
+
+PATCH:
+- mail-vue/src/views/share-admin/index.vue  (≤6 lines: import + mount wizard after the refresh icon in header-actions; wizard owns its trigger button; bind @created="refresh")
+- mail-vue/src/request/mail-share.js  (createMailShare only)
+- mail-vue/src/request/mail-share.spec.js  (append 1 case only; existing 6 bodies unchanged)
+
+FORBIDDEN (0 diff): status.js, ShareDetailDrawer.*, ShareRowActions.*, index.spec.js, views/email/**, i18n/*, router/index.js, perm.js, axios, views/share/**, mail-worker/**, tests/e2e/**
+
+## createMailShare expansion (do this first)
+
+Keep the four old keys unconditional (same Number/String coercion).
+Add accountIds and the other create fields ONLY when the caller supplied them.
+Never send accountId and accountIds together.
+Do not normalize/clamp in the request layer (no refreshIntervalMs floor, no false→0).
+Existing mail-share.spec.js:51-56 toEqual of exactly four keys MUST stay green.
+ShareDialog.spec.js J3 (10 tests now) MUST stay green.
+
+## Wizard rules (recon §4 / §5 / §6 / §7 / §8)
+
+1. Four presets are form prefill only. Request key set ⊆ create whitelist of 12. never preset/presetId/presetKey.
+2. Preset values: recon §7 table. Single-OTP defaults MUST stay legacyCompatibleBody (do not change refreshIntervalMs to 5000 etc).
+3. Only "temp mailbox" defaults showFullAddress=true. Copy must not imply secrecy (banned: 保密/隐藏/加密/安全/私密/保护/secret/hide/private/protect).
+4. Only "multi OTP pool" defaults onto the V2 fence (N mailboxes). The other three presets must submit on V2=false.
+5. capabilityV2: unknown → inactive. unknown: four fence groups usable + static hint. inactive: disable all four (multi / AuthKey / maxSessions / messageLimit) + data-test=capability-inactive + reset to unrestricted defaults so the owner can resubmit immediately. Memory = in-page module ref, not storage.
+6. Mark inactive only when ALL three hold: request had ≥1 fence intent; local validation passed; error is SHARE_INVALID_CONFIG (not DURATION/ACCOUNT/BINDING). Provide a recheck control back to unknown.
+7. Idempotency: newIdempotencyKey() + createMailShare(body, key). First success rotates key and shows secrets once. Replay (idempotentReplay) does not rotate; no secret-once; guidance is revoke/delete then recreate. Unknown result (non-integer err.code) does not rotate and locks the form. Business reject keeps the form editable; watch(form) rotates key only when state !== unknown-result.
+8. One-shot: created ref is the only write; shareUrl prefers server shareUrl else buildShareUrl; authKey is a second readonly input with its own useCopyWithFallback() instance. Clear on close / "I saved it" / next create. Do not open the T-21 drawer (it has no plaintext). Confirm before close if secrets are still on screen.
+9. Local validation before request: refreshIntervalMs<3000, maxSessions<1, messageLimit<1, durationSeconds<=0, empty accountIds → zero createMailShare calls and do not mark inactive. 51 mailboxes blocked client-side.
+10. accountList cursor paging, size cap 30, no search endpoint. Single-mailbox default = useAccountStore().currentAccountId.
+11. el-dialog (not drawer), no el-steps, no new route, no new dependency. CSS variables only, scss scoped, 767px breakpoint, no window.onresize, no raw hex.
+12. Do not import views/share/**, request/share.js, or useSharePolling.js.
+13. vi.mock mail-share must spread importOriginal (keep newIdempotencyKey / isShareForbidden real).
+14. Double-submit: submit button :loading+:disabled so createMailShare is called once.
+
+## Required tests (TDD red first)
+
+ShareCreateWizard.spec.js must cover recon §9 W1–W18 (W1/W4/W6/W8/W11/W15 are the load-bearing ones).
+mail-share.spec.js: append one case that an expanded body + key is forwarded exactly; do not edit the old four-key toEqual.
+
+Required green after:
+pnpm --dir mail-vue exec vitest run src/views/share-admin/ShareCreateWizard.spec.js src/request/mail-share.spec.js src/views/email/ShareDialog.spec.js src/views/email/ShareIndicator.spec.js src/views/share-admin/index.spec.js src/views/share/share-chunk.spec.js --no-cache
+pnpm --dir mail-vue test -- --no-cache
+pnpm --dir mail-vue build
+
+Baseline floor (must not drop): vue 20 files / 161 tests, worker 18/619, E2E 13.
+Write file/test counts into exec-t22-note.md. Register new i18n keys there. Quote that index.spec.js and ShareDialog.spec.js existing assertions were not rewritten.
+
+Reply to user in Chinese.

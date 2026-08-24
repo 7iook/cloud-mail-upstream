@@ -1,7 +1,31 @@
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { attConst } from '../const/entity-const';
+import account from '../entity/account';
 import { att } from '../entity/att';
 import orm from '../entity/orm';
+
+const MASKED_ADDRESS = '***';
+
+/**
+ * Decision 14: masking is a display preference, not a confidentiality boundary, so it
+ * only covers the system-generated mailbox identity. Sender, subject and body keep the
+ * address verbatim (AC-MAIL-08). Anything that is not a parsable address degrades to
+ * `***` rather than throwing: one dirty account row must not turn a read into a 500.
+ */
+function isMailboxAddress(text) {
+	if (typeof text !== 'string' || /\s/.test(text)) {
+		return false;
+	}
+	const at = text.indexOf('@');
+	return at > 0 && at < text.length - 1 && text.indexOf('@', at + 1) === -1;
+}
+
+function maskAddress(address, showFullAddress) {
+	if (!isMailboxAddress(address)) {
+		return MASKED_ADDRESS;
+	}
+	return showFullAddress === true ? address : `${address[0]}${MASKED_ADDRESS}${address.slice(address.indexOf('@'))}`;
+}
 
 function resolveAttachmentRows(emailRow, attachmentRows) {
 	if (attachmentRows !== undefined) {
@@ -43,7 +67,21 @@ function projectAttachment(attRow, mailId) {
 	};
 }
 
-function project(emailRow, attachmentRows) {
+// The Binding a row belongs to, resolved from ctx.bindings rather than echoed from the
+// row: `account_id` is an internal id the visitor must never see (AC-MAIL-07). A row
+// whose account is not in the binding set gets a null identity instead of a raw id.
+function resolveBindingId(ctx, accountId) {
+	const bindings = Array.isArray(ctx && ctx.bindings) ? ctx.bindings : [];
+	const matched = bindings.find((item) => item && Number(item.accountId) === Number(accountId));
+	return matched && matched.bindingId != null ? matched.bindingId : null;
+}
+
+/**
+ * `ctx` is the frozen ShareContext (T-09) and `mailboxes` maps accountId -> account.email.
+ * Both are required: the projection cannot invent the Binding identity or the mailbox
+ * address from the email row alone.
+ */
+function project(emailRow, attachmentRows, ctx, mailboxes) {
 	const mailId = emailRow.emailId ?? emailRow.mailId;
 	const attachments = resolveAttachmentRows(emailRow, attachmentRows)
 		.filter(isDownloadableAttachment)
@@ -51,13 +89,20 @@ function project(emailRow, attachmentRows) {
 
 	return {
 		mailId,
+		bindingId: resolveBindingId(ctx, emailRow.accountId),
+		mailboxAddress: maskAddress(
+			mailboxes ? mailboxes.get(emailRow.accountId) : undefined,
+			ctx && ctx.showFullAddress
+		),
 		senderName: emailRow.name ?? emailRow.senderName ?? null,
 		senderAddress: emailRow.sendEmail ?? emailRow.senderAddress ?? null,
 		subject: emailRow.subject == null ? null : emailRow.subject,
 		text: emailRow.text === undefined ? null : emailRow.text,
 		content: emailRow.content === undefined ? null : emailRow.content,
 		receivedAt: emailRow.createTime ?? emailRow.receivedAt ?? null,
-		code: emailRow.code,
+		// The key exists only while the switch is on (AC-OTP-02); a null placeholder would
+		// still tell the visitor page an OTP slot exists.
+		...(ctx && ctx.otpExtractionEnabled === true ? { code: emailRow.code } : {}),
 		attachments
 	};
 }
@@ -89,19 +134,81 @@ async function loadAttachments(c, emailIds, deps) {
 	return findAttachments(c, emailIds);
 }
 
+async function defaultFindAccountEmails(c, accountIds) {
+	const rows = await orm(c)
+		.select({ accountId: account.accountId, email: account.email })
+		.from(account)
+		.where(inArray(account.accountId, accountIds))
+		.all();
+	return rows || [];
+}
+
+// Bindings carry no mailbox address, so the projection reads account.email here rather
+// than growing the frozen ShareContext a field it does not own.
+async function loadMailboxes(c, rows, deps) {
+	const accountIds = [...new Set(rows.map((row) => row.accountId).filter((id) => id != null))];
+	if (!accountIds.length) {
+		return new Map();
+	}
+	const findAccountEmails = deps.findAccountEmails || defaultFindAccountEmails;
+	const found = await findAccountEmails(c, accountIds);
+	return new Map((found || []).map((item) => [item.accountId, item.email]));
+}
+
+// The Binding a visitor asks for by id, or null when this share has no such Binding.
+// `== null` throughout: 0 is the pre-Binding single-mailbox key (share-auth-service
+// loadLiveBindings), not an absent one.
+function narrowToBinding(ctx, bindingId) {
+	const id = Number(bindingId);
+	if (!Number.isSafeInteger(id) || id < 0) {
+		return null;
+	}
+	const bindings = (Array.isArray(ctx && ctx.bindings) ? ctx.bindings : [])
+		.filter((item) => item && Number(item.bindingId) === id);
+	return bindings.length ? { ...ctx, bindings } : null;
+}
+
+async function projectRows(c, rows, ctx, deps) {
+	const attRows = await loadAttachments(c, rows.map((row) => row.emailId), deps);
+	const mailboxes = await loadMailboxes(c, rows, deps);
+	return rows.map((row) => project(
+		row,
+		attRows.filter((item) => item.emailId === row.emailId),
+		ctx,
+		mailboxes
+	));
+}
+
 const shareMailService = {
 
+	maskAddress,
 	project,
 
 	async list(c, ctx, cursor, limit, deps = {}) {
 		const repo = await loadRepo(deps);
 		const rows = await repo.list(c, ctx, cursor, limit);
-		const emailIds = rows.map((row) => row.emailId);
-		const attRows = await loadAttachments(c, emailIds, deps);
-		return rows.map((row) => project(
-			row,
-			attRows.filter((item) => item.emailId === row.emailId)
-		));
+		return projectRows(c, rows, ctx, deps);
+	},
+
+	/**
+	 * One Binding's page of the very same VisibleWindow ∩ latest-N the merged `list`
+	 * reads through, so a visitor Tab cannot see a row the merged list would hide.
+	 * An unknown or foreign bindingId returns [] rather than an error: the visitor must
+	 * not learn which Binding ids exist (AC-MAIL-06).
+	 */
+	async listForBinding(c, ctx, bindingId, cursor, limit, deps = {}) {
+		const scoped = narrowToBinding(ctx, bindingId);
+		if (!scoped) {
+			return [];
+		}
+		const repo = await loadRepo(deps);
+		// `repo.listForBinding` resolves the id with `resolveRowId`, which maps 0 to null
+		// because no real row id is 0 — so the legacy key can only be served by reading the
+		// already-narrowed context through the merged path (one scope, identical query).
+		const rows = Number(bindingId) > 0
+			? await repo.listForBinding(c, scoped, bindingId, cursor, limit)
+			: await repo.list(c, scoped, cursor, limit);
+		return projectRows(c, rows, ctx, deps);
 	},
 
 	async getById(c, ctx, mailId, deps = {}) {
@@ -111,7 +218,8 @@ const shareMailService = {
 			return null;
 		}
 		const attRows = await loadAttachments(c, [row.emailId], deps);
-		return project(row, attRows);
+		const mailboxes = await loadMailboxes(c, [row], deps);
+		return project(row, attRows, ctx, mailboxes);
 	}
 
 };

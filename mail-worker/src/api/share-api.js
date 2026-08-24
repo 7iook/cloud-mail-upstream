@@ -4,6 +4,7 @@ import shareResult from '../model/share-result';
 import shareAttachmentService from '../service/share-attachment-service';
 import shareAuthService from '../service/share-auth-service';
 import shareMailService from '../service/share-mail-service';
+import shareScopedEmailRepository from '../service/share-scoped-email-repository';
 import {
 	SHARE_READ_RATE_LIMITER,
 	SHARE_READ_RETRY_AFTER_SECONDS,
@@ -53,7 +54,11 @@ function capLimit(limit) {
 
 app.post('/share/session', shareRateLimit(SHARE_SESSION_RATE_LIMITER, SHARE_SESSION_RETRY_AFTER_SECONDS), withShare(async (c) => {
 	const body = await c.req.json();
-	const data = await shareAuthService.establishSession(c, body.lid, body.sec);
+	const idempotencyKey = c.req.header('Idempotency-Key') || '';
+	const data = await shareAuthService.establishSession(c, body.lid, body.sec, {
+		idempotencyKey,
+		authKey: body.authKey
+	});
 	return shareJson(c, shareResult.ok(data));
 }));
 
@@ -61,11 +66,24 @@ app.get('/share/mails', shareRateLimit(SHARE_READ_RATE_LIMITER, SHARE_READ_RETRY
 	const query = c.req.query();
 	const ctx = await shareAuthService.resolveSession(c, readSessionToken(c));
 	const limit = capLimit(query.limit);
-	const list = await shareMailService.list(c, ctx, query.cursor, limit);
+	// An absent or empty bindingId keeps the merged list so a pre-T-25 client stays whole;
+	// "0" is the pre-Binding single-mailbox key, not an absent one.
+	const list = query.bindingId == null || query.bindingId === ''
+		? await shareMailService.list(c, ctx, query.cursor, limit)
+		: await shareMailService.listForBinding(c, ctx, query.bindingId, query.cursor, limit);
 	const nextCursor = list.length === limit && list.length > 0
 		? String(list[list.length - 1].mailId)
 		: null;
 	return shareJson(c, shareResult.ok({ list, nextCursor }));
+}));
+
+// Deliberately reads no query parameter (R2-A2): a single global cursor cannot express
+// per-binding consumption, so `sinceEmailId`/`cursor` are neither honoured nor rejected —
+// the watermark is the same for every caller and hasNew is computed on the client.
+app.get('/share/mailboxes/status', shareRateLimit(SHARE_READ_RATE_LIMITER, SHARE_READ_RETRY_AFTER_SECONDS), withShare(async (c) => {
+	const ctx = await shareAuthService.resolveSession(c, readSessionToken(c));
+	const mailboxes = await shareScopedEmailRepository.latestByBinding(c, ctx);
+	return shareJson(c, shareResult.ok({ mailboxes, serverTime: new Date().toISOString() }));
 }));
 
 app.get('/share/mail', shareRateLimit(SHARE_READ_RATE_LIMITER, SHARE_READ_RETRY_AFTER_SECONDS), withShare(async (c) => {

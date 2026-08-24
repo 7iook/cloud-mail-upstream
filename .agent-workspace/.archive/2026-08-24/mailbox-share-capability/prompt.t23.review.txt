@@ -1,0 +1,59 @@
+T-23 independent code review · ShareDialog jump to share-admin
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+The T-23 implementation commit is the one that changes only:
+  mail-vue/src/views/email/ShareDialog.vue
+  mail-vue/src/views/email/ShareDialog.spec.js
+plus exec-t23-note.md / prompt.t23.exec.txt / this review prompt.
+
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files. Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t23.md
+
+You are a heterogeneous reviewer. Do not trust executor notes or the main AI narrative.
+Read the T-23 diff and the current ShareDialog files yourself. Run the tests yourself.
+
+## Original requirement (from tasks.md)
+
+T-23 ShareDialog 兼容保持(快捷入口)
+- T-23.1 ShareDialog.spec.js 基线全绿保持(旧契约单邮箱创建可用)
+- 对话框尾部加「前往分享管理」跳转
+- 完整管理能力不塞回对话框
+
+Success state (user view):
+NOT "a button exists", BUT: an owner with share:manage who already used the old single-mailbox create dialog can still create with the same four-field body, and can leave the dialog for /share-admin; an owner without the perm never sees the jump and never gets a router.push to a missing route.
+Negative: no drawer/wizard/binding/AuthKey management inside this dialog; createMailShare stays the old four keys for this path.
+
+## Already decided (do not reopen as defects)
+
+- T23-COPY CHANGE: tf() + new key shareGoAdmin; do not reuse shareManage; no extra hint row
+- T23-PERM CHANGE: footer v-if canManage; copy Array.isArray(permKeys) from ShareIndicator; no perm → no render, no push
+- T23-HEX HOLD: do not restyle existing bare hex
+- PENDING_COPY Chinese-on-en locale is T-29, same as T-20/T-21
+- Do not use useRouter(); test MODE default-exports null
+- J3 four-key toEqual is the T-22 safety net; do not rewrite those assertions
+- The first 6 existing it() bodies must be unchanged
+
+## What to verify
+
+1. git show --stat of the T-23 commit: only ShareDialog.vue / ShareDialog.spec.js plus archive notes. Forbidden: request/mail-share.js, share-admin/**, ShareIndicator, i18n, router/index.js, perm/perm.js, mail-worker/**
+2. Existing 6 it() assertion bodies have no deleted assertion lines
+3. createMailShare from this dialog is still exactly {accountId, durationSeconds, name, remark}
+4. Footer button is v-if canManage; missing permKeys does not throw; router.push is not called
+5. Click order: emit update:modelValue false, then router.push({name:'share-admin'})
+6. Import is `import router from '@/router/index.js'`, not useRouter()
+7. No data-test hooks for share-detail-drawer / share-create-wizard / binding-add / authkey-once inside the dialog
+8. Production caller: ShareDialog.vue footer is real template, not tests-only
+
+## Required tests (run yourself, --no-cache)
+
+pnpm --dir mail-vue exec vitest run src/views/email/ShareDialog.spec.js src/views/email/ShareIndicator.spec.js src/request/mail-share.spec.js --no-cache
+
+Report file/test counts.
+
+## Output
+
+Write review-t23.md with: Verdict APPROVED | NEEDS_CHANGES; P0/P1/P2; checklist of the 8 items; commands you actually ran.
+
+Reply to user in Chinese.

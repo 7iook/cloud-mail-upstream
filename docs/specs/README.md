@@ -20,7 +20,7 @@
 | slug | title | status | domain | one_line | related |
 |---|---|---|---|---|---|
 | [mail-share](./mail-share/) | 邮箱临时分享 —— 不交出密码的匿名只读授权与验证码提取 | converged | business | 所有者创建不可猜链接，未登录访客只读授权窗内的邮件与验证码 | ADR-mail-share-capability-boundary |
-| [mailbox-share-capability](./mailbox-share-capability/) | 邮箱能力分享 —— 单/多邮箱统一授权、Session 配额与可选认证 | converged | business | 在既有 mail-share 上扩展多邮箱 Binding、Session 配额闸门与可选认证 Key | mail-share · ADR-mailbox-share-capability-extension |
+| [mailbox-share-capability](./mailbox-share-capability/) | 邮箱能力分享 —— 单/多邮箱统一授权、Session 配额与可选认证 | shipped | business | 在既有 mail-share 上扩展多邮箱 Binding、Session 配额闸门与可选认证 Key | mail-share · ADR-mailbox-share-capability-extension |
 
 <!-- END AUTO-INDEX -->
 

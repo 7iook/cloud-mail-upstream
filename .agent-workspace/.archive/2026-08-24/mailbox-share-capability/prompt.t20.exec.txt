@@ -1,0 +1,64 @@
+T-20 executor · share-admin list page (W4 first bar)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Do NOT git commit / push / stash / switch branch.
+
+Read first, in order:
+1. frontend-design SKILL.md under ~/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/frontend-design/SKILL.md
+2. impeccable SKILL.md (same plugins tree …/impeccable/SKILL.md)
+3. ui-ux-pro-max SKILL.md (same plugins tree …/ui-ux-pro-max/SKILL.md)
+4. ponytail SKILL.md under …/55280841/…/ponytail/SKILL.md (lite)
+5. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t20-share-admin.md
+
+Success state (user view):
+NOT "a Vue file exists", BUT: a signed-in owner with share:manage opens the share-admin list and sees name / type / binding summary / four-state badge / usedSessions / maxSessions / expiry / last access; can filter by computed status; at 767px the card list remains usable. Missing share:manage mid-session shows a distinct 403 panel (toast already fired), never the login bounce used for 401. Cold-start without the perm stays 404 (route never registered) — do not change beforeEach.
+Negative: no drawer, no create wizard, no row revoke/delete buttons, no i18n file edits, no visitor-route edits.
+
+## Already decided (do not reopen)
+
+- T20-ROUTE: put the route object on perm/perm.js routers['share:manage']. router/index.js target = 0 lines.
+- T20-ASIDE: add a personal-group aside entry; reuse existing shareManage i18n key; do not edit zh.js/en.js.
+- T20-ACTIONS: no revoke/delete/edit buttons this task (T-21).
+- T20-CARD: card list (reg-key pattern), not el-table.
+- 403 is HTTP 200 + body {code:403, message:'SHARE_FORBIDDEN'}. Mirror ShareDialog/isShareUnavailable as isShareForbidden. Do not change axios/index.js.
+- listMailShares(): no-arg call MUST still be a single argument. mail-share.spec.js:50 is toHaveBeenCalledWith('/mailShare/list') — adding a constant second {params} object turns that red. Optional params object only when the caller actually passed query fields.
+- createMailShare / revokeMailShare / newIdempotencyKey: do not change.
+- ShareIndicator canManageShare() Array.isArray(permKeys) guard: copy if you call hasPerm.
+
+## Whitelist
+
+Allowed:
+- mail-vue/src/request/mail-share.js  (add get/update/bindings/delete/resetAuthKey; grow listMailShares optionally)
+- mail-vue/src/request/mail-share.spec.js  (only if required to keep list no-arg baseline green; do not rewrite existing cases)
+- mail-vue/src/perm/perm.js
+- mail-vue/src/layout/aside/index.vue  (one entry)
+- mail-vue/src/views/share-admin/index.vue  (new)
+- mail-vue/src/views/share-admin/status.js  (new; four-state map SSOT)
+- mail-vue/src/views/share-admin/index.spec.js  (new)
+- .agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t20-note.md
+
+Forbidden: i18n/zh.js, i18n/en.js, router/index.js, views/share/**, axios/index.js, mail-worker/**, ShareDialog.vue (read-only template).
+
+Record needed new i18n keys in exec-t20-note.md for T-28/T-29. In the page, hardcode Chinese fallbacks or existing keys only; do not invent a second i18n system.
+
+## Tests (TDD)
+
+New src/views/share-admin/index.spec.js covering recon red list (L/F/E/R/M). Must include:
+- all list fields present
+- four effectiveStatus badges via data-status (ACTIVE / EXPIRED / REVOKED / ACCESS_LIMIT_REACHED)
+- status filter hits GET /mailShare/list with the query only when set
+- listMailShares() no-arg still one argument (keep mail-share.spec.js green)
+- route registered through permsToRouter when share:manage present; absent when not
+- body-403 renders a forbidden panel and does not replace to /login
+- 767 mentioned as source-text @media (jsdom will not run media queries)
+- rows expose data-share-id + data-status, no action buttons
+
+Commands:
+```
+pnpm --dir mail-vue exec vitest run src/views/share-admin/index.spec.js src/request/mail-share.spec.js --no-cache
+pnpm --dir mail-vue test -- --no-cache
+```
+Floor: 17 files / 95 tests, only-increase.
+
+Write exec-t20-note.md (Chinese ok). Do not commit.

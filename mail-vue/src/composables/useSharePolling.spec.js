@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it, vi } from 'vitest'
-import { effectScope } from 'vue'
+import { effectScope, ref } from 'vue'
 import { ShareRateLimitedError, isShareUnavailable } from '@/request/share.js'
 import { POLL_INTERVAL_MS, useSharePolling } from './useSharePolling.js'
 
@@ -147,6 +147,57 @@ describe('useSharePolling', () => {
 
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
     assert.equal(listShareMails.mock.calls[1][0].cursor, '9')
+  })
+
+  // T-25:多邮箱取数是「注入的组合函数」,不是 composable 的分支。
+  // 一拍 = 1 次 status + 1 次当前 Binding 的 mails,与 Binding 数无关(AC-OTP-07)。
+  it('runs a composed status-then-mails fetcher exactly once per tick, whatever the binding count', async () => {
+    const getStatus = vi.fn(async () => ({
+      mailboxes: [
+        { bindingId: 0, latestEmailId: 11 },
+        { bindingId: 8002, latestEmailId: 52 },
+        { bindingId: 8003, latestEmailId: 71 }
+      ]
+    }))
+    const getMails = vi.fn(async () => ({ list: [], nextCursor: null }))
+    const listShareMails = vi.fn(async ({ sessionToken, limit, signal }) => {
+      const status = await getStatus({ sessionToken, signal })
+      const active = status.mailboxes[0]
+      return getMails({ sessionToken, bindingId: active.bindingId, limit, signal })
+    })
+    session = runPolling({ listShareMails, limit: 50 })
+
+    for (const tick of [1, 2, 3]) {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+      assert.equal(listShareMails.mock.calls.length, tick)
+      assert.equal(getStatus.mock.calls.length, tick)
+      assert.equal(getMails.mock.calls.length, tick)
+    }
+
+    const askedBindings = new Set(getMails.mock.calls.map(([args]) => args.bindingId))
+    assert.deepEqual([...askedBindings], [0])
+    assert.equal(getMails.mock.calls[0][0].limit, 50)
+    assert.ok(getStatus.mock.calls[0][0].signal)
+    assert.equal(getStatus.mock.calls[0][0].signal, getMails.mock.calls[0][0].signal)
+  })
+
+  // T-26:下发的 refreshIntervalMs 是 bootstrap 里 await 回来的,永远晚于 setup。
+  // setup 期快照会把它整个吃掉,所以每次排程都要重新读。
+  it('reads intervalMs at each schedule, so a value that lands after setup takes effect', async () => {
+    const listShareMails = vi.fn(async () => ({ list: [], nextCursor: null }))
+    const intervalMs = ref(POLL_INTERVAL_MS)
+    session = runPolling({ listShareMails, intervalMs })
+
+    intervalMs.value = 8000
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    assert.equal(listShareMails.mock.calls.length, 1)
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    assert.equal(listShareMails.mock.calls.length, 1)
+
+    await vi.advanceTimersByTimeAsync(5000)
+    assert.equal(listShareMails.mock.calls.length, 2)
   })
 
   it('aborts an in-flight request on dispose and when the page is hidden', async () => {

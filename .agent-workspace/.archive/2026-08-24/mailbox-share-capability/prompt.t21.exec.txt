@@ -1,0 +1,88 @@
+T-21 executor · Share detail drawer + row actions (W4)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD includes T-20 APPROVED at 672da73 (docs after that are Evidence only).
+
+Do NOT git commit / push / stash / switch branch.
+
+Read first (in this order):
+1. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/frontend-design/SKILL.md
+2. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/impeccable/SKILL.md
+3. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55232961/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ui-ux-pro-max/SKILL.md
+4. $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/55280841/1a849c817aa571a0a17bb5f80ecdb9848ab553cc/skills/ponytail/SKILL.md (lite)
+5. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t21-drawer.md (authoritative)
+6. Current files: mail-vue/src/views/share-admin/index.vue, status.js, index.spec.js, mail-vue/src/request/mail-share.js, mail-vue/src/views/email/ShareDialog.vue (read-only pattern)
+
+Success state (user view):
+NOT "a drawer component exists", BUT: an owner with share:manage opens a share from the list, sees the same audit fields plus bindings/config/AuthKey; can add/remove bindings and save a dirty-field config patch; can enable/reset/disable AuthKey and sees the new key once; ACCESS_LIMIT_REACHED stays writable; EXPIRED/REVOKED stay readable and not writable.
+Negative: do not send a full form on update; do not mix add=accountId with remove=bindingId; do not treat bindings PUT response as having mailbox; do not grey ACCESS_LIMIT_REACHED; do not rewrite the list page; do not edit i18n files; do not edit request/mail-share.js; do not add a New button (T-22).
+
+## Already decided (do not reopen)
+
+- T21-INLINE: do NOT extract OneShotSecret.vue; inline the 4-part ShareDialog pattern
+- T21-RESET-BOX: resetUsedSessions uses ElMessageBox, not an inline checkbox
+- T21-FLIP: flip index.spec.js:243-252 in place (keep the test, change assertions). Quote the old assertion in exec-t21-note.md. Do not delete it.
+- T20-ACTIONS is now in scope: row gets detail / revoke / delete
+- T-22 is AFTER this task. Do not add create wizard / header New button / touch createMailShare
+- i18n: register keys in exec note only; use tf() fallback like T-20
+- Reuse status.js; add only isMutableStatus. Drawer badges/binding empty fallback MUST use statusMeta / bindingLabels
+- No error-code → zh map. Branch only SHARE_NOT_FOUND / SHARE_BINDING_CONFLICT|FORBIDDEN / SHARE_INVALID_CONFIG
+- request/mail-share.js = 0 lines. Import accountList from @/request/account.js for add-mailbox paging (size cap 30, cursor)
+
+## Allowed files
+
+NEW:
+- mail-vue/src/views/share-admin/ShareDetailDrawer.vue
+- mail-vue/src/views/share-admin/ShareRowActions.vue
+- mail-vue/src/views/share-admin/ShareDetailDrawer.spec.js
+- mail-vue/src/views/share-admin/ShareRowActions.spec.js
+- .agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t21-note.md
+
+PATCH:
+- mail-vue/src/views/share-admin/index.vue  (≤10 lines, four anchors in recon §4.2 only)
+- mail-vue/src/views/share-admin/index.spec.js  (flip 1 + add 1 wiring case; stubs as needed)
+- mail-vue/src/views/share-admin/status.js  (+ isMutableStatus only)
+
+FORBIDDEN (0 diff): request/mail-share.js, perm.js, aside, router/index.js, i18n/*, axios, views/share/**, views/email/**, mail-worker/**, tests/e2e/**
+
+## Implementation rules (recon §0 / §3 / §5 / §6)
+
+1. Config save = dirty-field diff only. Key absent = no change; key+null = clear limit; key+value = set. C1 must assert unchanged fields are absent from the PUT body.
+2. "Unlimited" sends explicit null. Empty refreshIntervalMs must not enter the patch.
+3. bindings: add accountId[], remove bindingId[]. One action per request. After success, re-GET getMailShare (bindings PUT has no mailbox).
+4. Last binding remove auto-REVOKEs; confirm copy must say so.
+5. isMutableStatus = ACTIVE | ACCESS_LIMIT_REACHED. Read always; write only those two.
+6. AuthKey one-shot: template + computed from local created/reset ref + clear on close + only enable/reset response writes plaintext. disable has no authKey key.
+7. enable copy must NOT claim existing sessions die; reset/disable MUST say they kick all open visits.
+8. SHARE_INVALID_CONFIG after AuthKey action: two possible causes + refresh, do not assert which.
+9. accountList cursor paging; size hard cap 30; "load more"; disable add at 50 bindings.
+10. Zero raw hex; CSS variables only. 767 breakpoint, no window.onresize.
+11. vi.mock mail-share must spread importOriginal (keep isShareForbidden real).
+12. Do not import views/share/**, request/share.js, or useSharePolling.js.
+
+## Required tests
+
+TDD red first (files missing / functions missing), then green.
+
+Drawer spec must cover recon §8: dirty diff, unlimited null, ACCESS_LIMIT_REACHED writable, EXPIRED readonly, add/remove id dimensions, re-get after bindings, last-binding revoke copy, AuthKey one-shot + no persist, mask copy sleeper (shareShowFullAddressHint must not imply secrecy).
+
+RowActions spec: revoke confirm → revokeMailShare; delete confirm different copy → deleteMailShare; REVOKED hides revoke, keeps delete.
+
+index.spec.js: flip the 0-button case to the three data-test hooks; add "open detail calls getMailShare(7)".
+
+Keep all other index.spec.js cases green. Keep mail-share.spec.js 6 cases green.
+
+## Verify
+
+pnpm --dir mail-vue exec vitest run src/views/share-admin/ShareDetailDrawer.spec.js src/views/share-admin/ShareRowActions.spec.js src/views/share-admin/index.spec.js src/request/mail-share.spec.js --no-cache
+pnpm --dir mail-vue test -- --no-cache
+pnpm --dir mail-vue exec vitest run src/views/share/share-chunk.spec.js --no-cache
+
+Worker / E2E: do not run; mark unverified.
+
+If a browser harness is easy, shoot drawer open + dirty save + AuthKey one-shot to /opt/cursor/artifacts/ and delete the harness. Optional.
+
+Write exec-t21-note.md: files, red→green counts, the flipped assertion quoted, i18n key table, leftovers for T-22/T-28.
+
+Reply to user in Chinese.

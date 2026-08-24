@@ -117,7 +117,7 @@ Verified once by：在一个全新的浏览器上下文（无 localStorage、无
 - [AC-LIFE-09] IF MailShare 指向的 `account` 已被删除, THEN THE ShareAuthService SHALL 返回 `SHARE_UNAVAILABLE`。
 - [AC-LIFE-12] WHEN MailShare 指向的 `account` **转移所有者**（`account.user_id` 变更）, THE MailShareService SHALL **永久撤销**所有指向该 `account_id` 的 MailShare（写入 `status='REVOKED'` 与 `revoked_at`），SHALL NOT 仅在访问时动态拒绝而保留 `ACTIVE` 行。**注**：仓内**当前不存在** Account 转移能力——本条为未来新增转移入口时的必挂钩点；**本期**撤销挂钩实现于 account **软删与硬删**路径（与 AC-LIFE-09 协同）。
 - [AC-LIFE-13] WHERE 管理员关闭了分享功能, THE MailShareService SHALL 将其视为**临时冻结**：关闭期间 Visitor 访问返回 `SHARE_UNAVAILABLE`；**重新开启后**，此前 `effectiveStatus=ACTIVE` 的 MailShare SHALL **恢复可用**，SHALL NOT 被视同永久销毁（Owner 须知晓：关停不等于终止授权，只是暂停）。
-- [AC-LIFE-14] WHEN Share Session 建立成功, IF 更新 `access_count` 或 `last_access_at` 失败, THEN THE ShareAuthService SHALL **仍**返回有效 `sessionToken`；统计字段写入失败 SHALL NOT 阻断合法 Session 建立。
+- [AC-LIFE-14] WHEN Share Session 建立成功, IF 更新 `access_count` 或 `last_access_at` 失败, THEN THE ShareAuthService SHALL **仍**返回有效 `sessionToken`；统计字段写入失败 SHALL NOT 阻断合法 Session 建立。 — superseded by docs/specs/mailbox-share-capability/requirements.md AC-SESS-11（配额闸门引入后不再成立；KV 写失败 fail-open 见该 charter AC-SESS-10）
 - [AC-LIFE-10] WHEN Share Session 建立成功, THE ShareAuthService SHALL 尝试更新 `last_access_at` 与 `access_count`（语义见 Introduction 管理字段表；**不是**每次轮询或每次读邮件）；写入失败的处理见 AC-LIFE-14。
 
 ### Requirement 4: 新邮件实时出现

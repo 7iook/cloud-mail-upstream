@@ -59,6 +59,17 @@ const routers = {
             }
         }
     ],
+    'share:manage': [{
+        path: '/share-admin',
+        name: 'share-admin',
+        component: () => import('@/views/share-admin/index.vue'),
+        meta: {
+            title: 'shareManage',
+            name: 'share-admin',
+            menu: true,
+            perm: 'share:manage'
+        }
+    }],
     'user:query': [{
         path: '/all-users',
         name: 'user',

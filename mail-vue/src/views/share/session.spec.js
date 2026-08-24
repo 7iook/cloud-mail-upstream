@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+    SHARE_ESTABLISH_KEY_PREFIX,
     SHARE_SESSION_KEY_PREFIX,
     captureShareSecret,
+    clearEstablishKey,
     clearOtherShareSessions,
     clearShareFragment,
     clearShareSession,
     consumeShareSecret,
+    ensureEstablishKey,
     readShareSecretFromFragment,
     readShareSession,
+    shareEstablishKey,
     shareSessionKey,
     takeShareSecret,
     writeShareSession
@@ -86,5 +90,79 @@ describe('share session fragment and storage', () => {
         expect(takeShareSecret('lid-a')).toBe('')
         clearShareFragment()
         expect(window.location.href).not.toContain('#')
+    })
+})
+
+// T-26 · Idempotency-Key 的客户端归属地。它不是凭据,是「这一次建会话」的去重标签,
+// 所以生成、落盘、清除都归 session.js 一处(AC-SESS-10)。
+describe('share establish key', () => {
+    beforeEach(() => {
+        sessionStorage.clear()
+    })
+
+    afterEach(() => {
+        sessionStorage.clear()
+    })
+
+    it('namespaces the establish key by lid under its own prefix', () => {
+        expect(SHARE_ESTABLISH_KEY_PREFIX).toBe('share:est-key:')
+        expect(shareEstablishKey('lid-a')).toBe('share:est-key:lid-a')
+    })
+
+    it('writes the key before the request and hands the same one back to a retry', () => {
+        const first = ensureEstablishKey('lid-a')
+
+        expect(first).toMatch(/^[0-9a-f]{32}$/)
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBe(first)
+        expect(ensureEstablishKey('lid-a')).toBe(first)
+        expect(ensureEstablishKey('lid-a')).toBe(first)
+    })
+
+    it('gives a different lid its own key', () => {
+        const a = ensureEstablishKey('lid-a')
+        const b = ensureEstablishKey('lid-b')
+
+        expect(b).not.toBe(a)
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBe(a)
+        expect(sessionStorage.getItem('share:est-key:lid-b')).toBe(b)
+    })
+
+    it('clears only the requested lid establish key', () => {
+        const a = ensureEstablishKey('lid-a')
+        const b = ensureEstablishKey('lid-b')
+
+        clearEstablishKey('lid-a')
+
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:est-key:lid-b')).toBe(b)
+        expect(ensureEstablishKey('lid-a')).not.toBe(a)
+    })
+
+    // 三个前缀共用一个 sessionStorage:est-key 的读写清除都不得碰 token,更不得碰
+    // T-25 的已读水位(它是进度不是凭据,清掉就丢跨会话未读)。
+    it('leaves share:session: and share:status: untouched', () => {
+        writeShareSession('lid-a', 'token-a')
+        sessionStorage.setItem('share:status:lid-a', '{"0":7}')
+
+        const key = ensureEstablishKey('lid-a')
+        clearEstablishKey('lid-a')
+        clearShareSession('lid-a')
+
+        expect(key).toBeTruthy()
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:session:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:status:lid-a')).toBe('{"0":7}')
+    })
+
+    it('does not let clearOtherShareSessions reach the establish key or the watermark', () => {
+        writeShareSession('lid-a', 'token-a')
+        ensureEstablishKey('lid-a')
+        sessionStorage.setItem('share:status:lid-a', '{"0":7}')
+
+        clearOtherShareSessions('lid-b')
+
+        expect(sessionStorage.getItem('share:session:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:est-key:lid-a')).not.toBeNull()
+        expect(sessionStorage.getItem('share:status:lid-a')).toBe('{"0":7}')
     })
 })

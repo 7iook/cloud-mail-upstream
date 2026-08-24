@@ -1,0 +1,130 @@
+T-26 implement · visitor authRequired + idempotent session + refresh policy + cleanup
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Do NOT git commit / push / stash / switch branch.
+
+[交付契约]
+成功状态: NOT "authRequired exists", BUT: 未登录访客在需要 AuthKey 的分享上能输入密钥进入；同 tab 刷新凭 sessionStorage token 恢复且不消耗配额；POST /share/session 响应丢失后以同一 Idempotency-Key 重试；autoRefresh=false 时只提供手动刷新且复用 pollTick；离开路由或 SHARE_UNAVAILABLE 清除 share:session:<lid> 与 share:est-key:<lid>，且不得清除 share:status:<lid>。
+链路:
+  访客输入 | index.vue submitAuthKey (to-change) | request/share.js createShareSession (to-change)
+  POST /share/session body.authKey + Idempotency-Key | request/share.js (to-change) | share-api.js:57-60 (existing)
+  share:est-key:<lid> | session.js ensureEstablishKey (to-change) | postSession (to-change)
+  pollTick | index.vue:308-318 (existing) | useSharePolling + manualRefresh (to-change)
+  applyShareConfig | index.vue:467 (existing, extend) | enterReady / bootstrap (to-change)
+最终 sink: 访客页 DOM 钩子 [data-share-auth*] / [data-share-refresh] / [data-share-expires] + sessionStorage 三键
+真跑一次的 e2e 姿势: vitest --no-cache 定点套件（T-26 不碰 tests/e2e）
+
+Read first, in this order:
+1. frontend-design / impeccable / ui-ux-pro-max / ponytail(lite)
+   under $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/
+   Stay in the existing GitHub-light toolbox tokens in index.vue scoped CSS.
+   No el-*, no new palette, no motion library, no placeholder-as-label.
+2. recon-t26-session.md **§12 first** (fog already decided — do not reopen), then §1–§8.
+3. git log -p --follow for session.js / request/share.js / useSharePolling.js / index.vue bootstrap
+   (last share-page intent: ddbedbb; T-24 baab349 applyShareConfig; T-25 2e6754d/16f705b pollTick).
+4. Current files listed in recon §1.1.
+
+## Fog rulings (execute as-is)
+
+- Fog-1 CHANGE: createShareSession(lid, sec, { authKey, idempotencyKey } = {}).
+  Empty/whitespace authKey omitted from body. idempotencyKey is the only new header.
+  isShareAuthRequired lives in request/share.js next to isShareUnavailable.
+  Rewrite ONLY index.spec.js:164 to objectContaining({ idempotencyKey: expect.any(String) }).
+- Fog-2 CHANGE A: postSession retries once iff isLostResponse (not 429, not SHARE_* envelope, no err.response). Same key.
+- Fog-3 CHANGE: stored-token revive does not call /share/session and does not write est-key.
+  Defaults: autoRefresh true, interval POLL_INTERVAL_MS, no [data-share-expires]. Pin this with a test.
+- T26-POLL CHANGE: useSharePolling readInterval() via toValue at :163/:169/:177/:202. No autoStart/listStatus/mode.
+  Pass intervalMs: refreshIntervalMs (the ref). clampInterval floor is exactly POLL_INTERVAL_MS.
+- T26-KEYGEN CHANGE: ensureEstablishKey in session.js with crypto.getRandomValues (16-byte hex).
+  Do not import mail-share.js. Do not copy Math.random fallback. Do not use randomUUID.
+- T26-STATUS HOLD: never touch share:status:<lid>. Do not widen clearOtherShareSessions.
+
+## Files you may write (8 + note; zero new production files)
+
+- mail-vue/src/views/share/session.js
+- mail-vue/src/views/share/session.spec.js          (extend only, 6 it() stay)
+- mail-vue/src/request/share.js
+- mail-vue/src/request/share.spec.js                (extend only, 10 it() stay)
+- mail-vue/src/composables/useSharePolling.js       (interval read only)
+- mail-vue/src/composables/useSharePolling.spec.js  (+1 it, keep node:assert style)
+- mail-vue/src/views/share/index.vue
+- mail-vue/src/views/share/index.spec.js            (extend; ONLY :164 may change among the 35)
+- archive exec-t26-note.md
+
+MUST NOT edit:
+mail-worker/**, router/index.js, init/init.js, assert-share-chunk.js,
+status-watermark.js, ShareOtpCard.vue, mail-fields.js, i18n, mail-share.js,
+tests/e2e/**, share-admin, ShareDialog, security.js.
+
+git diff --stat mail-worker must be empty at the end.
+
+## TDD order
+
+1. session.spec.js red for est-key prefix / ensure reuse / clear / three prefixes do not collide.
+   Then session.js.
+2. request/share.spec.js red for header present/absent, authKey only in body, isShareAuthRequired truth table.
+   Then createShareSession + isShareAuthRequired.
+3. useSharePolling.spec.js +1: intervalMs as ref, change after first tick, next schedule uses new value.
+   Then readInterval().
+4. index.spec.js new tests (recon §9.3, about +14). Then index.vue.
+   Keep the 35 existing it() bodies except :164.
+
+index.spec.js mock already spread-importOriginal, so the real isShareAuthRequired is used once exported.
+Do not import @/axios/index.js or mail-share.js from any share-chunk file.
+
+## Implementation contract (recon §2–§8)
+
+index.vue:
+- Header: v-else-if state==='authRequired' (shareVisitAuthTitle fallback). No attempt counts.
+- After header title chain: <time v-if="expiresLabel" data-share-expires> no aria-live.
+  Parse expiresAt as UTC: Date.parse(String(s).replace(' ','T')+'Z'). Missing expiresAt → do not render.
+- Auth form OUTSIDE data-share-body, AFTER data-share-wait, BEFORE data-share-body.
+  Keep the empty <div v-else data-share-body></div>.
+  Hooks: data-share-auth / data-share-auth-input / data-share-auth-submit / data-share-auth-error.
+  type="text" autocomplete=off autocapitalize=none spellcheck=false. Visible <label for>.
+  Empty submit disabled. Submitting: disabled + shareVisitAuthChecking.
+  Wrong key: stay authRequired, authError=true, no lockout, same est-key.
+  429: rateLimited wait banner, not "wrong key".
+- Manual refresh button INSIDE data-share-body, AFTER </nav>, BEFORE #share-tabpanel.
+  v-if="!autoRefresh" data-share-refresh. Calls pollTick then onPolledMails(page.list). Catch → noteShareFailure(err) (fromSession default false).
+  Guard both polling.start() sites in beginMailbox (:653 and :657) with if (autoRefresh.value).
+- Single POST exit: postSession + enterReady. reestablishSession swaps createShareSession for postSession(lid,sec,'') only — do not fold it into enterReady.
+- bootstrap catch: if (isShareAuthRequired(err)) { state='authRequired'; return } BEFORE noteShareFailure(err, true).
+  Do NOT change recoverFromUnavailable / showDeadShare (AC-VISIT-12/14).
+- Extend applyShareConfig in place (do not open a second reader):
+  autoRefresh === false to disable; clampInterval; expiresAt string.
+- Reset new refs in the same bootstrap reset as otpEnabled=true (anti cross-lid residue).
+- onUnmounted: clearShareSession + clearEstablishKey for current lid. Also in clearMailboxView and exitShare.
+- nowMs 1s interval, cleared onUnmounted. Do not use status serverTime.
+- pageSecret stays during authRequired so retry still has sec.
+- authKeyInput never sessionStorage / URL / console.error payload.
+- i18n: tx('shareVisit*', English fallback) only. Do not edit zh.js/en.js.
+- Pass intervalMs: refreshIntervalMs into the existing useSharePolling({...}) call. Declare the ref before that call.
+
+session.js: SHARE_ESTABLISH_KEY_PREFIX, shareEstablishKey, ensureEstablishKey, clearEstablishKey.
+Do not change SHARE_SESSION_KEY_PREFIX behavior.
+
+request/share.js: no second axios instance.
+
+## Tests that must exist (names may vary, behavior must)
+
+- SHARE_AUTH_REQUIRED on establish → data-share-state=authRequired, not unavailable; no token stored.
+- Wrong key then right key → ready; both calls same idempotencyKey; authKey not in sessionStorage/logs.
+- Lost response (reject with no err.response, not 429, not SHARE_* envelope) → createShareSession called twice, same key; success clears est-key.
+  429 and SHARE_AUTH_REQUIRED must NOT take the retry path.
+- Stored token revive: createShareSession not called, no share:est-key, no [data-share-expires].
+- autoRefresh=false: no poll for 20*POLL_INTERVAL_MS; data-share-refresh present; one click = 1 status + 1 mails.
+- refreshIntervalMs=8000: 3000ms no extra poll, 8000ms one group.
+- Manual 429: data-share-wait, token still in sessionStorage.
+- unmount and SHARE_UNAVAILABLE: session+est-key gone, share:status:<lid> unchanged.
+- expiresAt 'YYYY-MM-DD HH:mm:ss' treated as UTC (not local).
+- AC-VISIT-10 still forbids @/axios/index in share files.
+
+Run (no-cache, count not just EXIT=0):
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/session.spec.js src/request/share.spec.js src/views/share/index.spec.js src/composables/useSharePolling.spec.js src/views/share/share-chunk.spec.js
+pnpm --dir mail-vue test -- --no-cache
+pnpm --dir mail-worker test -- --no-cache
+Write counts into exec-t26-note.md (vue files/tests, worker 18/626 unchanged).
+
+Reply to user in Chinese.

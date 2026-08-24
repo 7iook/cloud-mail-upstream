@@ -5,6 +5,8 @@ import {
     createShareSession,
     getShareAttachment,
     getShareMail,
+    getShareMailboxesStatus,
+    isShareAuthRequired,
     isShareRateLimited,
     isShareUnavailable,
     listShareMails,
@@ -13,6 +15,21 @@ import {
 
 const USER_TOKEN = 'logged-in-user-jwt'
 const SHARE_TOKEN = 'share-session-token'
+
+function readHeaderValue(config, name) {
+    const headers = config.headers
+    if (!headers) {
+        return undefined
+    }
+    if (typeof headers.get === 'function') {
+        return headers.get(name)
+    }
+    return headers[name] ?? headers[name.toLowerCase()]
+}
+
+function readBody(config) {
+    return typeof config.data === 'string' ? JSON.parse(config.data) : config.data
+}
 
 function readAuth(config) {
     const headers = config.headers
@@ -95,6 +112,58 @@ describe('share request client', () => {
         expect(captured[0].params).toEqual({ cursor: '10', limit: 20 })
         expect(readAuth(captured[0])).toBe(`Bearer ${SHARE_TOKEN}`)
         expect(readAuth(captured[0])).not.toContain(USER_TOKEN)
+    })
+
+    it('sends bindingId only when the caller asks for one, and 0 is a real binding (T-25)', async () => {
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: 7, limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: 0, limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: null, limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: '', limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, limit: 50 })
+
+        expect(captured.map((config) => config.params)).toEqual([
+            { limit: 50, bindingId: 7 },
+            { limit: 50, bindingId: 0 },
+            { limit: 50 },
+            { limit: 50 },
+            { limit: 50 }
+        ])
+        expect(captured.every((config) => config.url === '/share/mails')).toBe(true)
+    })
+
+    it('reads the watermark protocol through the same share client and token (T-25)', async () => {
+        const controller = new AbortController()
+
+        const data = await getShareMailboxesStatus({
+            sessionToken: SHARE_TOKEN,
+            signal: controller.signal
+        })
+
+        expect(captured).toHaveLength(1)
+        expect(captured[0].url).toBe('/share/mailboxes/status')
+        expect(captured[0].method).toBe('get')
+        expect(captured[0].signal).toBe(controller.signal)
+        expect(readAuth(captured[0])).toBe(`Bearer ${SHARE_TOKEN}`)
+        expect(JSON.stringify(captured[0].headers || {})).not.toContain(USER_TOKEN)
+        expect(data).toEqual({ list: [], nextCursor: null })
+    })
+
+    it('surfaces a 429 from the status route as the same recoverable rate limit (T-25, AC-OTP-08)', async () => {
+        shareHttp.defaults.adapter = async (config) => {
+            captured.push(config)
+            httpError(config, 429, { 'retry-after': '5' }, { message: 'rate limited' })
+        }
+
+        let caught
+        try {
+            await getShareMailboxesStatus({ sessionToken: SHARE_TOKEN })
+        } catch (err) {
+            caught = err
+        }
+
+        expect(caught).toBeInstanceOf(ShareRateLimitedError)
+        expect(caught.retryAfter).toBe(5)
+        expect(isShareRateLimited(caught)).toBe(true)
     })
 
     it('hands back HTTP 200 SHARE_UNAVAILABLE without redirect or reload', async () => {
@@ -183,6 +252,52 @@ describe('share request client', () => {
         expect(captured[0].url).toBe('/share/attachment')
         expect(captured[0].params).toEqual({ mailId: '1', attachmentId: '2' })
         expect(readAuth(captured[0])).toBe(`Bearer ${SHARE_TOKEN}`)
+    })
+
+    // T-26 · AuthKey 走 body,Idempotency-Key 走 header。反过来就把一次性凭据写进了
+    // 网关与代理默认会记的那一半请求(AC-SEC-09)。
+    it('sends the AuthKey in the body and the idempotency key in the header', async () => {
+        const authKey = 'kEy-Base64Url-22charsAA'
+
+        await createShareSession('lid-1', 'sec-1', { authKey, idempotencyKey: 'idem-1' })
+
+        expect(captured).toHaveLength(1)
+        expect(captured[0].url).toBe('/share/session')
+        expect(readBody(captured[0])).toEqual({ lid: 'lid-1', sec: 'sec-1', authKey })
+        expect(readHeaderValue(captured[0], 'Idempotency-Key')).toBe('idem-1')
+    })
+
+    it('keeps the old request shape when no AuthKey and no idempotency key are supplied', async () => {
+        await createShareSession('lid-1', 'sec-1')
+        await createShareSession('lid-1', 'sec-1', { authKey: '   ', idempotencyKey: '' })
+
+        for (const config of captured) {
+            expect(readBody(config)).toEqual({ lid: 'lid-1', sec: 'sec-1' })
+            expect(readHeaderValue(config, 'Idempotency-Key')).toBeFalsy()
+        }
+    })
+
+    it('never puts the AuthKey in a header or the URL (AC-SEC-09)', async () => {
+        const authKey = 'secret-access-key-9f3a'
+
+        await createShareSession('lid-1', 'sec-1', { authKey, idempotencyKey: 'idem-1' })
+
+        expect(JSON.stringify(captured[0].headers || {})).not.toContain(authKey)
+        expect(String(captured[0].url)).not.toContain(authKey)
+        expect(JSON.stringify(captured[0].params || {})).not.toContain(authKey)
+        expect(readBody(captured[0]).authKey).toBe(authKey)
+    })
+
+    it('tells SHARE_AUTH_REQUIRED apart from a dead link and a rate limit', async () => {
+        expect(isShareAuthRequired({ code: 501, message: 'SHARE_AUTH_REQUIRED' })).toBe(true)
+        expect(isShareAuthRequired({ code: 'SHARE_AUTH_REQUIRED' })).toBe(true)
+        expect(isShareAuthRequired({ code: 501, message: 'SHARE_UNAVAILABLE' })).toBe(false)
+        expect(isShareAuthRequired(new ShareRateLimitedError(5, '5'))).toBe(false)
+        expect(isShareAuthRequired(null)).toBe(false)
+        expect(isShareAuthRequired(undefined)).toBe(false)
+        // 反向:AUTH_REQUIRED 不得被读成死链,否则访客还没输 Key 页面就宣告链接失效。
+        expect(isShareUnavailable({ code: 501, message: 'SHARE_AUTH_REQUIRED' })).toBe(false)
+        expect(isShareRateLimited({ code: 501, message: 'SHARE_AUTH_REQUIRED' })).toBe(false)
     })
 
     it('hands back SHARE_UNAVAILABLE when an attachment response is a JSON blob envelope', async () => {
