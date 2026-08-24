@@ -538,7 +538,7 @@
 - [ ] T-25 多邮箱 Tab + 本地水位 map + 单实例轮询 + 隔离守护
   - [ ]* T-25.1 红:`views/share/index.spec.js` 与 `mail-vue/src/composables/useSharePolling.spec.js` 扩展 —— 每 tick 恰一次 status 请求无 N 路并发;水位 map(sessionStorage 键 `share:status:<lid>`,值 `{bindingId: watermark}`)推进语义:仅消费过的 Binding 推进、首帧建基准不渲染角标、Binding 增删对齐(新增建基准/已删丢弃);浏览中移除一邮箱 → 下拍消失余箱正常
     - _Requirements: AC-OTP-07, AC-OTP-09, AC-EDGE-04_
-  - [ ] T-25.2 绿:`views/share/index.vue` 按 session 响应 `shareType` 分支渲染,轻量原生 Tab(不引 el-tabs)显示掩码地址 + 新邮件角标;`useSharePolling.js` 扩展为拉 status → 本地比较 → 仅当前 Tab 拉 mails;路径形态保持 `/s/<lid>#<sec>`,`mail-vue/src/init/init.js:18-20` 正则与 `mail-vue/src/router/index.js:157-183` 守卫零改动
+  - [ ] T-25.2 绿:`views/share/index.vue` 按 session 响应 `shareType` 分支渲染,轻量原生 Tab(不引 el-tabs)显示掩码地址 + 新邮件角标;注入 `pollTick`(status 恰一次 → 水位比较 → 当前 Tab 无 cursor 拉 mails),`useSharePolling.js` 零改;`GET /share/mails` 接可选 `bindingId` 走已有 `listForBinding`;`request/share.js` 加 `getShareMailboxesStatus`;路径形态保持 `/s/<lid>#<sec>`,`mail-vue/src/init/init.js:18-20` 正则与 `mail-vue/src/router/index.js:157-183` 守卫零改动
     - _Requirements: AC-OTP-07, AC-OTP-09_
   - [ ]* T-25.3 隔离守护:`mail-vue/src/views/share/assert-share-chunk.js` + `share-chunk.spec.js` 覆盖全部新增 import(禁入登录态 axios/layout/Dexie/websiteConfig;守护测试红了改 import 不改闸门);`mail-vue/src/init/assert-share-entry.js` 基线保持
     - _Requirements: AC-SEC-06_
@@ -546,7 +546,7 @@
 - [ ] T-26 authRequired 态 + 建会话幂等重试 + 刷新策略消费 + 会话清理
   - [ ]* T-26.1 红:`views/share/index.spec.js` + `views/share/session.spec.js` 扩展 —— 收到 `SHARE_AUTH_REQUIRED` → 呈现 Key 输入态(状态机 `index.vue:160` 加 `authRequired` 节点),输入后重试,连续失败仅提示重试无锁定态;bootstrap 发请求前生成 `Idempotency-Key` 写 sessionStorage 键 `share:est-key:<lid>`,超时同 key 重试禁止换 key,成功后清除;sessionStorage 有效 token 时 bootstrap 不调 `/share/session`;间隔取下发 `refreshIntervalMs`(`useSharePolling.js:58` `intervalMs` 注入),`auto_refresh=false` 不启轮询 + 手动刷新按钮;429 按 `Retry-After` 退避不清会话;离开路由/收 UNAVAILABLE → 清 `share:session:<lid>` 与 `share:est-key:<lid>`;倒计时消费 session 响应既有 `expiresAt`
     - _Requirements: AC-AUTH-01, AC-SESS-03, AC-SESS-10, AC-OTP-05, AC-OTP-08, AC-SEC-07, AC-EDGE-03_
-  - [ ] T-26.2 绿:`views/share/index.vue` bootstrap(`:514-556`)与 `views/share/session.js` 落实上述行为;`mail-vue/src/request/share.js` 加 status 函数与 `Idempotency-Key` 头透传
+  - [ ] T-26.2 绿:`views/share/index.vue` bootstrap 与 `views/share/session.js` 落实上述行为;`mail-vue/src/request/share.js` 只加 `Idempotency-Key` 头透传(status 函数改由 T-25 落地)
     - _Requirements: AC-SESS-03, AC-SESS-10_
 
 ### W6 · E2E 扩展 + 收口(串行)
@@ -595,6 +595,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-25 侦察已落（`recon-t25-tabs.md`）。Fog-1 否决零后端：接线 `listForBinding`；Fog-2 status 函数划给 T-25；Fog-3 composable 零改。未派 T-25（等 T-24 APPROVED）。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-24 侦察已落（`recon-t24-otp-card.md`）。迷雾已裁：Fog-1/2/3 CHANGE；T24-SENDER/CONFIG CHANGE；T24-NO-SPEC HOLD。未勾选 T-24。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-22 R2 APPROVED p0=0（`review-t22-r2.md`）。P1-1/P2-1 CLOSED。主 AI 独立定点 58/58 + 全量 vue 21/185、worker 18/619、E2E 13。W4 收口。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-22 审查 NEEDS_CHANGES p1=1 p2=1（`review-t22.md`）。T22-P1-1/P2-1 均 CHANGE：提交中拒关；刷新间隔必须是安全整数。定点 T22-P 2/2 + 邻接 6/58。未勾选尾：T-22 R2 / T-24 → T-29。
