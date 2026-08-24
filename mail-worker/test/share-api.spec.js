@@ -444,11 +444,11 @@ describe('T-11 mail share HTTP routes', () => {
 		const page1 = await jsonApi('GET', '/share/mails?limit=2', {
 			bearer: session.json.data.sessionToken
 		});
-		expect(page1.json.data.list.map((row) => row.mailId)).toEqual([ids[0], ids[1]]);
+		expect(page1.json.data.list.map((row) => row.mailId)).toEqual([ids[2], ids[1]]);
 		const page2 = await jsonApi('GET', `/share/mails?cursor=${page1.json.data.nextCursor}&limit=2`, {
 			bearer: session.json.data.sessionToken
 		});
-		expect(page2.json.data.list.map((row) => row.mailId)).toEqual([ids[2]]);
+		expect(page2.json.data.list.map((row) => row.mailId)).toEqual([ids[0]]);
 		const all = [...page1.json.data.list, ...page2.json.data.list].map((row) => row.mailId);
 		expect(new Set(all).size).toBe(3);
 		expect([...all].sort((a, b) => a - b)).toEqual(ids);

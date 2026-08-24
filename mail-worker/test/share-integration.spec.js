@@ -763,7 +763,7 @@ describe('T-24 mail share backend integration', () => {
 			bearer: session.json.data.sessionToken
 		});
 		const all = [...page1.json.data.list, ...page2.json.data.list].map((row) => row.mailId);
-		expect(all).toEqual(ids);
+		expect(all).toEqual([ids[2], ids[1], ids[0]]);
 		expect(new Set(all).size).toBe(ids.length);
 	});
 });
