@@ -729,14 +729,11 @@ function functionSource(rawSource, name) {
 	// default, and this repo ships no .gitattributes) the checkout is CRLF, so the
 	// '\n}\n' terminator below never matches and every caller reads end === -1.
 	const source = rawSource.replace(/\r\n/g, '\n');
-	// core.autocrlf=true 的 Windows 检出让 ?raw 拿到 CRLF，'\n}\n' 永不匹配，
-	// 这条结构断言在本地会恒为红（与时区改动无关的既有缺陷）。先归一化再定位。
-	const text = source.replace(/\r\n/g, '\n');
-	const start = text.indexOf(`async function ${name}(`);
+	const start = source.indexOf(`async function ${name}(`);
 	expect(start).toBeGreaterThan(-1);
-	const end = text.indexOf('\n}\n', start);
+	const end = source.indexOf('\n}\n', start);
 	expect(end).toBeGreaterThan(start);
-	return text.slice(start, end);
+	return source.slice(start, end);
 }
 
 describe('shareAuthService session quota gate', () => {
