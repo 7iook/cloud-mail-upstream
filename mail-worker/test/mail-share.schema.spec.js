@@ -140,10 +140,10 @@ describe('mail_share_binding drizzle schema (design.md Data Models)', () => {
 });
 
 describe('primary account_id read fence (AC-BIND-01, AC-LIFE-10)', () => {
-	it('freezes share-auth-service.js at its four pre-existing row.accountId reads', () => {
-		// 这 4 处（assertShareActive / establishSession / resolveSession ×2）是 T-08 集合化之前
-		// 的存量读取，冻结为允许清单：不得出现第 5 处。
-		expect(countPrimaryAccountReads(shareAuthSource)).toBe(4);
+	it('freezes share-auth-service.js at its three post-T-08 row.accountId reads', () => {
+		// T-08 集合化后只剩 3 处，全部落在「零 Binding 行回落到主表」兼容分支。
+		// 棘轮只许降不许升：不得出现第 4 处主表 account_id 直读。
+		expect(countPrimaryAccountReads(shareAuthSource)).toBe(3);
 	});
 
 	it('keeps share-scoped-email-repository.js reading zero mail_share.account_id', () => {

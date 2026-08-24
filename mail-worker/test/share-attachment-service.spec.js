@@ -141,6 +141,21 @@ describe('shareAttachmentService.download scope', () => {
 		expect(getObj).not.toHaveBeenCalled();
 	});
 
+	it('still serves a download when the share context is ACCESS_LIMIT_REACHED (AC-SESS-06)', async () => {
+		const out = await shareAttachmentService.download({}, {
+			shareContext: activeContext({ effectiveStatus: 'ACCESS_LIMIT_REACHED' }),
+			mailId: 11,
+			attachmentId: 7
+		}, {
+			findAttachment: async () => inScopeAttachment(),
+			getObj: async () => storageResponse('capped-bytes'),
+			shareScopedEmailRepository: {
+				getById: async () => ({ emailId: 11, accountId: 42 })
+			}
+		});
+		expect(await out.text()).toBe('capped-bytes');
+	});
+
 	it('rejects when the attachment account_id does not match the share context', async () => {
 		const getObj = vi.fn();
 		await expectUnavailable(shareAttachmentService.download({}, {

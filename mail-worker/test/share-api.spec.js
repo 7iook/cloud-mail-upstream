@@ -10,6 +10,20 @@ const MAILBOX = 't11-box@example.com';
 const OTHER_MAILBOX = 't11-other@example.com';
 const ROLE_ID = 98;
 const UNAVAILABLE = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
+const AUTH_REQUIRED = JSON.stringify(shareResult.fail('SHARE_AUTH_REQUIRED', 501));
+
+async function hmacHex(key, message) {
+	const encoder = new TextEncoder();
+	const cryptoKey = await crypto.subtle.importKey(
+		'raw',
+		encoder.encode(key),
+		{ name: 'HMAC', hash: 'SHA-256' },
+		false,
+		['sign']
+	);
+	const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(message));
+	return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 async function api(method, path, init = {}) {
 	return SELF.fetch(`http://example.com/api${path}`, {
@@ -344,6 +358,55 @@ describe('T-11 mail share HTTP routes', () => {
 			.bind(created.json.data.shareId).first()).access_count).toBe(2);
 
 		await env.kv.delete(`${KvConst.SHARE_EST}${created.json.data.lid}:${idempotencyKey}`);
+	});
+
+	it('takes the AuthKey from the POST /share/session body and refuses without it (AC-AUTH-01, AC-AUTH-02)', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const created = await jsonApi('POST', '/mailShare/create', {
+			token: ownerJwt,
+			body: { accountId, durationSeconds: 3600 }
+		});
+		const shareId = created.json.data.shareId;
+		const { lid, sec } = created.json.data;
+		const authKey = 't11-auth-key-value';
+		// resetAuthKey is T-16, so the visitor path is exercised by seeding the hash
+		// the deployed pepper ring would have produced.
+		await env.db.prepare(`
+			UPDATE mail_share
+			SET auth_key_enabled = 1, auth_key_hash = ?, auth_key_kid = ?
+			WHERE share_id = ?
+		`).bind(await hmacHex(env.SHARE_SEC_PEPPER, authKey), env.SHARE_SEC_PEPPER_KID, shareId).run();
+
+		const usedSessions = async () => (await env.db.prepare(
+			'SELECT access_count FROM mail_share WHERE share_id = ?'
+		).bind(shareId).first()).access_count;
+
+		const missing = await jsonApi('POST', '/share/session', { body: { lid, sec } });
+		expect(missing.status).toBe(200);
+		expect(missing.text).toBe(AUTH_REQUIRED);
+		const wrong = await jsonApi('POST', '/share/session', { body: { lid, sec, authKey: 'not-the-key' } });
+		expect(wrong.text).toBe(AUTH_REQUIRED);
+		expect(await usedSessions()).toBe(0);
+
+		// A visitor who never had a valid sec cannot tell the AuthKey exists.
+		const noSec = await jsonApi('POST', '/share/session', { body: { lid, sec: 'wrong-secret', authKey } });
+		expect(noSec.text).toBe(UNAVAILABLE);
+
+		const ok = await jsonApi('POST', '/share/session', { body: { lid, sec, authKey } });
+		expect(ok.status).toBe(200);
+		expect(ok.json.data.sessionToken).toEqual(expect.any(String));
+		expect(ok.json.data.shareType).toBe('single');
+		expect(ok.json.data.mailboxes).toEqual([
+			{ bindingId: expect.any(Number), address: 't***@example.com' }
+		]);
+		expect(ok.json.data.expiresAt).toEqual(expect.any(String));
+		expect(ok.json.data.config).toMatchObject({
+			autoRefresh: expect.any(Boolean),
+			otpExtractionEnabled: expect.any(Boolean)
+		});
+		expect(ok.json.data.config.refreshIntervalMs).toBeGreaterThanOrEqual(3000);
+		expect(ok.text).not.toContain(authKey);
+		expect(await usedSessions()).toBe(1);
 	});
 
 	it('caps visitor list limit at 50 when the client asks for 500', async () => {

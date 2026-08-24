@@ -1,9 +1,10 @@
-import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
 import { isDel } from '../const/entity-const';
 import KvConst from '../const/kv-const';
 import account from '../entity/account';
 import { mailShare } from '../entity/mail-share';
+import { mailShareBinding } from '../entity/mail-share-binding';
 import orm from '../entity/orm';
 import BizError from '../error/biz-error';
 // Known cycle with mail-share-service: it imports this module too. Both directions
@@ -12,9 +13,16 @@ import BizError from '../error/biz-error';
 import { SHARE_EVENT, logShareEvent } from './mail-share-service';
 
 const SHARE_UNAVAILABLE = 'SHARE_UNAVAILABLE';
+// The only business code a visitor can ever tell apart from SHARE_UNAVAILABLE, and
+// only after lid+sec already matched (AC-AUTH-02).
+const SHARE_AUTH_REQUIRED = 'SHARE_AUTH_REQUIRED';
 // 15 minutes: long enough to wait for and copy an OTP, short enough to bound
 // the same-tab sessionStorage residual after a hard navigation (AC-VISIT-12 vs 15).
 const DEFAULT_SESSION_TTL = 900;
+// Delivery-side floor for the polling interval handed to the visitor page. The
+// write-side rejection of a too-small stored value is T-12; this only makes sure a
+// row that already holds one cannot turn a client into a self-inflicted DoS.
+const MIN_REFRESH_INTERVAL_MS = 3000;
 const TOKEN_VER = 's1';
 // Workers KV refuses an expirationTtl below 60 seconds, and a token with less life
 // than that left is not worth replaying anyway, so the write is skipped instead.
@@ -26,6 +34,10 @@ const decoder = new TextDecoder();
 
 function throwUnavailable() {
 	throw new BizError(SHARE_UNAVAILABLE);
+}
+
+function throwAuthRequired() {
+	throw new BizError(SHARE_AUTH_REQUIRED);
 }
 
 function nowText() {
@@ -167,6 +179,28 @@ async function matchSec(c, sec, row) {
 	return selected.found && hmacOk;
 }
 
+// Same construction as matchSec — HMAC under the pepper named by the row's own kid,
+// constant-time compare — because AuthKey is a second factor of the same kind, not a
+// password (AC-AUTH-03). Never logged, never stored in the clear.
+async function matchAuthKey(c, authKey, row) {
+	const peppers = pepperRing(c);
+	if (!peppers.length) {
+		console.error('share-auth key pepper missing');
+		return false;
+	}
+	const expected = row.authKeyHash ? row.authKeyHash : '0'.repeat(64);
+	const selected = selectKeyedSecret(peppers, row.authKeyKid);
+	const pepper = selected.found ? selected.value : peppers[0].value;
+	const digest = await digestShareSecret(authKey, pepper);
+	const hmacOk = timingSafeEqualString(digest, expected);
+	return Boolean(row.authKeyHash) && selected.found && hmacOk;
+}
+
+function readAuthKey(options) {
+	const raw = options && options.authKey;
+	return raw == null ? '' : String(raw).trim();
+}
+
 async function issueToken(c, row) {
 	const keys = signingRing(c);
 	if (!keys.length) {
@@ -187,7 +221,10 @@ async function issueToken(c, row) {
 		lid: row.lid,
 		iat,
 		exp,
-		kid
+		kid,
+		// The token version stays s1: a pre-T-08 token simply has no cv and resolves
+		// as version 0, which is exactly the value every un-reset row carries.
+		cv: row.credentialsVersion == null ? 0 : row.credentialsVersion
 	})));
 	const data = `${TOKEN_VER}.${kid}.${payloadB64}`;
 	const sig = await hmacBytes(keys[0].value, data);
@@ -256,6 +293,122 @@ async function loadLiveAccount(c, accountId) {
 		throwUnavailable();
 	}
 	return accountRow;
+}
+
+// The binding rows of one share, lowest binding_id first (that ordering is the
+// primary-binding rule), keeping only the ones whose account is still live.
+// A share with no binding rows at all is the pre-Binding single-mailbox shape: the
+// primary `account_id` / `window_start_email_id` pair on mail_share is the binding,
+// and it is presented under bindingId 0 so callers never have to special-case it.
+async function loadLiveBindings(c, row) {
+	const bindingRows = await orm(c)
+		.select()
+		.from(mailShareBinding)
+		.where(eq(mailShareBinding.shareId, row.shareId))
+		.orderBy(asc(mailShareBinding.bindingId))
+		.all();
+	if (!bindingRows || !bindingRows.length) {
+		const accountRow = await loadLiveAccount(c, row.accountId);
+		return [{
+			bindingId: 0,
+			accountId: row.accountId,
+			windowStartEmailId: row.windowStartEmailId,
+			email: accountRow.email
+		}];
+	}
+	const accountRows = await orm(c)
+		.select()
+		.from(account)
+		.where(inArray(account.accountId, bindingRows.map((item) => item.accountId)))
+		.all();
+	const live = new Map();
+	for (const item of accountRows || []) {
+		if (item.isDel !== isDel.DELETE) {
+			live.set(item.accountId, item);
+		}
+	}
+	const bindings = bindingRows
+		.filter((item) => item.accountId > 0 && live.has(item.accountId))
+		.map((item) => ({
+			bindingId: item.bindingId,
+			accountId: item.accountId,
+			windowStartEmailId: item.windowStartEmailId,
+			email: live.get(item.accountId).email
+		}));
+	if (!bindings.length) {
+		throwUnavailable();
+	}
+	return bindings;
+}
+
+function toBoolean(value) {
+	return value === 1 || value === '1' || value === true;
+}
+
+// The ShareContext contract frozen by T-08: W2 consumes `bindings`, nothing else may
+// reshape it. `accountId` / `windowStartEmailId` are deprecated single-binding shims
+// for the readers that still take scalars; T-11 removes them.
+function buildShareContext(row, bindings, state) {
+	const list = bindings.map((item) => Object.freeze({
+		bindingId: item.bindingId,
+		accountId: item.accountId,
+		windowStartEmailId: item.windowStartEmailId
+	}));
+	const primary = list[0];
+	return Object.freeze({
+		shareId: row.shareId,
+		bindings: Object.freeze(list),
+		messageLimit: row.messageLimit == null ? null : Number(row.messageLimit),
+		otpExtractionEnabled: toBoolean(row.otpExtractionEnabled),
+		showFullAddress: toBoolean(row.showFullAddress),
+		expiresAt: row.expiresAt,
+		accountId: primary.accountId,
+		windowStartEmailId: primary.windowStartEmailId,
+		effectiveStatus: state
+	});
+}
+
+// Decision 14: masking is a display preference, not a confidentiality boundary, so it
+// lives with the response that renders it. T-11 owns shareMailService.maskAddress for
+// the mail projection; duplicating four lines here beats dragging the read path into
+// the auth module for one string.
+function maskAddress(address) {
+	const text = address == null ? '' : String(address);
+	const at = text.indexOf('@');
+	if (at <= 0) {
+		return text ? `${text[0]}***` : '';
+	}
+	return `${text[0]}***${text.slice(at)}`;
+}
+
+function clampRefreshInterval(value) {
+	const ms = Number(value);
+	if (!Number.isFinite(ms)) {
+		return MIN_REFRESH_INTERVAL_MS;
+	}
+	return Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(ms));
+}
+
+function buildSessionPayload(row, bindings, sessionToken) {
+	const showFullAddress = toBoolean(row.showFullAddress);
+	return {
+		sessionToken,
+		// Deprecated: the pre-T-08 single-mailbox field, unmasked, kept until the
+		// visitor page reads mailboxes[].
+		mailbox: bindings[0].email,
+		shareType: bindings.length > 1 ? 'multi' : 'single',
+		mailboxes: bindings.map((item) => ({
+			bindingId: item.bindingId,
+			address: showFullAddress ? item.email : maskAddress(item.email)
+		})),
+		expiresAt: row.expiresAt,
+		config: {
+			autoRefresh: toBoolean(row.autoRefresh),
+			refreshIntervalMs: clampRefreshInterval(row.refreshIntervalMs),
+			otpExtractionEnabled: toBoolean(row.otpExtractionEnabled),
+			messageLimit: row.messageLimit == null ? null : Number(row.messageLimit)
+		}
+	};
 }
 
 // Only shareId and reason: this line goes through console.log and is covered by the
@@ -328,8 +481,9 @@ async function writeReplayCache(c, lid, key, shareId, result, exp) {
 	}
 }
 
-// `options` carries the idempotency key at T-07; T-08 adds authKey without changing
-// this signature again.
+// `options` carries the idempotency key (T-07) and the AuthKey (T-08). The service
+// never reads c.req, so the transport decides where each one comes from: the key
+// travels in the JSON body, the idempotency key in a header.
 async function establishSession(c, lid, sec, options = {}) {
 	if (isShareDisabled(c)) {
 		throwUnavailable();
@@ -343,13 +497,27 @@ async function establishSession(c, lid, sec, options = {}) {
 	if (!row || !matched) {
 		throwUnavailable();
 	}
-	// ① sec already matched. ③ account must still be live before we return a
-	// cached token (④ authKey arrives in T-08, inserted above the KV lookup).
+	// ① sec already matched. ③ at least one binding account must still be live
+	// before we return a cached token, then ④ the AuthKey.
 	// Quota / ACTIVE checks are the UPDATE's job and MUST sit after replay:
 	// a max_sessions=1 first success leaves the snapshot ACCESS_LIMIT_REACHED,
 	// and putting denyQuota/assertAllowed first would refuse the exact retry
 	// AC-SESS-10 exists to recover (design.md:357 · requirements.md:95).
-	const accountRow = await loadLiveAccount(c, row.accountId);
+	const bindings = await loadLiveBindings(c, row);
+	// ④ above the replay lookup on purpose: a visitor without the key must not be
+	// handed a token someone else already paid for (AC-AUTH-01).
+	if (toBoolean(row.authKeyEnabled)) {
+		const matchedKey = await matchAuthKey(c, readAuthKey(options), row);
+		if (!matchedKey) {
+			// No counter, no lockout, no per-IP state (AC-AUTH-05 / R2-A6): one line of
+			// telemetry carrying nothing but the share id and a fixed reason.
+			logShareEvent(SHARE_EVENT.SESSION_DENIED_AUTH, {
+				shareId: row.shareId,
+				reason: 'auth_key_mismatch'
+			});
+			throwAuthRequired();
+		}
+	}
 	const idempotencyKey = readIdempotencyKey(options);
 	if (idempotencyKey) {
 		const replayed = await readReplayCache(c, lidText, idempotencyKey, row.shareId);
@@ -386,11 +554,7 @@ async function establishSession(c, lid, sec, options = {}) {
 	// response is the documented TOCTOU window (AC-EDGE-13): the token dies on its
 	// first trip back and the slot is not refunded.
 	const { sessionToken, exp } = await issueToken(c, row);
-	const result = {
-		sessionToken,
-		mailbox: accountRow.email,
-		expiresAt: row.expiresAt
-	};
+	const result = buildSessionPayload(row, bindings, sessionToken);
 	if (idempotencyKey) {
 		// Cache the whole response so a replay is byte-identical to the first one.
 		await writeReplayCache(c, lidText, idempotencyKey, row.shareId, result, exp);
@@ -410,15 +574,19 @@ async function resolveSession(c, sessionToken) {
 	if (!row || row.lid !== payload.lid) {
 		throwUnavailable();
 	}
+	// A token minted before T-08 carries no cv and belongs to version 0, which is what
+	// every row that was never reset still holds. Once resetAuthKey bumps the row, the
+	// mismatch kills the session on its very next request (AC-AUTH-04 / AC-EDGE-05).
+	if ((payload.cv == null ? 0 : payload.cv) !== row.credentialsVersion) {
+		logShareEvent(SHARE_EVENT.SESSION_DENIED_CV, {
+			shareId: row.shareId,
+			reason: 'credentials_version_mismatch'
+		});
+		throwUnavailable();
+	}
 	const state = assertAllowed(row, RESOLVE_ALLOWED);
-	await loadLiveAccount(c, row.accountId);
-	return {
-		shareId: row.shareId,
-		accountId: row.accountId,
-		windowStartEmailId: row.windowStartEmailId,
-		expiresAt: row.expiresAt,
-		effectiveStatus: state
-	};
+	const bindings = await loadLiveBindings(c, row);
+	return buildShareContext(row, bindings, state);
 }
 
 const shareAuthService = {

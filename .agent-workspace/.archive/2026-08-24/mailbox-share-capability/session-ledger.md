@@ -36,7 +36,7 @@
 | W1 | T-06-P0 文档门 | ✅ 已关 | 主 AI | last_access_at 进闸门 · AC-SESS-11 · status 收窄 |
 | W1 | T-06 | ✅ 已提交 `6209960` | generalPurpose≈executor | 主 AI 复跑 26/26 · 17/213 · 17/95 · E2E 13 |
 | W1 | T-06 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t06.md` |
-| W1 | T-07 | ✅ 已提交 `c2087ce` | generalPurpose≈executor | 主 AI 复跑 34/34 · 7/7;T07-R1 CHANGE |
+| W1 | T-07 | ✅ 已提交 `c2087ce` | generalPurpose≈executor | 主 AI 复跑 34/34 · 7/7;代码审查 APPROVED p0=0 |
 | W2 | T-12 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-w2-t12-create.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -70,6 +70,8 @@
 | T12-R6a | 授权改写 `mail-share-service.spec.js` 四条 W0 双写用例为 seed 工厂 | create 之后必写 binding，原前提失效 |
 | T12-R6b | `accountIds` 与 `accountId` 同时出现时以 `accountIds` 为准 | 同时发只可能是 bug |
 | T07-R1 | CHANGE:KV 查询在 `loadLiveAccount` 之后、快照配额/`assertAllowed` 之前 | design.md:357 / AC-SESS-10 `max_sessions=1` 重试;派单原位置会先被 `quota_snapshot` 拦死 |
+| T07-A1 | HOLD:工件审查 A1「未写完成判决」不挡 T-07 收口 | T-07 成功态是后端 AC-SESS-10;前端入口属 T-26;代码审查 APPROVED p0=0 |
+| T07-A2 | HOLD:跨 PoP 60s miss 再耗一格 | design.md:241 已写为 fail-open 风险窗口,不是未文档化缺陷 |
 
 ## 冲突热区占用
 

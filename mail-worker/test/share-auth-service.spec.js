@@ -1,6 +1,8 @@
 import { env, SELF } from 'cloudflare:test';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import shareApiSource from '../src/api/share-api.js?raw';
+import shareAttachmentService from '../src/service/share-attachment-service';
 import shareAuthService from '../src/service/share-auth-service';
 import shareAuthSource from '../src/service/share-auth-service.js?raw';
 import shareResult from '../src/model/share-result';
@@ -51,6 +53,8 @@ async function hmacHex(key, message) {
 }
 
 const UNAVAILABLE_BODY = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
+const AUTH_REQUIRED_BODY = JSON.stringify(shareResult.fail('SHARE_AUTH_REQUIRED', 501));
+const AUTH_KEY = 't08-auth-key-correct-value';
 
 function failEnvelope(err) {
 	return JSON.stringify(shareResult.fail(err.message, err.code));
@@ -210,8 +214,8 @@ async function quotaRow(shareId) {
 
 // The deployed worker signs with the wrangler-vitest ring, so endpoint-level reads
 // have to be established through the worker rather than with the spec-local keys.
-async function shareFetch(method, path, { bearer, body } = {}) {
-	const headers = { 'accept-language': 'en' };
+async function shareFetch(method, path, { bearer, body, headers: extraHeaders } = {}) {
+	const headers = { 'accept-language': 'en', ...(extraHeaders || {}) };
 	if (bearer) {
 		headers.Authorization = `Bearer ${bearer}`;
 	}
@@ -234,6 +238,7 @@ async function shareFetch(method, path, { bearer, body } = {}) {
 }
 
 const seededLids = [];
+const seededShareIds = [];
 const seededAccountIds = new Set();
 
 async function ensureAccount({ accountId = ACCOUNT_ID, email = MAILBOX, deleted = false } = {}) {
@@ -245,19 +250,35 @@ async function ensureAccount({ accountId = ACCOUNT_ID, email = MAILBOX, deleted 
 	`).bind(accountId, email, 't08', USER_ID, deleted ? isDel.DELETE : isDel.NORMAL).run();
 }
 
-async function insertShare({
-	lid,
-	sec,
-	pepper = PEPPER_V2,
-	pepperKid = 'v2',
-	status = 'ACTIVE',
-	expiresAt = '2099-01-01 00:00:00',
-	accountId = ACCOUNT_ID,
-	windowStartEmailId = 10,
-	maxSessions,
-	accessCount,
-	credentialsVersion
-}) {
+// Every column here stays out of the INSERT unless the case names it, so a
+// pre-existing case still gets exactly the v3_2DB defaults it was written against.
+// W1 has no writer for credentials_version or the AuthKey columns (resetAuthKey
+// lands in T-16), so those predicates can only be exercised by seeding directly.
+const OPTIONAL_SHARE_COLUMNS = [
+	['max_sessions', 'maxSessions'],
+	['access_count', 'accessCount'],
+	['credentials_version', 'credentialsVersion'],
+	['auth_key_enabled', 'authKeyEnabled'],
+	['auth_key_hash', 'authKeyHash'],
+	['auth_key_kid', 'authKeyKid'],
+	['message_limit', 'messageLimit'],
+	['otp_extraction_enabled', 'otpExtractionEnabled'],
+	['auto_refresh', 'autoRefresh'],
+	['refresh_interval_ms', 'refreshIntervalMs'],
+	['show_full_address', 'showFullAddress']
+];
+
+async function insertShare(options) {
+	const {
+		lid,
+		sec,
+		pepper = PEPPER_V2,
+		pepperKid = 'v2',
+		status = 'ACTIVE',
+		expiresAt = '2099-01-01 00:00:00',
+		accountId = ACCOUNT_ID,
+		windowStartEmailId = 10
+	} = options;
 	const secHmac = await hmacHex(pepper, sec);
 	seededLids.push(lid);
 	const columns = [
@@ -268,30 +289,51 @@ async function insertShare({
 		lid, secHmac, pepperKid, USER_ID, accountId, status,
 		windowStartEmailId, expiresAt, '2099-12-31 00:00:00'
 	];
-	// Omitted by default so every pre-existing case keeps max_sessions NULL.
-	if (maxSessions !== undefined) {
-		columns.push('max_sessions');
-		values.push(maxSessions);
-	}
-	if (accessCount !== undefined) {
-		columns.push('access_count');
-		values.push(accessCount);
-	}
-	// W1 has no writer for credentials_version (resetAuthKey lands in T-16), so the
-	// cv predicate can only be exercised by seeding the column directly.
-	if (credentialsVersion !== undefined) {
-		columns.push('credentials_version');
-		values.push(credentialsVersion);
+	for (const [column, prop] of OPTIONAL_SHARE_COLUMNS) {
+		if (options[prop] !== undefined) {
+			columns.push(column);
+			values.push(options[prop]);
+		}
 	}
 	await env.db.prepare(`
 		INSERT INTO mail_share (${columns.join(', ')})
 		VALUES (${columns.map(() => '?').join(', ')})
 	`).bind(...values).run();
 	const row = await env.db.prepare('SELECT share_id FROM mail_share WHERE lid = ?').bind(lid).first();
+	seededShareIds.push(row.share_id);
 	return { shareId: row.share_id, secHmac };
 }
 
+// The primary Binding is the lowest binding_id under a share, so insertion order
+// is precedence order.
+async function insertBinding(shareId, accountId, windowStartEmailId = 0) {
+	const row = await env.db.prepare(`
+		INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id)
+		VALUES (?, ?, ?)
+		RETURNING binding_id
+	`).bind(shareId, accountId, windowStartEmailId).first();
+	return row.binding_id;
+}
+
+async function authKeyShare({ lid, sec, authKey = AUTH_KEY, pepper = PEPPER_V2, authKeyKid = 'v2', ...rest }) {
+	return await insertShare({
+		lid,
+		sec,
+		authKeyEnabled: 1,
+		authKeyHash: await hmacHex(pepper, authKey),
+		authKeyKid,
+		...rest
+	});
+}
+
 async function cleanup() {
+	if (seededShareIds.length) {
+		const placeholders = seededShareIds.map(() => '?').join(', ');
+		await env.db.prepare(
+			`DELETE FROM mail_share_binding WHERE share_id IN (${placeholders})`
+		).bind(...seededShareIds).run();
+		seededShareIds.length = 0;
+	}
 	if (seededLids.length) {
 		const placeholders = seededLids.map(() => '?').join(', ');
 		await env.db.prepare(`DELETE FROM mail_share WHERE lid IN (${placeholders})`).bind(...seededLids).run();
@@ -1145,5 +1187,618 @@ describe('shareAuthService establish idempotency replay', () => {
 		expect(joined).not.toContain(lid);
 		expect(joined).not.toContain(sec);
 		expect(joined).not.toContain(established.sessionToken);
+	});
+});
+
+function base64url(bytes) {
+	return btoa(String.fromCharCode(...new Uint8Array(bytes)))
+		.replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+// Mints a token the way the service does, so a case can hand resolveSession a
+// payload shape the current issueToken no longer produces (a pre-T-08 token with
+// no `cv`) without reaching into the module internals.
+async function mintToken(payload, { key = SIGN_V2, kid = 'v2' } = {}) {
+	const data = `s1.${kid}.${base64url(encoder.encode(JSON.stringify(payload)))}`;
+	const cryptoKey = await crypto.subtle.importKey(
+		'raw',
+		encoder.encode(key),
+		{ name: 'HMAC', hash: 'SHA-256' },
+		false,
+		['sign']
+	);
+	const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(data));
+	return `${data}.${base64url(sig)}`;
+}
+
+function authEvents(lines) {
+	return eventsNamed(lines, 'share.session.denied_auth');
+}
+
+function cvEvents(lines) {
+	return eventsNamed(lines, 'share.session.denied_cv');
+}
+
+async function bumpCredentialsVersion(shareId, { authKey, pepper = PEPPER_V2, authKeyKid = 'v2' } = {}) {
+	if (authKey === undefined) {
+		await env.db.prepare(
+			'UPDATE mail_share SET credentials_version = credentials_version + 1 WHERE share_id = ?'
+		).bind(shareId).run();
+	} else {
+		await env.db.prepare(`
+			UPDATE mail_share
+			SET credentials_version = credentials_version + 1, auth_key_hash = ?, auth_key_kid = ?
+			WHERE share_id = ?
+		`).bind(await hmacHex(pepper, authKey), authKeyKid, shareId).run();
+	}
+	const row = await quotaRow(shareId);
+	return row.credentials_version;
+}
+
+describe('shareAuthService AuthKey second factor', () => {
+	it('refuses a missing or wrong AuthKey with SHARE_AUTH_REQUIRED, no token, no quota and no lock table (AC-AUTH-01, AC-AUTH-05, AC-EDGE-12)', async () => {
+		await ensureAccount();
+		const lid = randomLid('auth-wrong');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec });
+		const c = ctx();
+
+		const bodies = [
+			await catchFail(shareAuthService.establishSession(c, lid, sec)),
+			await catchFail(shareAuthService.establishSession(c, lid, sec, {})),
+			await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: '' })),
+			await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: '   ' })),
+			await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: null })),
+			await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: `${AUTH_KEY}x` })),
+			await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY.toUpperCase() }))
+		];
+		for (const body of bodies) {
+			expect(body).toBe(AUTH_REQUIRED_BODY);
+		}
+		expect(new Set(bodies).size).toBe(1);
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(0);
+		expect(row.last_access_at).toBeNull();
+
+		// R2-A6 deleted the lockout table outright: no failure counter may exist.
+		const tables = await env.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
+		expect(tables.results.map((item) => item.name)).not.toContain('mail_share_auth_fail');
+	});
+
+	it('accepts the right AuthKey, trims surrounding whitespace and still meters one slot (AC-AUTH-01, AC-AUTH-03)', async () => {
+		await ensureAccount();
+		const lid = randomLid('auth-right');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec });
+		const c = ctx();
+
+		const established = await shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY });
+		expect(established.sessionToken).toEqual(expect.any(String));
+		expect(established.sessionToken).not.toContain(AUTH_KEY);
+
+		const padded = await shareAuthService.establishSession(c, lid, sec, { authKey: `  ${AUTH_KEY}\n` });
+		expect(padded.sessionToken).toEqual(expect.any(String));
+
+		expect((await quotaRow(shareId)).access_count).toBe(2);
+	});
+
+	it('ignores a supplied AuthKey while the factor is off (AC-AUTH-07)', async () => {
+		await ensureAccount();
+		const lid = randomLid('auth-off');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const c = ctx();
+
+		await shareAuthService.establishSession(c, lid, sec, { authKey: 't08-unsolicited-key' });
+		await shareAuthService.establishSession(c, lid, sec);
+		expect((await quotaRow(shareId)).access_count).toBe(2);
+	});
+
+	it('binds the AuthKey hash to its own auth_key_kid and fails closed on an unconfigured one (AC-AUTH-03)', async () => {
+		await ensureAccount();
+		const c = ctx();
+
+		const prevLid = randomLid('auth-kid-prev');
+		const prevSec = randomSec();
+		await authKeyShare({ lid: prevLid, sec: prevSec, pepper: PEPPER_V1, authKeyKid: 'v1' });
+		const rotated = await shareAuthService.establishSession(c, prevLid, prevSec, { authKey: AUTH_KEY });
+		expect(rotated.sessionToken).toEqual(expect.any(String));
+
+		const crossLid = randomLid('auth-kid-cross');
+		const crossSec = randomSec();
+		await authKeyShare({ lid: crossLid, sec: crossSec, pepper: PEPPER_V1, authKeyKid: 'v2' });
+		expect(await catchFail(shareAuthService.establishSession(c, crossLid, crossSec, { authKey: AUTH_KEY })))
+			.toBe(AUTH_REQUIRED_BODY);
+
+		const goneLid = randomLid('auth-kid-gone');
+		const goneSec = randomSec();
+		await authKeyShare({ lid: goneLid, sec: goneSec, authKeyKid: 'v9' });
+		expect(await catchFail(shareAuthService.establishSession(c, goneLid, goneSec, { authKey: AUTH_KEY })))
+			.toBe(AUTH_REQUIRED_BODY);
+	});
+
+	it('keeps every pre-AuthKey visitor failure byte-identical for any AuthKey the caller sends (P-AUTH-01, AC-AUTH-02, AC-EDGE-08)', async () => {
+		await ensureAccount();
+		const keyedLid = randomLid('p-auth-keyed');
+		const keyedSec = randomSec();
+		await authKeyShare({ lid: keyedLid, sec: keyedSec });
+
+		const plainLid = randomLid('p-auth-plain');
+		const plainSec = randomSec();
+		await insertShare({ lid: plainLid, sec: plainSec });
+
+		const expiredLid = randomLid('p-auth-expired');
+		const expiredSec = randomSec();
+		await authKeyShare({ lid: expiredLid, sec: expiredSec, expiresAt: '2001-01-01 00:00:00' });
+
+		const revokedLid = randomLid('p-auth-revoked');
+		const revokedSec = randomSec();
+		await authKeyShare({ lid: revokedLid, sec: revokedSec, status: 'REVOKED' });
+
+		const missingLid = randomLid('p-auth-missing');
+		const c = ctx();
+
+		// The only thing separating these attempts is whether the visitor ever had a
+		// valid lid+sec. None of them may reveal that an AuthKey exists at all.
+		const attempts = {
+			'missing-lid': () => [missingLid, randomSec()],
+			'wrong-sec-on-keyed': () => [keyedLid, randomSec()],
+			'wrong-sec-on-plain': () => [plainLid, randomSec()]
+		};
+
+		await fc.assert(
+			fc.asyncProperty(
+				fc.constantFrom(...Object.keys(attempts)),
+				fc.oneof(
+					fc.constant(undefined),
+					fc.constant(null),
+					fc.constant(''),
+					fc.constant(AUTH_KEY),
+					fc.string({ maxLength: 40 })
+				),
+				async (which, authKey) => {
+					const [lid, sec] = attempts[which]();
+					const body = await catchFail(
+						shareAuthService.establishSession(c, lid, sec, { authKey })
+					);
+					expect(body).toBe(UNAVAILABLE_BODY);
+				}
+			),
+			{ numRuns: 40 }
+		);
+
+		// The other half of AC-AUTH-02: a visitor who did pass lid+sec and does hold
+		// the key still gets the plain refusal for expiry and revocation.
+		expect(await catchFail(shareAuthService.establishSession(c, expiredLid, expiredSec, { authKey: AUTH_KEY })))
+			.toBe(UNAVAILABLE_BODY);
+		expect(await catchFail(shareAuthService.establishSession(c, revokedLid, revokedSec, { authKey: AUTH_KEY })))
+			.toBe(UNAVAILABLE_BODY);
+	});
+
+	it('checks the AuthKey before the idempotency replay cache so a wrong key never gets a cached token (AC-AUTH-01, AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('auth-before-kv');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec });
+		const kv = recordingKv();
+		const key = 'auth-before-kv-key';
+		const c = ctx({ kv: kv.binding });
+
+		const first = await shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY, idempotencyKey: key });
+		expect(kv.store.has(estKey(lid, key))).toBe(true);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const gets = kv.gets.length;
+		expect(await catchFail(shareAuthService.establishSession(c, lid, sec, { idempotencyKey: key })))
+			.toBe(AUTH_REQUIRED_BODY);
+		expect(await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: 'nope', idempotencyKey: key })))
+			.toBe(AUTH_REQUIRED_BODY);
+		// The refusal happened above the cache: no lookup, so no cached token to leak.
+		expect(kv.gets.length).toBe(gets);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const replay = await shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY, idempotencyKey: key });
+		expect(replay).toEqual(first);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('serves an already-issued keyed session after max_sessions is reached (AC-SESS-06, AC-AUTH-01)', async () => {
+		await ensureAccount();
+		const lid = randomLid('auth-cap');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+
+		const established = await shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY });
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const resolved = await shareAuthService.resolveSession(c, established.sessionToken);
+		expect(resolved.effectiveStatus).toBe('ACCESS_LIMIT_REACHED');
+		expect(resolved.shareId).toBe(shareId);
+
+		// The cap closes the door without clearing the room, and it stays a plain
+		// SHARE_UNAVAILABLE even though the visitor holds the right key.
+		expect(await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY })))
+			.toBe(UNAVAILABLE_BODY);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('still refuses a keyed session when the quota UPDATE throws and still signs when the KV write fails (AC-SESS-11, AC-SESS-10)', async () => {
+		await ensureAccount();
+
+		const gateLid = randomLid('auth-gate-fail');
+		const gateSec = randomSec();
+		const gate = await authKeyShare({ lid: gateLid, sec: gateSec });
+		const failing = ctx({
+			db: injectingDb(env.db, {
+				before: () => {
+					throw new Error('d1 write failed');
+				}
+			})
+		});
+		expect(await catchFail(shareAuthService.establishSession(failing, gateLid, gateSec, { authKey: AUTH_KEY })))
+			.toBe(UNAVAILABLE_BODY);
+		expect((await quotaRow(gate.shareId)).access_count).toBe(0);
+
+		const kvLid = randomLid('auth-kv-fail');
+		const kvSec = randomSec();
+		const kvShare = await authKeyShare({ lid: kvLid, sec: kvSec });
+		const kv = recordingKv({ putThrows: true });
+		let established;
+		const lines = await captureLogs(async () => {
+			established = await shareAuthService.establishSession(
+				ctx({ kv: kv.binding }), kvLid, kvSec, { authKey: AUTH_KEY, idempotencyKey: 'auth-kv-fail-key' }
+			);
+		});
+		expect(established.sessionToken).toEqual(expect.any(String));
+		expect(systemErrors(lines).length).toBe(1);
+		expect((await quotaRow(kvShare.shareId)).access_count).toBe(1);
+	});
+
+	it('logs share.session.denied_auth without the key, the sec, the lid or the token (AC-LEAK-05, AC-AUTH-03)', async () => {
+		await ensureAccount();
+		const lid = randomLid('auth-log');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec });
+		const c = ctx();
+
+		const lines = [];
+		const log = console.log;
+		const error = console.error;
+		console.log = (...args) => lines.push(args.map(String).join(' '));
+		console.error = (...args) => lines.push(args.map(String).join(' '));
+		let established;
+		try {
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: 't08-guessed-key' })))
+				.toBe(AUTH_REQUIRED_BODY);
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec))).toBe(AUTH_REQUIRED_BODY);
+			established = await shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY });
+		} finally {
+			console.log = log;
+			console.error = error;
+		}
+
+		const events = authEvents(lines);
+		expect(events.length).toBe(2);
+		expect(events.map((entry) => entry.shareId)).toEqual([shareId, shareId]);
+
+		const joined = lines.join('\n');
+		expect(joined).not.toContain(AUTH_KEY);
+		expect(joined).not.toContain('t08-guessed-key');
+		expect(joined).not.toContain(sec);
+		expect(joined).not.toContain(lid);
+		expect(joined).not.toContain(established.sessionToken);
+	});
+
+	it('leaves HTTP 429 to the transport layer instead of mapping it into the session path (AC-AUTH-06, AC-EDGE-12)', () => {
+		// share-rate-limit.spec.js already proves the 429 response itself; what this
+		// task must not do is teach the service about the limiter.
+		expect(shareAuthSource).not.toContain('RATE_LIMITED');
+		expect(shareAuthSource).not.toContain('429');
+		expect(shareAuthSource).not.toContain('RateLimit');
+		expect(shareApiSource).toContain(
+			"app.post('/share/session', shareRateLimit(SHARE_SESSION_RATE_LIMITER, SHARE_SESSION_RETRY_AFTER_SECONDS)"
+		);
+	});
+});
+
+describe('shareAuthService credentials_version', () => {
+	it('stamps cv on the token and kills the old one on the next resolve after a bump (P-AUTH-02, AC-AUTH-04, AC-EDGE-05)', async () => {
+		await ensureAccount();
+		const lid = randomLid('cv-bump');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec });
+		const c = ctx();
+
+		const first = await shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY });
+		expect(decodeTokenPayload(first.sessionToken).cv).toBe(0);
+		expect((await shareAuthService.resolveSession(c, first.sessionToken)).shareId).toBe(shareId);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const nextKey = 't08-auth-key-rotated-value';
+		const cv1 = await bumpCredentialsVersion(shareId, { authKey: nextKey });
+		expect(cv1).toBe(1);
+
+		expect(await catchFail(shareAuthService.resolveSession(c, first.sessionToken))).toBe(UNAVAILABLE_BODY);
+		expect(await catchFail(shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY })))
+			.toBe(AUTH_REQUIRED_BODY);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const second = await shareAuthService.establishSession(c, lid, sec, { authKey: nextKey });
+		expect(decodeTokenPayload(second.sessionToken).cv).toBe(1);
+		expect((await shareAuthService.resolveSession(c, second.sessionToken)).shareId).toBe(shareId);
+		// Re-entry costs a fresh slot (AC-EDGE-05).
+		expect((await quotaRow(shareId)).access_count).toBe(2);
+
+		const cv2 = await bumpCredentialsVersion(shareId);
+		expect(cv2).toBe(2);
+		expect(cv2).toBeGreaterThan(cv1);
+		expect(cv1).toBeGreaterThan(0);
+		expect(await catchFail(shareAuthService.resolveSession(c, second.sessionToken))).toBe(UNAVAILABLE_BODY);
+		expect(await catchFail(shareAuthService.resolveSession(c, first.sessionToken))).toBe(UNAVAILABLE_BODY);
+	});
+
+	it('resolves a pre-T-08 token with no cv as version 0 (AC-AUTH-04)', async () => {
+		await ensureAccount();
+		const lid = randomLid('cv-legacy');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const c = ctx();
+
+		const iat = Math.floor(Date.now() / 1000);
+		const legacy = await mintToken({ shareId, lid, iat, exp: iat + 900, kid: 'v2' });
+		expect(decodeTokenPayload(legacy).cv).toBeUndefined();
+		expect((await shareAuthService.resolveSession(c, legacy)).shareId).toBe(shareId);
+
+		await bumpCredentialsVersion(shareId);
+		expect(await catchFail(shareAuthService.resolveSession(c, legacy))).toBe(UNAVAILABLE_BODY);
+	});
+
+	it('logs share.session.denied_cv without the lid, sec or token (AC-AUTH-04, AC-LEAK-05)', async () => {
+		await ensureAccount();
+		const lid = randomLid('cv-log');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const c = ctx();
+		const established = await shareAuthService.establishSession(c, lid, sec);
+		await bumpCredentialsVersion(shareId);
+
+		const lines = await captureLogs(async () => {
+			expect(await catchFail(shareAuthService.resolveSession(c, established.sessionToken)))
+				.toBe(UNAVAILABLE_BODY);
+		});
+
+		const events = cvEvents(lines);
+		expect(events.length).toBe(1);
+		expect(events[0].shareId).toBe(shareId);
+		const joined = lines.join('\n');
+		expect(joined).not.toContain(lid);
+		expect(joined).not.toContain(sec);
+		expect(joined).not.toContain(established.sessionToken);
+	});
+
+	it('does not bind the token to the caller IP (AC-SESS-08)', async () => {
+		await ensureAccount();
+		const lid = randomLid('cv-ip');
+		const sec = randomSec();
+		await insertShare({
+			lid,
+			sec,
+			pepper: env.SHARE_SEC_PEPPER,
+			pepperKid: env.SHARE_SEC_PEPPER_KID
+		});
+
+		const session = await shareFetch('POST', '/share/session', {
+			body: { lid, sec },
+			headers: { 'CF-Connecting-IP': '203.0.113.7' }
+		});
+		expect(session.status).toBe(200);
+		const sessionToken = session.json.data.sessionToken;
+
+		const moved = await shareFetch('GET', '/share/mails?limit=20', {
+			bearer: sessionToken,
+			headers: { 'CF-Connecting-IP': '198.51.100.9' }
+		});
+		expect(moved.status).toBe(200);
+		expect(moved.json.code).toBe(200);
+		expect(Array.isArray(moved.json.data.list)).toBe(true);
+	});
+});
+
+describe('shareAuthService ShareContext and session response', () => {
+	it('returns a frozen collection ShareContext with the deprecated single-binding shims (AC-SESS-09)', async () => {
+		await ensureAccount();
+		const secondAccountId = 800043;
+		await ensureAccount({ accountId: secondAccountId, email: 't08-second@example.com' });
+		const lid = randomLid('ctx-multi');
+		const sec = randomSec();
+		const { shareId } = await insertShare({
+			lid,
+			sec,
+			messageLimit: 25,
+			otpExtractionEnabled: 0,
+			showFullAddress: 1
+		});
+		// Inserted alt-account-first so "sorted by bindingId ASC" cannot be confused
+		// with "the primary account_id column comes first".
+		const primaryBinding = await insertBinding(shareId, secondAccountId, 77);
+		const laterBinding = await insertBinding(shareId, ACCOUNT_ID, 10);
+		expect(primaryBinding).toBeLessThan(laterBinding);
+
+		const c = ctx();
+		const established = await shareAuthService.establishSession(c, lid, sec);
+		const resolved = await shareAuthService.resolveSession(c, established.sessionToken);
+
+		expect(resolved.bindings).toEqual([
+			{ bindingId: primaryBinding, accountId: secondAccountId, windowStartEmailId: 77 },
+			{ bindingId: laterBinding, accountId: ACCOUNT_ID, windowStartEmailId: 10 }
+		]);
+		expect(resolved.shareId).toBe(shareId);
+		expect(resolved.messageLimit).toBe(25);
+		expect(resolved.otpExtractionEnabled).toBe(false);
+		expect(resolved.showFullAddress).toBe(true);
+		expect(resolved.expiresAt).toBe('2099-01-01 00:00:00');
+		expect(resolved.effectiveStatus).toBe('ACTIVE');
+		// Deprecated shims until T-11 moves every reader onto bindings[].
+		expect(resolved.accountId).toBe(secondAccountId);
+		expect(resolved.windowStartEmailId).toBe(77);
+
+		expect(Object.isFrozen(resolved)).toBe(true);
+		expect(Object.isFrozen(resolved.bindings)).toBe(true);
+		expect(Object.isFrozen(resolved.bindings[0])).toBe(true);
+	});
+
+	it('synthesizes one shim binding for a share with no binding rows (W1-ctx)', async () => {
+		await ensureAccount();
+		const lid = randomLid('ctx-shim');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const c = ctx();
+
+		const established = await shareAuthService.establishSession(c, lid, sec);
+		const resolved = await shareAuthService.resolveSession(c, established.sessionToken);
+		expect(resolved.bindings).toEqual([
+			{ bindingId: 0, accountId: ACCOUNT_ID, windowStartEmailId: 10 }
+		]);
+		expect(resolved.accountId).toBe(ACCOUNT_ID);
+		expect(resolved.windowStartEmailId).toBe(10);
+		expect(resolved.messageLimit).toBeNull();
+		expect(resolved.otpExtractionEnabled).toBe(true);
+		expect(resolved.showFullAddress).toBe(false);
+		expect(resolved.shareId).toBe(shareId);
+	});
+
+	it('drops a deleted binding account and refuses once every binding account is gone (AC-LIFE-03)', async () => {
+		const deadAccountId = 800098;
+		await ensureAccount();
+		await ensureAccount({ accountId: deadAccountId, email: 't08-gone@example.com' });
+		const lid = randomLid('ctx-dead');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const deadBinding = await insertBinding(shareId, deadAccountId, 5);
+		const liveBinding = await insertBinding(shareId, ACCOUNT_ID, 10);
+		const c = ctx();
+
+		await env.db.prepare('UPDATE account SET is_del = ? WHERE account_id = ?')
+			.bind(isDel.DELETE, deadAccountId).run();
+
+		const established = await shareAuthService.establishSession(c, lid, sec);
+		const resolved = await shareAuthService.resolveSession(c, established.sessionToken);
+		expect(resolved.bindings).toEqual([
+			{ bindingId: liveBinding, accountId: ACCOUNT_ID, windowStartEmailId: 10 }
+		]);
+		expect(deadBinding).toBeLessThan(liveBinding);
+
+		await env.db.prepare('UPDATE account SET is_del = ? WHERE account_id = ?')
+			.bind(isDel.DELETE, ACCOUNT_ID).run();
+		expect(await catchFail(shareAuthService.resolveSession(c, established.sessionToken))).toBe(UNAVAILABLE_BODY);
+		expect(await catchFail(shareAuthService.establishSession(c, lid, sec))).toBe(UNAVAILABLE_BODY);
+	});
+
+	it('answers a single-binding establish with shareType, masked mailboxes, expiresAt and config (AC-SESS-09)', async () => {
+		await ensureAccount();
+		const lid = randomLid('resp-single');
+		const sec = randomSec();
+		await insertShare({
+			lid,
+			sec,
+			messageLimit: 30,
+			otpExtractionEnabled: 1,
+			autoRefresh: 0,
+			refreshIntervalMs: 5000
+		});
+
+		const established = await shareAuthService.establishSession(ctx(), lid, sec);
+		expect(established.shareType).toBe('single');
+		expect(established.mailboxes).toEqual([{ bindingId: 0, address: 't***@example.com' }]);
+		expect(established.expiresAt).toBe('2099-01-01 00:00:00');
+		expect(established.config).toEqual({
+			autoRefresh: false,
+			refreshIntervalMs: 5000,
+			otpExtractionEnabled: true,
+			messageLimit: 30
+		});
+		// The pre-T-08 field stays, unmasked, until the visitor page moves to mailboxes[].
+		expect(established.mailbox).toBe(MAILBOX);
+		expect(JSON.stringify(established.mailboxes)).not.toContain(MAILBOX);
+	});
+
+	it('answers a two-binding establish with shareType multi and both masked addresses (AC-SESS-09, AC-CAP-02)', async () => {
+		await ensureAccount();
+		const secondAccountId = 800044;
+		// Different first letter so the two masked addresses cannot pass by accident.
+		await ensureAccount({ accountId: secondAccountId, email: 'alt-t08@example.com' });
+		const lid = randomLid('resp-multi');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const first = await insertBinding(shareId, ACCOUNT_ID, 10);
+		const second = await insertBinding(shareId, secondAccountId, 0);
+
+		const established = await shareAuthService.establishSession(ctx(), lid, sec);
+		expect(established.shareType).toBe('multi');
+		expect(established.mailboxes).toEqual([
+			{ bindingId: first, address: 't***@example.com' },
+			{ bindingId: second, address: 'a***@example.com' }
+		]);
+		expect(established.mailbox).toBe(MAILBOX);
+	});
+
+	it('shows full addresses when show_full_address is on and clamps refresh_interval_ms up to 3000 (Decision 14, T12-R1)', async () => {
+		await ensureAccount();
+		const lid = randomLid('resp-full');
+		const sec = randomSec();
+		await insertShare({ lid, sec, showFullAddress: 1, refreshIntervalMs: 500 });
+
+		const established = await shareAuthService.establishSession(ctx(), lid, sec);
+		expect(established.mailboxes).toEqual([{ bindingId: 0, address: MAILBOX }]);
+		expect(established.config.refreshIntervalMs).toBe(3000);
+	});
+
+	it('replays the whole extended response for a repeated Idempotency-Key (AC-SESS-09, AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('resp-replay');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, messageLimit: 12 });
+		const kv = recordingKv();
+		const c = ctx({ kv: kv.binding });
+
+		const first = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: 'resp-replay-key' });
+		const replay = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: 'resp-replay-key' });
+		expect(replay).toEqual(first);
+		expect(replay.config).toEqual(first.config);
+		expect(replay.mailboxes).toEqual(first.mailboxes);
+		expect(replay.shareType).toBe('single');
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('lets an ACCESS_LIMIT_REACHED context still download an attachment (T05-attach, AC-SESS-06)', async () => {
+		await ensureAccount();
+		const lid = randomLid('ctx-att-cap');
+		const sec = randomSec();
+		await insertShare({ lid, sec, maxSessions: 1, windowStartEmailId: 0 });
+		const c = ctx();
+
+		const established = await shareAuthService.establishSession(c, lid, sec);
+		const resolved = await shareAuthService.resolveSession(c, established.sessionToken);
+		expect(resolved.effectiveStatus).toBe('ACCESS_LIMIT_REACHED');
+
+		const response = await shareAttachmentService.download(c, {
+			shareContext: resolved,
+			mailId: 11,
+			attachmentId: 7
+		}, {
+			findAttachment: async () => ({
+				attId: 7,
+				accountId: ACCOUNT_ID,
+				emailId: 11,
+				key: 'attachments/t08-capped.txt'
+			}),
+			shareScopedEmailRepository: {
+				getById: async () => ({ emailId: 11, accountId: ACCOUNT_ID })
+			},
+			getObj: async () => new Response('capped-bytes')
+		});
+		expect(await response.text()).toBe('capped-bytes');
 	});
 });

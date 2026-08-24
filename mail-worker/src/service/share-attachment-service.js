@@ -101,11 +101,15 @@ async function resolveShareContext(c, request, deps) {
 	throwUnavailable();
 }
 
+// A reached cap closes the door without clearing the room (AC-SESS-06): the sessions
+// already issued keep reading, attachments included. REVOKED and EXPIRED still cut.
+const DOWNLOAD_ALLOWED_STATUS = ['ACTIVE', 'ACCESS_LIMIT_REACHED'];
+
 function assertActiveShareContext(shareContext) {
 	if (!shareContext || !(shareContext.accountId > 0)) {
 		throwUnavailable();
 	}
-	if (shareContext.effectiveStatus && shareContext.effectiveStatus !== 'ACTIVE') {
+	if (shareContext.effectiveStatus && !DOWNLOAD_ALLOWED_STATUS.includes(shareContext.effectiveStatus)) {
 		throwUnavailable();
 	}
 }
