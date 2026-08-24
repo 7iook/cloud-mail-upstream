@@ -36,16 +36,16 @@
     - verify: 红 `pnpm --dir mail-worker exec vitest run test/v3-2-db.spec.js` → 12 failed（`v3_2DB is not a function` / 无 binding 表）；绿同命令 12 passed；主 AI 复跑 `pnpm --dir mail-worker test` → 17 files / 153 tests passed（基线 16/138）
     - files: `mail-worker/src/init/init.js` · `mail-worker/src/entity/mail-share.js` · `mail-worker/src/entity/mail-share-binding.js` · `mail-worker/test/v3-2-db.spec.js` · `mail-worker/test/mail-share.schema.spec.js`
     - AC: AC-BIND-09, AC-BIND-11, AC-LIFE-08, AC-EDGE-09
-    - commit: pending
+    - commit: 4f72418
   - [x]* T-01.1 红:新建 `mail-worker/test/v3-2-db.spec.js` —— 预置 v3_1 形状旧行(含 account 已删/归属不符/不存在三类脏行 + 合法行),断言:有效行恰一条 Binding 回填、脏行置 `REVOKED`(记 `revoked_at`)且零 Binding、重复跑幂等、`access_count` 原值保留;注入「旧写落在 INSERT 前 / INSERT 与 UPDATE 之间 / UPDATE 后 / 任务重启后」全部交错时序,断言合法无 Binding 晚写行不被误 REVOKED(R3-A2);跑一次确认因 `v3_2DB` 不存在而红
     - _Requirements: AC-BIND-09, AC-BIND-11, AC-EDGE-09_
-    - **Evidence** verify: 12/12 failed because `dbInit.v3_2DB is not a function`（功能缺失，非语法错）· files: `mail-worker/test/v3-2-db.spec.js` · AC: AC-BIND-09/11, AC-EDGE-09 · commit: pending
+    - **Evidence** verify: 12/12 failed because `dbInit.v3_2DB is not a function`（功能缺失，非语法错）· files: `mail-worker/test/v3-2-db.spec.js` · AC: AC-BIND-09/11, AC-EDGE-09 · commit: 4f72418
   - [x] T-01.2 绿:`mail-worker/src/init/init.js` 注册链尾(`init.js:31-32` 之后)新增 `v3_2DB()`:11 条 `ALTER TABLE mail_share ADD COLUMN`(照 design「Data Models」清单,expand-only 零 RENAME 零 DROP)+ `CREATE TABLE IF NOT EXISTS mail_share_binding` + 两索引(`UNIQUE(share_id, account_id)`、`idx_msb_account`)+ 回填 `INSERT ... SELECT ... JOIN account ... WHERE NOT EXISTS`(门禁:存活/`is_del=NORMAL`/`user_id` 匹配)+ 无效行 `UPDATE ... SET status='REVOKED'`(显式 account 事实谓词,禁止以「无 Binding」判脏)+ `share.migrate.invalid_row` 结构化日志
     - _Requirements: AC-BIND-09, AC-BIND-11, AC-LIFE-08_
-    - **Evidence** verify: `v3-2-db.spec.js` 12 passed；SQL 真源仅 `backfillShareBindings` / `revokeInvalidShares`；零 DROP/RENAME · files: `mail-worker/src/init/init.js` · AC: AC-BIND-09/11, AC-LIFE-08 · commit: pending
+    - **Evidence** verify: `v3-2-db.spec.js` 12 passed；SQL 真源仅 `backfillShareBindings` / `revokeInvalidShares`；零 DROP/RENAME · files: `mail-worker/src/init/init.js` · AC: AC-BIND-09/11, AC-LIFE-08 · commit: 4f72418
   - [x] T-01.3 实体:`mail-worker/src/entity/mail-share.js` 加 11 列映射;新建 `mail-worker/src/entity/mail-share-binding.js`;`mail-worker/test/mail-share.schema.spec.js` 扩展 DDL-实体一致性断言(新列 + binding 表 + 遗留列语义)
     - _Requirements: AC-LIFE-08_
-    - **Evidence** verify: `mail-share.schema.spec.js` 6 passed；无 `share_type` 列；`access_count` 物理名保留 · files: `mail-worker/src/entity/mail-share.js` · `mail-worker/src/entity/mail-share-binding.js` · `mail-worker/test/mail-share.schema.spec.js` · AC: AC-LIFE-08 · commit: pending
+    - **Evidence** verify: `mail-share.schema.spec.js` 6 passed；无 `share_type` 列；`access_count` 物理名保留 · files: `mail-worker/src/entity/mail-share.js` · `mail-worker/src/entity/mail-share-binding.js` · `mail-worker/test/mail-share.schema.spec.js` · AC: AC-LIFE-08 · commit: 4f72418
 
 - [ ] T-02 双写契约(Expand 阶段):`mail_share.account_id` = 主 Binding,鉴权零读取
   - [ ]* T-02.1 红:`mail-worker/test/mail-share.schema.spec.js` 与 `mail-worker/test/mail-share-service.spec.js` 加断言 —— 任何写路径后主表 `account_id` 恒等于现存最小 `binding_id` 的 `account_id` 且非 0;grep 级断言鉴权/范围代码(`share-auth-service.js`、`share-scoped-email-repository.js`)零读取 `mail_share.account_id`(双写路径除外)
