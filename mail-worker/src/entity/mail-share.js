@@ -17,7 +17,18 @@ export const mailShare = sqliteTable('mail_share', {
 	accessCount: integer('access_count').default(0).notNull(),
 	lastAccessAt: text('last_access_at'),
 	revokedAt: text('revoked_at'),
-	createTime: text('create_time').default(sql`CURRENT_TIMESTAMP`).notNull()
+	createTime: text('create_time').default(sql`CURRENT_TIMESTAMP`).notNull(),
+	maxSessions: integer('max_sessions'),
+	messageLimit: integer('message_limit'),
+	onlyMessagesAfterCreated: integer('only_messages_after_created').default(1).notNull(),
+	otpExtractionEnabled: integer('otp_extraction_enabled').default(1).notNull(),
+	autoRefresh: integer('auto_refresh').default(1).notNull(),
+	refreshIntervalMs: integer('refresh_interval_ms').default(3000).notNull(),
+	showFullAddress: integer('show_full_address').default(0).notNull(),
+	authKeyEnabled: integer('auth_key_enabled').default(0).notNull(),
+	authKeyHash: text('auth_key_hash'),
+	authKeyKid: text('auth_key_kid'),
+	credentialsVersion: integer('credentials_version').default(0).notNull()
 });
 
 export const shareIdempotency = sqliteTable('share_idempotency', {

@@ -1,6 +1,6 @@
 import settingService from '../service/setting-service';
 import emailUtils from '../utils/email-utils';
-import {emailConst} from "../const/entity-const";
+import {emailConst, isDel} from "../const/entity-const";
 
 const dbInit = {
 	async init(c) {
@@ -30,8 +30,110 @@ const dbInit = {
 		await this.v2_9DB(c);
 		await this.v3_0DB(c);
 		await this.v3_1DB(c);
+		await this.v3_2DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+	async v3_2DB(c) {
+
+		const ADD_COLUMN_SQL_LIST = [
+			`ALTER TABLE mail_share ADD COLUMN max_sessions INTEGER;`,
+			`ALTER TABLE mail_share ADD COLUMN message_limit INTEGER;`,
+			`ALTER TABLE mail_share ADD COLUMN only_messages_after_created INTEGER NOT NULL DEFAULT 1;`,
+			`ALTER TABLE mail_share ADD COLUMN otp_extraction_enabled INTEGER NOT NULL DEFAULT 1;`,
+			`ALTER TABLE mail_share ADD COLUMN auto_refresh INTEGER NOT NULL DEFAULT 1;`,
+			`ALTER TABLE mail_share ADD COLUMN refresh_interval_ms INTEGER NOT NULL DEFAULT 3000;`,
+			`ALTER TABLE mail_share ADD COLUMN show_full_address INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE mail_share ADD COLUMN auth_key_enabled INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE mail_share ADD COLUMN auth_key_hash TEXT;`,
+			`ALTER TABLE mail_share ADD COLUMN auth_key_kid TEXT;`,
+			`ALTER TABLE mail_share ADD COLUMN credentials_version INTEGER NOT NULL DEFAULT 0;`
+		];
+
+		const columnPromises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		});
+		await Promise.all(columnPromises);
+
+		await c.env.db.prepare(`
+      CREATE TABLE IF NOT EXISTS mail_share_binding (
+				binding_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				share_id INTEGER NOT NULL,
+				account_id INTEGER NOT NULL,
+				window_start_email_id INTEGER NOT NULL DEFAULT 0,
+				create_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+
+		const INDEX_SQL_LIST = [
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_msb_share_account ON mail_share_binding(share_id, account_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_msb_account ON mail_share_binding(account_id)`
+		];
+
+		const indexPromises = INDEX_SQL_LIST.map(async (sql) => {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过创建索引：${e.message}`);
+			}
+		});
+		await Promise.all(indexPromises);
+
+		await this.backfillShareBindings(c);
+		await this.revokeInvalidShares(c);
+	},
+
+	// v3_2DB 迁移门禁之一（design.md「迁移 v3_2DB · 旧行回填」唯一 SQL 真源）：
+	// 通过门禁（account 存活 / is_del=NORMAL / user_id 归属匹配）的存量行幂等回填恰一条 Binding。
+	async backfillShareBindings(c) {
+		const result = await c.env.db.prepare(`
+			INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id, create_time)
+			SELECT ms.share_id, ms.account_id, ms.window_start_email_id, ms.create_time
+			FROM mail_share ms
+			JOIN account a ON a.account_id = ms.account_id
+			             AND a.is_del = ${isDel.NORMAL}
+			             AND a.user_id = ms.user_id
+			WHERE NOT EXISTS (
+				SELECT 1 FROM mail_share_binding b WHERE b.share_id = ms.share_id
+			)
+		`).run();
+		return result.meta?.changes ?? 0;
+	},
+
+	// v3_2DB 迁移门禁之二（同上唯一 SQL 真源）：判据只取 account 事实（不存在 / 已删 / 归属不符），
+	// 与「是否已回填 Binding」完全解耦 —— 旧 Worker 在两条语句之间晚写的合法行此刻尚无 Binding，
+	// 不得被误置终态 REVOKED，留待重跑 INSERT 幂等收编（R3-A2）。
+	async revokeInvalidShares(c) {
+		const {results} = await c.env.db.prepare(`
+			UPDATE mail_share
+			SET status = 'REVOKED', revoked_at = CURRENT_TIMESTAMP
+			WHERE status = 'ACTIVE'
+				AND NOT EXISTS (
+					SELECT 1 FROM account a
+					WHERE a.account_id = mail_share.account_id
+						AND a.is_del = ${isDel.NORMAL}
+						AND a.user_id = mail_share.user_id
+				)
+			RETURNING share_id, account_id
+		`).all();
+
+		const revoked = results || [];
+		revoked.forEach((row) => {
+			console.log(JSON.stringify({
+				event: 'share.migrate.invalid_row',
+				migration: 'v3_2DB',
+				shareId: row.share_id,
+				accountId: row.account_id,
+				reason: 'account_gate_failed',
+				ts: new Date().toISOString()
+			}));
+		});
+		return revoked.length;
 	},
 
 	async v3_1DB(c) {
