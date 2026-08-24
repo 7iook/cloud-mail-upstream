@@ -46,7 +46,6 @@
 | W2 | T-10 scoped repo | ✅ 已提交 `bca7bc2` | generalPurpose≈executor | 主 AI 复跑 repo 13 + api/integ DESC · 全量 17/349 |
 | W2 | T-13 bindings PUT | ✅ 已提交 `ee2db41` | generalPurpose≈executor | 主 AI 复跑 mail-share 155/155 · 全量 17/349 |
 | W2 | T-13 审查修复 | ✅ 已提交 `22d9832` | generalPurpose≈executor | 主 AI 独立 164/164 · 全量 17/358；复审 pending |
-| W1 | T-08 R2 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t08-r2.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
