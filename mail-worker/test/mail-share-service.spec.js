@@ -12,6 +12,7 @@ import mailShareService, {
 } from '../src/service/mail-share-service';
 import shareResult from '../src/model/share-result';
 import initSource from '../src/init/init.js?raw';
+import wranglerToml from '../wrangler.toml?raw';
 import { seedBindingRow, seedShareRow } from './setup.js';
 
 const PEPPER = 't09-pepper-v2-fixed-test-value';
@@ -40,6 +41,11 @@ function shareEnv(overrides = {}) {
 
 function ctx(overrides = {}) {
 	return { env: shareEnv(overrides) };
+}
+
+// 多邮箱 / AuthKey / 有限配额都在 AC-LIFE-11 的栅栏后面，需要显式放行的用例用这个上下文。
+function v2ctx(overrides = {}) {
+	return ctx({ SHARE_CAPABILITY_V2: 'true', ...overrides });
 }
 
 function failEnvelope(err) {
@@ -113,13 +119,47 @@ async function seedOwners() {
 	await ensureAccount({ accountId: ACC_C, email: MAIL_C, userId: USER_A });
 }
 
-async function insertBinding(shareId, accountId, windowStartEmailId = 0) {
-	return seedBindingRow({ shareId, accountId, windowStartEmailId });
-}
-
 async function readPrimaryAccountId(shareId) {
 	const row = await env.db.prepare('SELECT account_id FROM mail_share WHERE share_id = ?').bind(shareId).first();
 	return row.account_id;
+}
+
+async function readShareRow(shareId) {
+	return env.db.prepare('SELECT * FROM mail_share WHERE share_id = ?').bind(shareId).first();
+}
+
+async function listBindings(shareId) {
+	const rows = await env.db.prepare(`
+		SELECT binding_id, account_id, window_start_email_id
+		FROM mail_share_binding WHERE share_id = ? ORDER BY binding_id ASC
+	`).bind(shareId).all();
+	return rows.results || [];
+}
+
+async function countOwnerRows(userId) {
+	const share = await env.db.prepare('SELECT COUNT(*) AS n FROM mail_share WHERE user_id = ?').bind(userId).first();
+	const binding = await env.db.prepare(`
+		SELECT COUNT(*) AS n FROM mail_share_binding WHERE account_id IN (?, ?, ?)
+	`).bind(ACC_A, ACC_B, ACC_C).first();
+	return { shares: share.n, bindings: binding.n };
+}
+
+function sqlProbe() {
+	const seen = [];
+	const prepare = env.db.prepare.bind(env.db);
+	const db = new Proxy(env.db, {
+		get(target, prop) {
+			if (prop === 'prepare') {
+				return (sql) => {
+					seen.push(String(sql));
+					return prepare(sql);
+				};
+			}
+			const value = target[prop];
+			return typeof value === 'function' ? value.bind(target) : value;
+		}
+	});
+	return { seen, db };
 }
 
 async function clearPrimaryAccountId(shareId) {
@@ -460,70 +500,79 @@ describe('mailShareService owner write path', () => {
 		expect(row.status).toBe('ACTIVE');
 	});
 
+	// T-12 之后 create() 自己就会写 Binding，这四条不能再拿 create() 当「无 Binding 的空壳」用：
+	// 手工补一条 ACC_A 会撞 idx_msb_share_account 的 UNIQUE，且主 Binding 已被 create 占定。
+	// 改用 seedShareRow + seedBindingRow 直接造行（照抄下面那条 v3_2DB seeded 用例的写法），
+	// 断言语义逐条保留：最小 binding_id 胜出 / 跟随幸存者 / 无 Binding 零变更不写 0 / 单语句可入 batch。
 	it('syncs the primary account_id to the smallest binding_id account (AC-LIFE-10)', async () => {
 		await seedOwners();
-		const created = await mailShareService.create(ctx(), createParams(), USER_A);
-		const primary = await insertBinding(created.shareId, ACC_A);
-		const secondary = await insertBinding(created.shareId, ACC_C);
+		const share = await seedShareRow({ userId: USER_A, accountId: ACC_B });
+		const primary = await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+		const secondary = await seedBindingRow({ shareId: share.shareId, accountId: ACC_C });
 		expect(secondary).toBeGreaterThan(primary);
-		await clearPrimaryAccountId(created.shareId);
 
-		await syncPrimaryAccountId(ctx(), created.shareId).run();
+		await syncPrimaryAccountId(ctx(), share.shareId).run();
 
-		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_A);
+		expect(await readPrimaryAccountId(share.shareId)).toBe(ACC_A);
 	});
 
 	it('follows the surviving primary binding after the first one is removed (AC-LIFE-10 path 2)', async () => {
 		await seedOwners();
-		const created = await mailShareService.create(ctx(), createParams(), USER_A);
-		const primary = await insertBinding(created.shareId, ACC_A);
-		await insertBinding(created.shareId, ACC_C);
+		const share = await seedShareRow({ userId: USER_A, accountId: ACC_A });
+		const primary = await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_C });
 		await env.db.prepare('DELETE FROM mail_share_binding WHERE binding_id = ?').bind(primary).run();
 
-		await syncPrimaryAccountId(ctx(), created.shareId).run();
+		await syncPrimaryAccountId(ctx(), share.shareId).run();
 
-		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_C);
+		expect(await readPrimaryAccountId(share.shareId)).toBe(ACC_C);
 	});
 
 	it('never writes 0 when the share has no usable binding left (AC-LIFE-10)', async () => {
 		await seedOwners();
-		const created = await mailShareService.create(ctx(), createParams(), USER_A);
-		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_A);
+		const share = await seedShareRow({ userId: USER_A, accountId: ACC_A });
+		expect(await readPrimaryAccountId(share.shareId)).toBe(ACC_A);
 
-		const applied = await syncPrimaryAccountId(ctx(), created.shareId).run();
+		const applied = await syncPrimaryAccountId(ctx(), share.shareId).run();
 
 		expect(applied.meta.changes).toBe(0);
-		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_A);
+		expect(await readPrimaryAccountId(share.shareId)).toBe(ACC_A);
 	});
 
 	it('is one conditional UPDATE that composes into a single db.batch (AC-LIFE-10)', async () => {
 		await seedOwners();
-		const created = await mailShareService.create(ctx(), createParams(), USER_A);
-		await insertBinding(created.shareId, ACC_C);
-		await clearPrimaryAccountId(created.shareId);
+		const share = await seedShareRow({ userId: USER_A, accountId: ACC_A });
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_C });
+		await clearPrimaryAccountId(share.shareId);
 
-		const seen = [];
-		const prepare = env.db.prepare.bind(env.db);
-		const db = new Proxy(env.db, {
-			get(target, prop) {
-				if (prop === 'prepare') {
-					return (sql) => {
-						seen.push(String(sql));
-						return prepare(sql);
-					};
-				}
-				const value = target[prop];
-				return typeof value === 'function' ? value.bind(target) : value;
-			}
-		});
-		const statement = syncPrimaryAccountId({ env: shareEnv({ db }) }, created.shareId);
+		const { seen, db } = sqlProbe();
+		const statement = syncPrimaryAccountId({ env: shareEnv({ db }) }, share.shareId);
 		expect(seen).toHaveLength(1);
 		expect(seen[0]).toMatch(/UPDATE\s+mail_share/i);
 		expect(seen[0].replace(/;\s*$/, '')).not.toContain(';');
 
 		await env.db.batch([statement]);
 
-		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_C);
+		expect(await readPrimaryAccountId(share.shareId)).toBe(ACC_C);
+	});
+
+	// create 组装双写语句时 share_id 还不存在（AUTOINCREMENT 由同批的 INSERT 决定），
+	// 所以助手必须能按 lid 定位；window_start_email_id 与 account_id 同批双写（R2）。
+	it('locates the share by lid and dual-writes the primary window snapshot (AC-LIFE-10)', async () => {
+		await seedOwners();
+		const share = await seedShareRow({ userId: USER_A, accountId: ACC_B, windowStartEmailId: 0 });
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_A, windowStartEmailId: 7 });
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_C, windowStartEmailId: 99 });
+
+		const { seen, db } = sqlProbe();
+		const statement = syncPrimaryAccountId({ env: shareEnv({ db }) }, { lid: share.lid });
+		expect(seen).toHaveLength(1);
+		expect(seen[0].replace(/;\s*$/, '')).not.toContain(';');
+		await env.db.batch([statement]);
+
+		const row = await readShareRow(share.shareId);
+		expect(row.account_id).toBe(ACC_A);
+		expect(row.window_start_email_id).toBe(7);
 	});
 
 	it('syncs a seeded v3_2DB-shaped row that never went through create (AC-LIFE-10)', async () => {
@@ -615,6 +664,486 @@ describe('mailShareService owner write path', () => {
 	});
 });
 
+describe('mailShareService multi-mailbox create (T-12)', () => {
+	it('creates one share row plus one binding per mailbox and keeps the URL shape (AC-CAP-01)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_C, ACC_A]
+		}), USER_A);
+
+		expect(created.shareUrl).toBe(`https://mail.example.com/s/${created.lid}#${created.sec}`);
+		expect(decodeBase64Url(created.lid).length).toBe(16);
+		expect(decodeBase64Url(created.sec).length).toBe(32);
+		const { shares } = await countOwnerRows(USER_A);
+		expect(shares).toBe(1);
+
+		const rows = await listBindings(created.shareId);
+		expect(rows.map((row) => row.account_id)).toEqual([ACC_A, ACC_C]);
+		expect(created.bindings).toEqual([
+			{ bindingId: rows[0].binding_id, accountId: ACC_A },
+			{ bindingId: rows[1].binding_id, accountId: ACC_C }
+		]);
+	});
+
+	it('derives shareType from the binding count and never persists a share_type column (AC-CAP-02)', async () => {
+		await seedOwners();
+		const single = await mailShareService.create(v2ctx(), createParams(), USER_A);
+		const multi = await mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_A, ACC_C],
+			name: 'pool'
+		}), USER_A);
+
+		expect(single.shareType).toBe('single');
+		expect(single.bindings).toHaveLength(1);
+		expect(multi.shareType).toBe('multi');
+		expect(multi.bindings).toHaveLength(2);
+
+		const columns = await env.db.prepare("SELECT name FROM pragma_table_info('mail_share')").all();
+		expect((columns.results || []).map((row) => row.name)).not.toContain('share_type');
+	});
+
+	it('dual-writes the primary account_id and window snapshot onto the main row (AC-LIFE-10)', async () => {
+		await seedOwners();
+		const olderA = await insertEmail(ACC_A, USER_A, 't09-primary-1');
+		const newerA = await insertEmail(ACC_A, USER_A, 't09-primary-2');
+		await insertEmail(ACC_C, USER_A, 't09-secondary-1');
+		expect(newerA).toBeGreaterThan(olderA);
+
+		const created = await mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_C, ACC_A]
+		}), USER_A);
+
+		const rows = await listBindings(created.shareId);
+		const row = await readShareRow(created.shareId);
+		expect(row.account_id).toBe(rows[0].account_id);
+		expect(row.account_id).toBe(ACC_A);
+		expect(row.window_start_email_id).toBe(rows[0].window_start_email_id);
+		expect(row.window_start_email_id).toBe(newerA);
+	});
+
+	it('refuses the whole create when one accountId belongs to another owner (AC-CAP-03)', async () => {
+		await seedOwners();
+		const message = await catchBiz(mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_A, ACC_B]
+		}), USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+	});
+
+	it('refuses the whole create when one accountId is soft-deleted (AC-CAP-03)', async () => {
+		await seedOwners();
+		await env.db.prepare('UPDATE account SET is_del = ? WHERE account_id = ?').bind(isDel.DELETE, ACC_C).run();
+
+		const message = await catchBiz(mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_A, ACC_C]
+		}), USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+	});
+
+	it('rejects an empty or malformed accountIds set (AC-CAP-03)', async () => {
+		await seedOwners();
+		for (const accountIds of [[], [ACC_A, 0], [ACC_A, -1], [ACC_A, 1.5], [ACC_A, null], [ACC_A, Infinity]]) {
+			const message = await catchBiz(mailShareService.create(v2ctx(), createParams({ accountIds }), USER_A));
+			expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		}
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+	});
+
+	it('lets accountIds win when the legacy accountId is also present', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), {
+			accountId: ACC_B,
+			accountIds: [ACC_A],
+			durationSeconds: 3600
+		}, USER_A);
+
+		expect((await listBindings(created.shareId)).map((row) => row.account_id)).toEqual([ACC_A]);
+		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_A);
+	});
+
+	// 这 51 个 ID 没有对应的 account 行 —— 上限校验刻意排在归属查询与 V2 栅栏之前，
+	// 「51 > 50」是永远为真的领域错误，比「能力未激活」对调用方更有用（recon §3.3）。
+	it('rejects more than SHARE_BINDING_LIMIT accountIds before the fence and before ownership (AC-CAP-13)', async () => {
+		await seedOwners();
+		const ids = Array.from({ length: SHARE_BINDING_LIMIT + 1 }, (_unused, index) => 990000 + index);
+		const message = await catchBiz(mailShareService.create(ctx(), createParams({ accountIds: ids }), USER_A));
+
+		expect(message).toBe('SHARE_BINDING_LIMIT_EXCEEDED');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+	});
+
+	it('does not treat exactly SHARE_BINDING_LIMIT accountIds as over the cap (AC-CAP-13)', async () => {
+		await seedOwners();
+		const ids = Array.from({ length: SHARE_BINDING_LIMIT }, (_unused, index) => 990000 + index);
+		const message = await catchBiz(mailShareService.create(v2ctx(), createParams({ accountIds: ids }), USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+	});
+
+	it('rejects refreshIntervalMs below 3000 on the write side (AC-CAP-06, AC-OTP-06)', async () => {
+		await seedOwners();
+		const message = await catchBiz(mailShareService.create(ctx(), createParams({
+			refreshIntervalMs: 2999
+		}), USER_A));
+		expect(message).toBe('SHARE_INVALID_CONFIG');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+
+		const created = await mailShareService.create(ctx(), createParams({
+			refreshIntervalMs: 5000
+		}), USER_A);
+		expect((await readShareRow(created.shareId)).refresh_interval_ms).toBe(5000);
+	});
+
+	it('rejects out-of-range messageLimit and maxSessions (AC-CAP-06)', async () => {
+		await seedOwners();
+		expect(await catchBiz(mailShareService.create(v2ctx(), createParams({
+			messageLimit: 0
+		}), USER_A))).toBe('SHARE_INVALID_CONFIG');
+		expect(await catchBiz(mailShareService.create(v2ctx(), createParams({
+			maxSessions: 0
+		}), USER_A))).toBe('SHARE_INVALID_CONFIG');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+	});
+
+	it('stores the accepted configuration set on the share row (AC-CAP-06)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(v2ctx(), createParams({
+			maxSessions: 3,
+			messageLimit: 5,
+			onlyMessagesAfterCreated: false,
+			otpExtractionEnabled: false,
+			autoRefresh: false,
+			refreshIntervalMs: 4000,
+			showFullAddress: true
+		}), USER_A);
+
+		expect(await readShareRow(created.shareId)).toMatchObject({
+			max_sessions: 3,
+			message_limit: 5,
+			only_messages_after_created: 0,
+			otp_extraction_enabled: 0,
+			auto_refresh: 0,
+			refresh_interval_ms: 4000,
+			show_full_address: 1
+		});
+	});
+
+	it('snapshots every binding window at its own mailbox MAX(email_id) (AC-CAP-07)', async () => {
+		await seedOwners();
+		await insertEmail(ACC_A, USER_A, 't09-win-a1');
+		const maxA = await insertEmail(ACC_A, USER_A, 't09-win-a2');
+		const maxC = await insertEmail(ACC_C, USER_A, 't09-win-c1');
+		expect(maxC).toBeGreaterThan(maxA);
+
+		const created = await mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_A, ACC_C],
+			onlyMessagesAfterCreated: true
+		}), USER_A);
+
+		const rows = await listBindings(created.shareId);
+		expect(rows.map((row) => [row.account_id, row.window_start_email_id])).toEqual([
+			[ACC_A, maxA],
+			[ACC_C, maxC]
+		]);
+	});
+
+	it('writes 0 to every binding window when onlyMessagesAfterCreated is false (AC-CAP-08)', async () => {
+		await seedOwners();
+		await insertEmail(ACC_A, USER_A, 't09-zero-a1');
+		await insertEmail(ACC_C, USER_A, 't09-zero-c1');
+
+		const created = await mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_A, ACC_C],
+			onlyMessagesAfterCreated: false
+		}), USER_A);
+
+		const rows = await listBindings(created.shareId);
+		expect(rows.map((row) => row.window_start_email_id)).toEqual([0, 0]);
+		expect((await readShareRow(created.shareId)).window_start_email_id).toBe(0);
+	});
+
+	it('keeps the per-binding snapshot inside the write statements (AC-CAP-07, AC-SHARE-16)', async () => {
+		await seedOwners();
+		await insertEmail(ACC_A, USER_A, 't09-atomic-a');
+		const { seen, db } = sqlProbe();
+
+		await mailShareService.create({ env: shareEnv({ db, SHARE_CAPABILITY_V2: 'true' }) }, createParams({
+			accountIds: [ACC_A, ACC_C]
+		}), USER_A);
+
+		const bindingSql = seen.find((sql) => /INSERT\s+INTO\s+mail_share_binding/i.test(sql));
+		expect(bindingSql).toEqual(expect.any(String));
+		expect(bindingSql).toMatch(/COALESCE\s*\(\s*MAX\s*\(\s*e\.email_id\s*\)/i);
+		expect(seen.some((sql) => /SELECT\s+MAX\s*\(\s*email_id\s*\)/i.test(sql))).toBe(false);
+	});
+
+	it('returns the AuthKey plaintext exactly once and stores only hash plus kid (AC-CAP-05)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(v2ctx(), createParams({
+			authKeyEnabled: true,
+			idempotencyKey: 't09-authkey'
+		}), USER_A);
+
+		expect(created.authKey).toEqual(expect.any(String));
+		expect(created.authKey).toHaveLength(22);
+		expect(decodeBase64Url(created.authKey).length).toBe(16);
+
+		const row = await readShareRow(created.shareId);
+		expect(row.auth_key_enabled).toBe(1);
+		expect(row.auth_key_hash).toBe(await shareAuthService.digestShareSecret(created.authKey, PEPPER));
+		expect(row.auth_key_kid).toBe('v2');
+		expect(Object.values(row)).not.toContain(created.authKey);
+
+		const replay = await mailShareService.create(v2ctx(), createParams({
+			authKeyEnabled: true,
+			idempotencyKey: 't09-authkey'
+		}), USER_A);
+		expect(replay.shareId).toBe(created.shareId);
+		expect(replay.idempotentReplay).toBe(true);
+		expect(replay.authKey).toBeUndefined();
+		expect(replay.sec).toBeUndefined();
+
+		const listed = await mailShareService.list(ctx(), {}, USER_A);
+		expect(JSON.stringify(listed)).not.toContain(created.authKey);
+	});
+
+	// T-08 的 establishSession 要用同一口径校验 AuthKey：pepper 复用 SHARE_SEC_PEPPER，
+	// kid 复用 SHARE_SEC_PEPPER_KID（= sec 的 pepper_kid）。这条断言就是交给 T-08 的契约。
+	it('derives auth_key_hash from the same pepper and kid as sec (T-08 input contract)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(v2ctx(), createParams({ authKeyEnabled: true }), USER_A);
+		const row = await readShareRow(created.shareId);
+
+		expect(row.auth_key_kid).toBe(row.pepper_kid);
+		expect(row.auth_key_hash).toBe(await shareAuthService.digestShareSecret(created.authKey, PEPPER));
+		expect(row.auth_key_hash).not.toBe(row.sec_hmac);
+	});
+
+	it('leaves auth key columns null when the feature stays off (AC-CAP-05)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const row = await readShareRow(created.shareId);
+
+		expect(created.authKey).toBeUndefined();
+		expect(row.auth_key_enabled).toBe(0);
+		expect(row.auth_key_hash == null).toBe(true);
+		expect(row.auth_key_kid == null).toBe(true);
+	});
+
+	it('never writes the AuthKey plaintext to logs (AC-LEAK-05)', async () => {
+		await seedOwners();
+		const lines = [];
+		const log = console.log;
+		const error = console.error;
+		console.log = (...args) => lines.push(args.map(String).join(' '));
+		console.error = (...args) => lines.push(args.map(String).join(' '));
+		try {
+			const created = await mailShareService.create(v2ctx(), createParams({ authKeyEnabled: true }), USER_A);
+			await catchBiz(mailShareService.create(v2ctx(), createParams({
+				accountIds: [ACC_A, ACC_B],
+				authKeyEnabled: true
+			}), USER_A));
+			expect(lines.join('\n')).not.toContain(created.authKey);
+		} finally {
+			console.log = log;
+			console.error = error;
+		}
+	});
+
+	it('folds a reordered and duplicated accountIds set into the same fingerprint (AC-CAP-09)', async () => {
+		await seedOwners();
+		const first = await mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_C, ACC_A],
+			idempotencyKey: 't09-set-order'
+		}), USER_A);
+		const replay = await mailShareService.create(v2ctx(), createParams({
+			accountIds: [ACC_A, ACC_C, ACC_A],
+			idempotencyKey: 't09-set-order'
+		}), USER_A);
+
+		expect(replay.shareId).toBe(first.shareId);
+		expect(replay.lid).toBe(first.lid);
+		expect(replay.idempotentReplay).toBe(true);
+		expect(replay.sec).toBeUndefined();
+		expect(replay.shareType).toBe('multi');
+		expect(replay.bindings).toEqual(first.bindings);
+		const { shares } = await countOwnerRows(USER_A);
+		expect(shares).toBe(1);
+	});
+
+	it('treats omitted new config fields as their defaults for the fingerprint (AC-CAP-09)', async () => {
+		await seedOwners();
+		const first = await mailShareService.create(ctx(), {
+			accountId: ACC_A,
+			durationSeconds: 3600,
+			idempotencyKey: 't09-defaults'
+		}, USER_A);
+		const replay = await mailShareService.create(ctx(), {
+			accountIds: [ACC_A],
+			durationSeconds: 3600,
+			name: '',
+			remark: '',
+			maxSessions: null,
+			messageLimit: null,
+			onlyMessagesAfterCreated: true,
+			otpExtractionEnabled: true,
+			autoRefresh: true,
+			refreshIntervalMs: 3000,
+			showFullAddress: false,
+			authKeyEnabled: false,
+			idempotencyKey: 't09-defaults'
+		}, USER_A);
+
+		expect(replay.shareId).toBe(first.shareId);
+		expect(replay.idempotentReplay).toBe(true);
+		expect(replay.shareType).toBe('single');
+	});
+
+	it.each([
+		['showFullAddress', { showFullAddress: true }],
+		['otpExtractionEnabled', { otpExtractionEnabled: false }],
+		['autoRefresh', { autoRefresh: false }],
+		['refreshIntervalMs', { refreshIntervalMs: 9000 }],
+		['messageLimit', { messageLimit: 4 }],
+		['maxSessions', { maxSessions: 2 }],
+		['authKeyEnabled', { authKeyEnabled: true }],
+		['accountIds', { accountIds: [ACC_A, ACC_C] }]
+	])('makes %s part of the request fingerprint (AC-CAP-09)', async (label, overrides) => {
+		await seedOwners();
+		const key = `t09-fp-${label}`;
+		await mailShareService.create(v2ctx(), createParams({ idempotencyKey: key }), USER_A);
+		const message = await catchBiz(mailShareService.create(v2ctx(), createParams({
+			idempotencyKey: key,
+			...overrides
+		}), USER_A));
+
+		expect(message).toBe('SHARE_IDEMPOTENCY_CONFLICT');
+		const { shares } = await countOwnerRows(USER_A);
+		expect(shares).toBe(1);
+	});
+
+	it('creates the legacy single-accountId payload with every configuration default (AC-CAP-10)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), {
+			accountId: ACC_A,
+			durationSeconds: 3600
+		}, USER_A);
+
+		expect(created.shareType).toBe('single');
+		expect(created.bindings).toEqual([
+			{ bindingId: expect.any(Number), accountId: ACC_A }
+		]);
+		const row = await readShareRow(created.shareId);
+		expect(row.max_sessions == null).toBe(true);
+		expect(row.message_limit == null).toBe(true);
+		expect(row).toMatchObject({
+			account_id: ACC_A,
+			name: '',
+			remark: '',
+			only_messages_after_created: 1,
+			otp_extraction_enabled: 1,
+			auto_refresh: 1,
+			refresh_interval_ms: 3000,
+			show_full_address: 0,
+			auth_key_enabled: 0,
+			credentials_version: 0
+		});
+	});
+
+	// 预检是 TOCTOU 窗口,不是防线。这条把 account 删除塞进预检与 batch 之间,直击写入语句里的
+	// 归属计数谓词 —— D1 没有 BEGIN,零残留只能靠这条谓词,不能靠回滚。
+	it('keeps the write atomic when an account is deleted after the precheck (AC-CAP-03, AC-BIND-10)', async () => {
+		await seedOwners();
+		const realBatch = env.db.batch.bind(env.db);
+		const db = new Proxy(env.db, {
+			get(target, prop) {
+				if (prop === 'batch') {
+					return async (statements) => {
+						await env.db.prepare('UPDATE account SET is_del = ? WHERE account_id = ?')
+							.bind(isDel.DELETE, ACC_C).run();
+						return realBatch(statements);
+					};
+				}
+				const value = target[prop];
+				return typeof value === 'function' ? value.bind(target) : value;
+			}
+		});
+
+		const message = await catchBiz(mailShareService.create({
+			env: shareEnv({ db, SHARE_CAPABILITY_V2: 'true' })
+		}, createParams({ accountIds: [ACC_A, ACC_C] }), USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+	});
+
+	it('leaves no binding behind when the active limit blocks the share insert (AC-CAP-03, AC-SHARE-15)', async () => {
+		await seedOwners();
+		await mailShareService.create(v2ctx({ SHARE_ACTIVE_LIMIT: '1' }), createParams({ name: 'taken' }), USER_A);
+		const message = await catchBiz(mailShareService.create(v2ctx({ SHARE_ACTIVE_LIMIT: '1' }), createParams({
+			accountIds: [ACC_A, ACC_C],
+			name: 'overflow'
+		}), USER_A));
+
+		expect(message).toBe('SHARE_LIMIT_EXCEEDED');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 1, bindings: 1 });
+	});
+});
+
+describe('create under SHARE_CAPABILITY_V2=false (AC-LIFE-11)', () => {
+	it.each([
+		['multi-mailbox create', { accountIds: [ACC_A, ACC_C] }],
+		['AuthKey enable', { authKeyEnabled: true }],
+		['a finite maxSessions', { maxSessions: 5 }],
+		['a finite messageLimit', { messageLimit: 5 }]
+	])('rejects %s with SHARE_INVALID_CONFIG and leaves zero rows', async (_label, overrides) => {
+		await seedOwners();
+		const message = await catchBiz(mailShareService.create(ctx(), createParams(overrides), USER_A));
+
+		expect(message).toBe('SHARE_INVALID_CONFIG');
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+	});
+
+	// window 下界由 R2 的主表双写覆盖，show_full_address=1 只是「掩码在旧 Worker 上失效」——
+	// 方向是收紧失效不是越权，两者都不进栅栏（主 AI 裁决 T12-R3）。
+	it('still accepts onlyMessagesAfterCreated=false and showFullAddress=1', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams({
+			onlyMessagesAfterCreated: false,
+			showFullAddress: true
+		}), USER_A);
+
+		expect(created.shareType).toBe('single');
+		expect(await readShareRow(created.shareId)).toMatchObject({
+			only_messages_after_created: 0,
+			show_full_address: 1
+		});
+	});
+
+	it('still accepts explicit nulls for the gated quota fields', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams({
+			maxSessions: null,
+			messageLimit: null,
+			authKeyEnabled: false
+		}), USER_A);
+
+		const row = await readShareRow(created.shareId);
+		expect(row.max_sessions == null).toBe(true);
+		expect(row.message_limit == null).toBe(true);
+	});
+
+	it('keeps the production wrangler.toml from opening the fence', () => {
+		const active = wranglerToml
+			.split('\n')
+			.filter((line) => line.trim().startsWith('SHARE_CAPABILITY_V2'));
+		expect(active).toEqual([]);
+	});
+});
+
 function catchBizSync(fn) {
 	try {
 		fn();
@@ -627,15 +1156,18 @@ function catchBizSync(fn) {
 	throw new Error('expected BizError');
 }
 
-const GATED_INTENTS = ['multi_create', 'binding_expand', 'auth_key_enable', 'finite_max_sessions'];
+const GATED_INTENTS = ['multi_create', 'binding_expand', 'auth_key_enable', 'finite_max_sessions', 'message_limit'];
 
 describe('SHARE_CAPABILITY_V2 capability fence (AC-LIFE-11)', () => {
-	it('names the four gated intents the rolling-release fence has to stop', () => {
+	// message_limit 是 T-12 补进来的第五条：旧 Worker 不认识该列，落库即「可见集被放宽到全部」，
+	// 与 multi / AuthKey / 有限配额同构（主 AI 裁决 T12-R3）。
+	it('names the gated intents the rolling-release fence has to stop', () => {
 		expect(SHARE_V2_INTENT).toEqual({
 			MULTI_CREATE: 'multi_create',
 			BINDING_EXPAND: 'binding_expand',
 			AUTH_KEY_ENABLE: 'auth_key_enable',
-			FINITE_MAX_SESSIONS: 'finite_max_sessions'
+			FINITE_MAX_SESSIONS: 'finite_max_sessions',
+			MESSAGE_LIMIT: 'message_limit'
 		});
 		expect(Object.values(SHARE_V2_INTENT).sort()).toEqual([...GATED_INTENTS].sort());
 	});
