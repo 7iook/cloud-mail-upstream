@@ -76,6 +76,10 @@
 | W4 | T-22 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t22-r2.md` · P1-1/P2-1 CLOSED |
 | W4 | T-22 向导侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t22-wizard.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
+| W5 | T-24 ShareOtpCard | ✅ 已提交 `baab349` | generalPurpose≈executor | 主 AI 独立 22+1 · vue 21/189 · worker 18/619 · E2E 13 |
+| W5 | T-24 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t24.md` |
+| W5 | T-25 多邮箱 Tab | ✅ `2e6754d` / `33213e9` / `16f705b` | generalPurpose≈executor | 主 AI 独立 vue 22/221 · worker 18/626 · E2E 13 |
+| W5 | T-25 审查 | ✅ R3 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t25-r3.md` · P1-4 HOLD |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -177,20 +181,21 @@
 | `mail-vue/src/views/share-admin/*` | T-21/`T-22` 已收口 | `status.js` / 抽屉 / 向导其后只读；T-29 清 PENDING_COPY |
 | `mail-vue/src/perm/perm.js` | T-20 已入库 `672da73` | 其后只加路由须新任务 |
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
-| `share-api.js` / `share-mail-service.js` | **T-25 当前写者** | 只加 `bindingId` → `listForBinding` 接线，不改范围模型 |
+| `share-api.js` / `share-mail-service.js` | T-25 已收口 `16f705b` | 其后只读，除非范围模型再变 |
 | `security.js` | T-17 已入库 `d18f027` | 其后只读，除非再加 Owner 路径 |
 | `mail-share-service.js` | T-18 已入库 `73dc371` | 其后只读，除非再开任务 |
 | `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
 | `mail-vue/src/views/email/ShareDialog.*` | T-23 已收口 `4f4cc65` | 其后 T-29 才清 PENDING_COPY |
-| `mail-vue/src/views/share/index.vue` | **T-25 当前写者** | T-24 已收口 `baab349`；T-26 等 T-25 APPROVED |
-| `mail-vue/src/views/share/session.js` | T-26 | T-24/T-25 0 行 |
-| `useSharePolling.js` | 只读 | T-25 零改；T-26 只注入 `intervalMs` |
-| `mail-vue/src/request/share.js` | **T-25 当前写者** | status + `listShareMails` 可选 bindingId；T-26 只加 Idempotency-Key |
+| `mail-vue/src/views/share/index.vue` | **T-26 当前写者** | T-25 已收口 `16f705b` |
+| `mail-vue/src/views/share/session.js` | **T-26 当前写者** | T-24/T-25 0 行 |
+| `useSharePolling.js` | T-26 只注入 `intervalMs` | T-25 零改；禁止改 poll 语义 |
+| `mail-vue/src/request/share.js` | **T-26 当前写者** | 只加 `Idempotency-Key` 头透传；status/`bindingId` 已收口 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-25 R3 APPROVED p0=0（`review-t25-r3.md`）。勾选 T-25。热区 `index.vue` / `session.js` / `request/share.js` 现为 T-26 写者。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 R2 P1 CHANGE（缓存 Tab + hasNew 再拉）。独立 5/68 · 22/221 · 18/626 · E2E 13。未勾选（等 R3）。未勾选尾：T-25 R3 / T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 P1-1/2/3 已修，P1-4 HOLD。独立 5/67 · 22/220 · 18/626 · E2E 13。未勾选（等 R2）。未勾选尾：T-25 R2 / T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 审查 NEEDS_CHANGES p1=4。P1-1/2/3 CHANGE，P1-4 HOLD。未勾选。未勾选尾：T-25 R2 / T-26 → T-29。

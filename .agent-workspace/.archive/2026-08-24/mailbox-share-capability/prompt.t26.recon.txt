@@ -1,0 +1,61 @@
+T-26 recon · visitor authRequired + idempotent session + refresh policy + cleanup (W5 last bar)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD: 16f705b plus this recon prompt (docs-only closeout of T-25 may land in the same push).
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files.
+Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t26-session.md
+
+T-25 is APPROVED (review-t25-r3.md p0=0). T-26 is now the sole writer of:
+- mail-vue/src/views/share/index.vue
+- mail-vue/src/views/share/session.js
+- mail-vue/src/request/share.js (Idempotency-Key only)
+- mail-vue/src/composables/useSharePolling.js (intervalMs injection only)
+
+Read first:
+1. frontend-design / impeccable / ui-ux-pro-max / ponytail(lite)
+   under $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/
+2. docs/specs/mailbox-share-capability/tasks.md T-26
+3. design.md §访客页: AuthKey 交互 / 建会话幂等 / 轮询协议 / AC-SEC-07
+4. recon-t25-tabs.md §10 (what T-26 must not steal) and exec-t25-note.md leftover notes
+5. recon-t24-otp-card.md T24-CONFIG (extend applyShareConfig, do not open a second reader)
+6. Current files:
+   - mail-vue/src/views/share/index.vue (state machine, bootstrap, reestablishSession,
+     noteShareFailure(fromSession=true)→showDeadShare, onUnmounted, applyShareConfig, pollTick)
+   - index.spec.js (existing restore-token / 429 / unavailable cases — extend, do not rewrite)
+   - session.js + session.spec.js
+   - request/share.js createShareSession(lid, sec, config) — currently body {lid,sec} only
+   - useSharePolling.js: intervalMs is a setup-time snapshot (NOT toValue); start() runs immediately
+   - assert-share-chunk.js FORBIDDEN list (login axios / location.reload / Dexie / websiteConfig)
+   - request/mail-share.js newIdempotencyKey — uses @/axios/index.js (login graph). Share chunk MUST NOT import it.
+
+Success state for later T-26:
+NOT "authRequired exists", BUT: a visitor whose share needs an AuthKey can type it and enter;
+the same tab refresh reuses the stored token without consuming quota; a lost POST /share/session
+response retries the same Idempotency-Key; autoRefresh=false shows a manual refresh that reuses
+pollTick; leaving the route or SHARE_UNAVAILABLE clears share:session:<lid> and share:est-key:<lid>
+and does NOT clear share:status:<lid>.
+Negative: no lockout UI; no second polling path; no login-graph import; do not touch
+router/index.js or init/init.js; SHARE_CAPABILITY_V2 stays default false; i18n keys recorded
+not written (T-29).
+
+Hard constraints already decided (do not reopen):
+- Manual refresh MUST call the existing pollTick (recon-t25 §10.3)
+- Extend applyShareConfig for autoRefresh / refreshIntervalMs / expiresAt (T24-CONFIG)
+- T-26 only adds Idempotency-Key on request/share.js; status + bindingId already landed
+- P1-4 HOLD: foreign bindingId stays empty page, not SHARE_UNAVAILABLE
+- T25-ALWAYS-FETCH: every poll tick is 1 status + 1 mails; watermark drives badges only
+- Worker is frozen for T-26 (frontend only)
+
+Return:
+- executable file list with cut lines
+- fog list ≤3 (decisions the main AI must make before exec)
+- what T-27/T-29 must not steal
+- whether useSharePolling needs toValue(intervalMs) / autoStart=false (evidence, not preference)
+- how SHARE_AUTH_REQUIRED currently collapses to unavailable (bootstrap catch → fromSession=true)
+- how to generate Idempotency-Key without importing mail-share.js
+- i18n keys to record for T-29 (do not write zh.js/en.js)
+
+Reply to user in Chinese.

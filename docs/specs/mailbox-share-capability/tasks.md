@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W5 T-24 APPROVED · T-25 待审 |
+| 状态 Status | in-progress · W5 T-24/T-25 APPROVED · T-26 侦察 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -547,13 +547,35 @@
       - AC: AC-OTP-02, AC-OTP-03, AC-OTP-04
       - commit: baab349
 
-- [ ] T-25 多邮箱 Tab + 本地水位 map + 单实例轮询 + 隔离守护
-  - [ ]* T-25.1 红:`views/share/index.spec.js` 与 `mail-vue/src/composables/useSharePolling.spec.js` 扩展 —— 每 tick 恰一次 status 请求无 N 路并发;水位 map(sessionStorage 键 `share:status:<lid>`,值 `{bindingId: watermark}`)推进语义:仅消费过的 Binding 推进、首帧建基准不渲染角标、Binding 增删对齐(新增建基准/已删丢弃);浏览中移除一邮箱 → 下拍消失余箱正常
+- [x] T-25 多邮箱 Tab + 本地水位 map + 单实例轮询 + 隔离守护
+  - **Evidence**
+    - verify: 主 AI 独立 vue 定点 5/68 · 全量 22/221；worker 18/626；E2E 13；R3 定向 5 文件/68 条，均为 EXIT=0
+    - files: `mail-vue/src/views/share/index.vue` · `index.spec.js` · `status-watermark.js` · `request/share.js` · `mail-worker/src/api/share-api.js` · `share-mail-service.js`
+    - AC: AC-OTP-07, AC-OTP-09, AC-EDGE-04, AC-SEC-06
+    - commit: 2e6754d / 33213e9 / 16f705b
+    - decision: Fog-1/2/3 CHANGE；T25-TAB-LOAD/ACTIVE-0/ALWAYS-FETCH CHANGE；P1-1/2/3 CHANGE；P1-4 HOLD（越界 bindingId 同形空页）
+    - review: `review-t25.md` NEEDS_CHANGES → `review-t25-r2.md` NEEDS_CHANGES p1=1 → `review-t25-r3.md` APPROVED p0=0
+  - [x]* T-25.1 红:`views/share/index.spec.js` 与 `mail-vue/src/composables/useSharePolling.spec.js` 扩展 —— 每 tick 恰一次 status 请求无 N 路并发;水位 map(sessionStorage 键 `share:status:<lid>`,值 `{bindingId: watermark}`)推进语义:仅消费过的 Binding 推进、首帧建基准不渲染角标、Binding 增删对齐(新增建基准/已删丢弃);浏览中移除一邮箱 → 下拍消失余箱正常
     - _Requirements: AC-OTP-07, AC-OTP-09, AC-EDGE-04_
-  - [ ] T-25.2 绿:`views/share/index.vue` 按 session 响应 `shareType` 分支渲染,轻量原生 Tab(不引 el-tabs)显示掩码地址 + 新邮件角标;注入 `pollTick`(status 恰一次 → 水位比较 → 当前 Tab 无 cursor 拉 mails),`useSharePolling.js` 零改;`GET /share/mails` 接可选 `bindingId` 走已有 `listForBinding`;`request/share.js` 加 `getShareMailboxesStatus`;路径形态保持 `/s/<lid>#<sec>`,`mail-vue/src/init/init.js:18-20` 正则与 `mail-vue/src/router/index.js:157-183` 守卫零改动
+    - **Evidence**
+      - verify: `index.spec.js` 35 条含 AC-OTP-09 缓存 Tab 重拉；`useSharePolling.spec.js` 基线保持；R3 5/68
+      - files: `mail-vue/src/views/share/index.spec.js` · `status-watermark.spec.js` · `useSharePolling.spec.js`
+      - AC: AC-OTP-07, AC-OTP-09, AC-EDGE-04
+      - commit: 2e6754d / 16f705b
+  - [x] T-25.2 绿:`views/share/index.vue` 按 session 响应 `shareType` 分支渲染,轻量原生 Tab(不引 el-tabs)显示掩码地址 + 新邮件角标;注入 `pollTick`(status 恰一次 → 水位比较 → 当前 Tab 无 cursor 拉 mails),`useSharePolling.js` 零改;`GET /share/mails` 接可选 `bindingId` 走已有 `listForBinding`;`request/share.js` 加 `getShareMailboxesStatus`;路径形态保持 `/s/<lid>#<sec>`,`mail-vue/src/init/init.js:18-20` 正则与 `mail-vue/src/router/index.js:157-183` 守卫零改动
     - _Requirements: AC-OTP-07, AC-OTP-09_
-  - [ ]* T-25.3 隔离守护:`mail-vue/src/views/share/assert-share-chunk.js` + `share-chunk.spec.js` 覆盖全部新增 import(禁入登录态 axios/layout/Dexie/websiteConfig;守护测试红了改 import 不改闸门);`mail-vue/src/init/assert-share-entry.js` 基线保持
+    - **Evidence**
+      - verify: vue 全量 22/221 · worker 18/626 · E2E 13
+      - files: `mail-vue/src/views/share/index.vue` · `request/share.js` · `mail-worker/src/api/share-api.js`
+      - AC: AC-OTP-07, AC-OTP-09
+      - commit: 2e6754d / 33213e9 / 16f705b
+  - [x]* T-25.3 隔离守护:`mail-vue/src/views/share/assert-share-chunk.js` + `share-chunk.spec.js` 覆盖全部新增 import(禁入登录态 axios/layout/Dexie/websiteConfig;守护测试红了改 import 不改闸门);`mail-vue/src/init/assert-share-entry.js` 基线保持
     - _Requirements: AC-SEC-06_
+    - **Evidence**
+      - verify: `share-chunk.spec.js` 含于 R3 定点 5/68
+      - files: `mail-vue/src/views/share/assert-share-chunk.js` · `share-chunk.spec.js`
+      - AC: AC-SEC-06
+      - commit: 2e6754d
 
 - [ ] T-26 authRequired 态 + 建会话幂等重试 + 刷新策略消费 + 会话清理
   - [ ]* T-26.1 红:`views/share/index.spec.js` + `views/share/session.spec.js` 扩展 —— 收到 `SHARE_AUTH_REQUIRED` → 呈现 Key 输入态(状态机 `index.vue:160` 加 `authRequired` 节点),输入后重试,连续失败仅提示重试无锁定态;bootstrap 发请求前生成 `Idempotency-Key` 写 sessionStorage 键 `share:est-key:<lid>`,超时同 key 重试禁止换 key,成功后清除;sessionStorage 有效 token 时 bootstrap 不调 `/share/session`;间隔取下发 `refreshIntervalMs`(`useSharePolling.js:58` `intervalMs` 注入),`auto_refresh=false` 不启轮询 + 手动刷新按钮;429 按 `Retry-After` 退避不清会话;离开路由/收 UNAVAILABLE → 清 `share:session:<lid>` 与 `share:est-key:<lid>`;倒计时消费 session 响应既有 `expiresAt`
@@ -607,6 +629,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-25 R3 APPROVED p0=0（`review-t25-r3.md`）。勾选 T-25。独立复跑 vue 定点 5/68 · 全量 22/221；worker 18/626；E2E 13。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI:T-25 R2 P1 CHANGE（缓存 Tab + hasNew 再拉）。独立复跑 vue 定点 5/68 · 全量 22/221；worker 18/626；E2E 13。未勾选（等 R3）。未勾选尾：T-25 R3 / T-26 → T-29。
 - 2026-08-24 · 主 AI:T-25 P1-1/2/3 已修，P1-4 HOLD。独立复跑 vue 定点 5/67 · 全量 22/220；worker 18/626；E2E 13。未勾选（等 R2）。未勾选尾：T-25 R2 / T-26 → T-29。
 - 2026-08-24 · 主 AI:T-25 审查 NEEDS_CHANGES p1=4（`review-t25.md`）。P1-1/2/3 CHANGE，P1-4 HOLD。未勾选。未勾选尾：T-25 R2 / T-26 → T-29。
