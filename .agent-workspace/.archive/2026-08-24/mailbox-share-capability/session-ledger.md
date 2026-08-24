@@ -171,6 +171,12 @@
 | T25-P1-3 | CHANGE:multi 页不渲染遗留明文 `mailbox` | review-t25；单页原样 |
 | T25-P1-4 | HOLD:越界 bindingId 保持同形空页，不映射 SHARE_UNAVAILABLE | review-t25；防 AC-EDGE-04 误杀 |
 | T25-R2-P1 | CHANGE:有缓存且 hasNew 的 Tab 仍拉一页 | review-t25-r2；无新邮件缓存点击仍零请求 |
+| Fog-1 T-26 | CHANGE:createShareSession 收 authKey(body)+idempotencyKey(header) | recon-t26；「只加 header」字面不可执行 |
+| Fog-2 T-26 | CHANGE A:postSession 无响应原地重试 1 次同 key | recon-t26；否则 T-27.2 无入口 |
+| Fog-3 T-26 | CHANGE:存 token 复活接受 config 降级并钉断言 | recon-t26；AC-SESS-03 优先于 AC-OTP-05 |
+| T26-POLL | CHANGE:useSharePolling toValue(intervalMs);不加 autoStart | recon-t26 §5 |
+| T26-KEYGEN | CHANGE:est-key 在 session.js 用 getRandomValues | recon-t26 §4;禁 import mail-share.js |
+| T26-STATUS | HOLD:清理不清 share:status | recon-t25 §10 + recon-t26 §7.3 |
 
 ## 冲突热区占用
 
@@ -190,11 +196,12 @@
 | `mail-vue/src/views/share/index.vue` | **T-26 当前写者** | T-25 已收口 `16f705b` |
 | `mail-vue/src/views/share/session.js` | **T-26 当前写者** | T-24/T-25 0 行 |
 | `useSharePolling.js` | T-26 只注入 `intervalMs` | T-25 零改；禁止改 poll 语义 |
-| `mail-vue/src/request/share.js` | **T-26 当前写者** | 只加 `Idempotency-Key` 头透传；status/`bindingId` 已收口 |
+| `mail-vue/src/request/share.js` | **T-26 当前写者** | authKey 走 body + Idempotency-Key 头；status/`bindingId` 已收口 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-26 侦察已裁 Fog-1/2/3。派实现。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 R3 APPROVED p0=0（`review-t25-r3.md`）。勾选 T-25。热区 `index.vue` / `session.js` / `request/share.js` 现为 T-26 写者。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 R2 P1 CHANGE（缓存 Tab + hasNew 再拉）。独立 5/68 · 22/221 · 18/626 · E2E 13。未勾选（等 R3）。未勾选尾：T-25 R3 / T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 P1-1/2/3 已修，P1-4 HOLD。独立 5/67 · 22/220 · 18/626 · E2E 13。未勾选（等 R2）。未勾选尾：T-25 R2 / T-26 → T-29。
