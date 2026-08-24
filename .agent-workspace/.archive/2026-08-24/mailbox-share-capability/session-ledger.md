@@ -50,7 +50,8 @@
 | W2 | T-11 投影+附件可见集 | ✅ 已提交 `bee72b6` | generalPurpose≈executor | 主 AI 独立 135/135 · 全量 18/410 |
 | W2 | T-14 status 水位 | ✅ 已提交 `d6fa50b` | generalPurpose≈executor | 主 AI 独立 135/135 · 全量 18/410 |
 | W2 | T-11 P1-1 复审 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t11-r2.md` |
-| W3 | T-15 Owner get/update/delete + list | ✅ 已提交 `1d49bb4` | generalPurpose≈executor | 主 AI 独立 195/195 · 全量 18/441 |
+| W3 | T-15 Owner get/update/delete + list | ✅ 已提交 `1d49bb4` · 审查修复 `cccb3bb` | generalPurpose≈executor | 主 AI 独立 198/198 · 全量 18/444 |
+| W3 | T-15 审查 | ⏳ R2 pending | gpt-5.6-sol-xhigh-fast | `review-t15.md` NEEDS_CHANGES p1=2 |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
