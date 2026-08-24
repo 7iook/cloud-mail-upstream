@@ -35,6 +35,7 @@
 | W1 | T-06 侦察 | ✅ 已落盘 | plan-reality-recon | `recon-w1-t06-quota-gate.md` |
 | W1 | T-06-P0 文档门 | ✅ 已关 | 主 AI | last_access_at 进闸门 · AC-SESS-11 · status 收窄 |
 | W1 | T-06 | ✅ 已提交 `6209960` | generalPurpose≈executor | 主 AI 复跑 26/26 · 17/213 · 17/95 · E2E 13 |
+| W2 | T-12 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-w2-t12-create.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -59,6 +60,13 @@
 | T06-R1 | CHANGE：tasks T-06.2 `last_access_at` 进闸门成功语句 | 与 design.md:280 / W1-quota 对齐 |
 | T06-R2 | CHANGE：本 charter 新增 AC-SESS-11；旧 AC-LIFE-14 加 superseded 注 | 不改旧 charter 正文 |
 | T06-R3 | 两处打 `denied_quota`，`reason`=`quota_snapshot`/`quota_race` | 只打闸门处则日常触顶零日志 |
+| T07-S1 | KV `expirationTtl`：`remaining < 60` 跳过写；≥60 时 `min(120, remaining)` | Workers KV 最小值 60，临期写必然抛错 |
+| T12-R1 | create/update 写入侧拒绝 `refreshIntervalMs<3000`；下发侧钳制属 T-08 | 红灯 AC-CAP-06 与绿灯「钳制」打架，按写入/下发拆 |
+| T12-R2 | Expand 双写主表 `window_start_email_id` = 主 Binding 快照 | 不写则旧 Worker 窗口下界 0，越权读历史邮件 |
+| T12-R3 | V2=false 另拒非 NULL `message_limit`(AC-LIFE-11 ⑤)；`onlyMessagesAfterCreated=false` / `showFullAddress=1` 接受 | 前者同构扩可见集；后两者由 R2 双写或旧默认覆盖 |
+| T12-R5 | AuthKey pepper 复用 `SHARE_SEC_PEPPER` / `SHARE_SEC_PEPPER_KID`，落断言交 T-08 | 不新开环境变量 |
+| T12-R6a | 授权改写 `mail-share-service.spec.js` 四条 W0 双写用例为 seed 工厂 | create 之后必写 binding，原前提失效 |
+| T12-R6b | `accountIds` 与 `accountId` 同时出现时以 `accountIds` 为准 | 同时发只可能是 bug |
 
 ## 冲突热区占用
 

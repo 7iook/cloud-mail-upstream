@@ -99,7 +99,7 @@ one_line: 在既有 mail-share 上扩展多邮箱 Binding、Session 配额闸门
 - **Decision 10 · message_limit**:每 Binding 各自最近 N 封(`email_id` DESC),N=1 合法,NULL 不限;服务端在列表、详情、附件三处强制。
 - **Decision 11 · only_messages_after_created**:true → per-binding `window_start_email_id` 原子快照;false → 下界 0(仍受 N 限制)。
 - **Decision 12 · otp_extraction_enabled**:仅控投影是否返回 `code`;摄取链零改动;提取失败(`code=''`)仍展示邮件。
-- **Decision 13 · auto_refresh / refresh_interval_ms**:share 配置随 session 响应下发;默认开/3000ms;服务端写入与下发双侧钳制 ≥3000。
+- **Decision 13 · auto_refresh / refresh_interval_ms**:share 配置随 session 响应下发;默认开/3000ms;create/update **写入侧拒绝** `<3000`(`SHARE_INVALID_CONFIG`,AC-CAP-06);session/status **下发侧**对存量脏数据钳制 ≥3000(AC-OTP-06,T-08)。
 - **Decision 14 · 脱敏 = 展示偏好,非安全边界(R2-A7 归类)**:掩码是 Visitor 侧 UI 展示偏好(降噪/降低随手抄录),**不是**「隐藏邮箱身份」的保密能力,不列入安全保证、不以安全开关口径向 Owner 呈现。规则:系统生成的绑定邮箱身份字段默认掩码(session/status/list/detail 投影中的 mailbox address,`a***@x.com`:local-part 留首字符);`show_full_address=true` 关闭;发件人默认不掩码(OTP 场景需要判断来源可信度);主题/正文不承诺不出现绑定地址、命中内容不改写(R1-A3 收窄保留,SafeMailRenderer 原样渲染)。若未来出现真实的内容级隐私需求,须另立产品边界(快照/内容改写 + 明确保真损失),不由 `maskAddress` 承担。规格落位见「外部访问页」下「展示偏好:地址掩码」小节(自安全边界移出)。
 - **Decision 15 · Binding 增删语义**:立即影响下次拉取;删光 Binding 撤销分享;account 删除剔除对应 Binding、剩余继续、剩 0 撤销。
 - **Decision 16 · 实时机制**:客户端轮询不变;多邮箱统一 `GET /share/mailboxes/status`(单请求返回各 Binding `latestEmailId` 水位,hasNew 由客户端本地比较,R2-A2),全局轮询每 tick 只拉一次 status,禁止 N 路并行轮询。
@@ -150,7 +150,7 @@ ALTER TABLE mail_share ADD COLUMN message_limit INTEGER;              -- NULL = 
 ALTER TABLE mail_share ADD COLUMN only_messages_after_created INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE mail_share ADD COLUMN otp_extraction_enabled INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE mail_share ADD COLUMN auto_refresh INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE mail_share ADD COLUMN refresh_interval_ms INTEGER NOT NULL DEFAULT 3000;  -- 写入前钳 >=3000
+ALTER TABLE mail_share ADD COLUMN refresh_interval_ms INTEGER NOT NULL DEFAULT 3000;  -- 写入侧拒绝 <3000;下发侧钳 >=3000
 ALTER TABLE mail_share ADD COLUMN show_full_address INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE mail_share ADD COLUMN auth_key_enabled INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE mail_share ADD COLUMN auth_key_hash TEXT;                 -- HMAC-SHA256(authKey, PEPPER[auth_key_kid])
@@ -158,7 +158,7 @@ ALTER TABLE mail_share ADD COLUMN auth_key_kid TEXT;
 ALTER TABLE mail_share ADD COLUMN credentials_version INTEGER NOT NULL DEFAULT 0;
 ```
 
-保留列:`lid`/`sec_hmac`/`pepper_kid`/`user_id`/`name`/`remark`/`status`/`expires_at`/`delete_at`/`access_count`/`last_access_at`/`revoked_at`/`create_time` 全部不动(`access_count` 列名保留,领域量 `used_sessions` 的物理载体,R1-A1)。`account_id` 列在 **Expand 阶段为双写目标**(R2-A1/AC-LIFE-10):新代码写它为主 Binding 的 `account_id`(禁止写 0),但任何鉴权/范围逻辑不得读它(AC-BIND-01);`window_start_email_id` 保留为迁移遗留只读。不删列(D1 ALTER DROP 风险高、schema spec 钉死);`mail-share.schema.spec.js` 扩展断言「双写非 0 + 鉴权零读取」语义。
+保留列:`lid`/`sec_hmac`/`pepper_kid`/`user_id`/`name`/`remark`/`status`/`expires_at`/`delete_at`/`access_count`/`last_access_at`/`revoked_at`/`create_time` 全部不动(`access_count` 列名保留,领域量 `used_sessions` 的物理载体,R1-A1)。`account_id` 列在 **Expand 阶段为双写目标**(R2-A1/AC-LIFE-10):新代码写它为主 Binding 的 `account_id`(禁止写 0),但任何鉴权/范围逻辑不得读它(AC-BIND-01);`window_start_email_id` 在 Expand 阶段与 `account_id` **一并双写**为主 Binding 快照(`only_messages_after_created=true` 时为该 Binding 的 `MAX(email_id)`,false 时为 0)——旧 Worker 读路径仍消费主表该列,不双写则新建行默认 0,滚动窗口内会越权放出创建前邮件;新代码读路径仍只信 Binding。不删列(D1 ALTER DROP 风险高、schema spec 钉死);`mail-share.schema.spec.js` 扩展断言「双写非 0 + 鉴权零读取」语义。
 
 ### `mail_share_binding`(新表)
 
@@ -238,7 +238,7 @@ payload 由 `{shareId, lid, iat, exp, kid}` 扩展为 `{shareId, lid, iat, exp, 
 **产品裁决:配额成功口径 = 客户端可恢复地获得凭据**(非仅服务端 UPDATE 提交)。条件 UPDATE 提交后、响应送达前的网络超时/Worker 重启/响应丢失,不允许把一次逻辑建会话变成多次配额消耗(`max_sessions=1` 下一次超时即永久耗尽链接)。机制为最小请求幂等/结果重放——只负责一次签发结果的去重,**不是** Session 授权真源(每请求回源判定不变,不推翻 R2-A3 线性化承诺、不建服务端 Session/Grant 表):
 
 - **请求**:`POST /share/session` 支持 `Idempotency-Key` 头;客户端在发请求**前**生成并写入 sessionStorage(键 `share:est-key:<lid>`),超时/响应丢失重试必须复用同一 key,禁止换 key 盲重试;成功拿到 token 后清除该 key。
-- **KV 契约**:成功签发后把 sessionToken 写入既有 KV 绑定(`c.env.kv`,同 `security.js:117` 设施;`KvConst` 新增前缀)键 `share:est:<lid>:<key>`,TTL = min(120 秒, token 剩余寿命)。同 key 重放命中 → 直接返回缓存 token(响应形状与首发一致),不再走条件 UPDATE、不再 +1 配额。无 key / 新 key / 缓存过期 → 正常走 AC-SESS-01 条件 UPDATE。
+- **KV 契约**:成功签发后把 sessionToken 写入既有 KV 绑定(`c.env.kv`,同 `security.js:117` 设施;`KvConst` 新增前缀)键 `share:est:<lid>:<key>`,TTL = min(120 秒, token 剩余寿命)(Workers KV `expirationTtl` 最小 60 秒:剩余寿命 `< 60` 时跳过写入,不记 error;≥60 时 `expirationTtl = min(120, remaining)`)。同 key 重放命中 → 直接返回缓存 token(响应形状与首发一致),不再走条件 UPDATE、不再 +1 配额。无 key / 新 key / 缓存过期 → 正常走 AC-SESS-01 条件 UPDATE。跨 PoP 传播最长 60 秒,读不到则退化为再消耗一次配额,属 fail-open 风险窗口。
 - **失败语义(fail-open,文档化风险)**:KV 读/写不可用时仍正常签发 token,该次无重放保护(若响应再丢失,名额已耗且不可恢复),记 `share.system.error` 结构化日志。选 fail-open 而非硬失败:KV 故障不应使整个分享面不可用;风险窗口 = KV 故障 ∩ 响应丢失 ∩ 低配额,接受并观测。
 - **安全**:缓存值是本就要下发给同一持链者的 token(重放方必须持有 `lid`+`sec`(+AuthKey)且通过全部校验才走到重放查询);key 由客户端生成并绑定 `lid`;TTL ≤ 120s 限制暴露窗口;不缓存 `sec`/AuthKey 明文。
 - **E2E**:`max_sessions=1` + 注入响应丢失 → 同 key 重试拿到同一 token、`used_sessions` 恒为 1(AC-SESS-10)。
