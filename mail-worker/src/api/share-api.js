@@ -53,7 +53,8 @@ function capLimit(limit) {
 
 app.post('/share/session', shareRateLimit(SHARE_SESSION_RATE_LIMITER, SHARE_SESSION_RETRY_AFTER_SECONDS), withShare(async (c) => {
 	const body = await c.req.json();
-	const data = await shareAuthService.establishSession(c, body.lid, body.sec);
+	const idempotencyKey = c.req.header('Idempotency-Key') || '';
+	const data = await shareAuthService.establishSession(c, body.lid, body.sec, { idempotencyKey });
 	return shareJson(c, shareResult.ok(data));
 }));
 

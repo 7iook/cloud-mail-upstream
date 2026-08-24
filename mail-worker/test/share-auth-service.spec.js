@@ -148,7 +148,7 @@ async function captureLogs(run) {
 	return lines;
 }
 
-function quotaEvents(lines) {
+function eventsNamed(lines, event) {
 	return lines
 		.map((line) => {
 			try {
@@ -157,7 +157,49 @@ function quotaEvents(lines) {
 				return null;
 			}
 		})
-		.filter((entry) => entry && entry.event === 'share.session.denied_quota');
+		.filter((entry) => entry && entry.event === event);
+}
+
+function quotaEvents(lines) {
+	return eventsNamed(lines, 'share.session.denied_quota');
+}
+
+function systemErrors(lines) {
+	return eventsNamed(lines, 'share.system.error');
+}
+
+// Stands in for the `kv` binding the same way injectingDb stands in for `db`: the
+// service only ever sees c.env.kv, so a plain object is enough to record calls and
+// to simulate an outage on either side.
+function recordingKv({ getThrows = false, putThrows = false } = {}) {
+	const store = new Map();
+	const gets = [];
+	const puts = [];
+	return {
+		store,
+		gets,
+		puts,
+		binding: {
+			get: async (key, options) => {
+				gets.push(key);
+				if (getThrows) {
+					throw new Error('kv get unavailable');
+				}
+				const raw = store.get(key);
+				if (raw === undefined) {
+					return null;
+				}
+				return options && options.type === 'json' ? JSON.parse(raw) : raw;
+			},
+			put: async (key, value, options) => {
+				puts.push({ key, value, options });
+				if (putThrows) {
+					throw new Error('kv put unavailable');
+				}
+				store.set(key, value);
+			}
+		}
+	};
 }
 
 async function quotaRow(shareId) {
@@ -886,5 +928,222 @@ describe('shareAuthService session quota gate', () => {
 
 		// The fire-and-forget helper and its deps seam are gone on both sides.
 		expect(shareAuthSource).not.toContain('recordAccess');
+	});
+});
+
+const SHARE_EST_PREFIX = 'share:est:';
+
+function estKey(lid, key) {
+	return `${SHARE_EST_PREFIX}${lid}:${key}`;
+}
+
+describe('shareAuthService establish idempotency replay', () => {
+	it('replays the first response for the same Idempotency-Key without running the quota gate (AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('idem-replay');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 5 });
+		const kv = recordingKv();
+		const key = 'idem-key-replay';
+
+		const first = await shareAuthService.establishSession(
+			ctx({ kv: kv.binding }), lid, sec, { idempotencyKey: key }
+		);
+		expect(first.sessionToken).toEqual(expect.any(String));
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+		expect(kv.store.has(estKey(lid, key))).toBe(true);
+
+		// Any execution of the quota UPDATE now throws, so a replay that still reaches
+		// consumeSessionQuota fails loudly instead of quietly consuming a second slot.
+		const guarded = ctx({
+			kv: kv.binding,
+			db: injectingDb(env.db, {
+				before: () => {
+					throw new Error('quota gate ran on an idempotent replay');
+				}
+			})
+		});
+		const replay = await shareAuthService.establishSession(guarded, lid, sec, { idempotencyKey: key });
+		expect(replay).toEqual(first);
+
+		const row = await quotaRow(shareId);
+		expect(row.access_count).toBe(1);
+		expect(kv.puts.length).toBe(1);
+	});
+
+	it('replays a max_sessions=1 share after the first slot is gone (AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('idem-cap-one');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const kv = recordingKv();
+		const key = 'idem-key-cap-one';
+		const c = ctx({ kv: kv.binding });
+
+		const first = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: key });
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const replay = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: key });
+		expect(replay).toEqual(first);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		expect(await catchFail(shareAuthService.establishSession(c, lid, sec, { idempotencyKey: 'other-key' })))
+			.toBe(UNAVAILABLE_BODY);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('keeps one cache entry per key and consumes a slot for a new, missing or blank key (AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('idem-distinct');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const kv = recordingKv();
+		const c = ctx({ kv: kv.binding });
+		const t0 = 1_700_000_000_000;
+		// The token payload is a pure function of the row plus iat, so without moving
+		// the clock two establishes in the same second are byte-identical and the
+		// "different keys, different tokens" assertion would pass vacuously.
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+		try {
+			const first = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: 'key-a' });
+			nowSpy.mockReturnValue(t0 + 2_000);
+			const second = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: 'key-b' });
+			nowSpy.mockReturnValue(t0 + 4_000);
+			const third = await shareAuthService.establishSession(c, lid, sec);
+			nowSpy.mockReturnValue(t0 + 6_000);
+			const blank = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: '   ' });
+
+			expect(second.sessionToken).not.toBe(first.sessionToken);
+			expect(kv.store.get(estKey(lid, 'key-a'))).toContain(first.sessionToken);
+			expect(kv.store.get(estKey(lid, 'key-b'))).toContain(second.sessionToken);
+			expect(kv.store.size).toBe(2);
+			expect(third.sessionToken).toEqual(expect.any(String));
+			expect(blank.sessionToken).toEqual(expect.any(String));
+			expect((await quotaRow(shareId)).access_count).toBe(4);
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	it('still issues a session and logs share.system.error when the KV read fails (AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('idem-get-fail');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const kv = recordingKv({ getThrows: true });
+
+		let established;
+		const lines = await captureLogs(async () => {
+			established = await shareAuthService.establishSession(
+				ctx({ kv: kv.binding }), lid, sec, { idempotencyKey: 'get-fail' }
+			);
+		});
+
+		expect(established.sessionToken).toEqual(expect.any(String));
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+		const errors = systemErrors(lines);
+		expect(errors.length).toBe(1);
+		expect(errors[0].shareId).toBe(shareId);
+		// The read failed, not the write: a later retry should still find the entry.
+		expect(kv.puts.length).toBe(1);
+	});
+
+	it('still issues a session and consumes the slot when the KV write fails (AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('idem-put-fail');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const kv = recordingKv({ putThrows: true });
+		const c = ctx({ kv: kv.binding });
+
+		let established;
+		const lines = await captureLogs(async () => {
+			established = await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: 'put-fail' });
+		});
+
+		expect(established.sessionToken).toEqual(expect.any(String));
+		expect(systemErrors(lines).length).toBe(1);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		// Fail-open means exactly this: nothing was cached, so the retry pays again.
+		await shareAuthService.establishSession(c, lid, sec, { idempotencyKey: 'put-fail' });
+		expect((await quotaRow(shareId)).access_count).toBe(2);
+	});
+
+	it('skips the KV write when the token has less than the 60s KV minimum left (AC-SESS-10)', async () => {
+		await ensureAccount();
+		const lid = randomLid('idem-ttl-floor');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, expiresAt: futureText(30) });
+		const kv = recordingKv();
+
+		let established;
+		const lines = await captureLogs(async () => {
+			established = await shareAuthService.establishSession(
+				ctx({ kv: kv.binding }), lid, sec, { idempotencyKey: 'ttl-floor' }
+			);
+		});
+
+		expect(established.sessionToken).toEqual(expect.any(String));
+		// Workers KV rejects expirationTtl < 60, so this is a skip, not a failure.
+		expect(kv.puts).toEqual([]);
+		expect(systemErrors(lines)).toEqual([]);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('writes the cache entry with expirationTtl = min(120, remaining token life) (AC-SESS-10)', async () => {
+		await ensureAccount();
+
+		const longLid = randomLid('idem-ttl-long');
+		const longSec = randomSec();
+		await insertShare({ lid: longLid, sec: longSec });
+		const longKv = recordingKv();
+		await shareAuthService.establishSession(
+			ctx({ kv: longKv.binding }), longLid, longSec, { idempotencyKey: 'ttl-long' }
+		);
+		expect(longKv.puts.length).toBe(1);
+		expect(longKv.puts[0].key).toBe(estKey(longLid, 'ttl-long'));
+		expect(longKv.puts[0].options.expirationTtl).toBe(120);
+
+		const shortLid = randomLid('idem-ttl-short');
+		const shortSec = randomSec();
+		await insertShare({ lid: shortLid, sec: shortSec, expiresAt: futureText(90) });
+		const shortKv = recordingKv();
+		await shareAuthService.establishSession(
+			ctx({ kv: shortKv.binding }), shortLid, shortSec, { idempotencyKey: 'ttl-short' }
+		);
+		const ttl = shortKv.puts[0].options.expirationTtl;
+		expect(ttl).toBeGreaterThanOrEqual(60);
+		expect(ttl).toBeLessThan(120);
+		expect(Math.abs(ttl - 90)).toBeLessThanOrEqual(2);
+	});
+
+	it('keeps sec, lid and the token out of the KV failure logs (AC-LEAK-05)', async () => {
+		await ensureAccount();
+		const lid = randomLid('idem-leak');
+		const sec = randomSec();
+		await insertShare({ lid, sec });
+		const kv = recordingKv({ getThrows: true, putThrows: true });
+		const lines = [];
+		const log = console.log;
+		const error = console.error;
+		console.log = (...args) => lines.push(args.map(String).join(' '));
+		console.error = (...args) => lines.push(args.map(String).join(' '));
+		let established;
+		try {
+			established = await shareAuthService.establishSession(
+				ctx({ kv: kv.binding }), lid, sec, { idempotencyKey: 'leak-key' }
+			);
+		} finally {
+			console.log = log;
+			console.error = error;
+		}
+
+		const joined = lines.join('\n');
+		expect(systemErrors(lines).length).toBe(2);
+		// The KV key embeds the lid, so logging it would leak the share locator.
+		expect(joined).not.toContain(lid);
+		expect(joined).not.toContain(sec);
+		expect(joined).not.toContain(established.sessionToken);
 	});
 });

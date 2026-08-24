@@ -312,6 +312,40 @@ describe('T-11 mail share HTTP routes', () => {
 		expect(new Set(bodies.map((item) => item.text)).size).toBe(1);
 	});
 
+	it('replays POST /share/session for a repeated Idempotency-Key without a second slot (AC-SESS-10)', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const created = await jsonApi('POST', '/mailShare/create', {
+			token: ownerJwt,
+			body: { accountId, durationSeconds: 3600 }
+		});
+		const idempotencyKey = `t11-session-${crypto.randomUUID()}`;
+		const body = { lid: created.json.data.lid, sec: created.json.data.sec };
+
+		const first = await jsonApi('POST', '/share/session', {
+			headers: { 'Idempotency-Key': idempotencyKey },
+			body
+		});
+		expect(first.json.data.sessionToken).toEqual(expect.any(String));
+		expect((await env.db.prepare('SELECT access_count FROM mail_share WHERE share_id = ?')
+			.bind(created.json.data.shareId).first()).access_count).toBe(1);
+
+		const replay = await jsonApi('POST', '/share/session', {
+			headers: { 'Idempotency-Key': idempotencyKey },
+			body
+		});
+		expect(replay.json.data.sessionToken).toBe(first.json.data.sessionToken);
+		expect(replay.json.data.mailbox).toBe(MAILBOX);
+		expect((await env.db.prepare('SELECT access_count FROM mail_share WHERE share_id = ?')
+			.bind(created.json.data.shareId).first()).access_count).toBe(1);
+
+		const fresh = await jsonApi('POST', '/share/session', { body });
+		expect(fresh.json.data.sessionToken).toEqual(expect.any(String));
+		expect((await env.db.prepare('SELECT access_count FROM mail_share WHERE share_id = ?')
+			.bind(created.json.data.shareId).first()).access_count).toBe(2);
+
+		await env.kv.delete(`${KvConst.SHARE_EST}${created.json.data.lid}:${idempotencyKey}`);
+	});
+
 	it('caps visitor list limit at 50 when the client asks for 500', async () => {
 		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
 		const created = await jsonApi('POST', '/mailShare/create', {

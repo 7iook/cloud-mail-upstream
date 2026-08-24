@@ -36,6 +36,7 @@
 | W1 | T-06-P0 文档门 | ✅ 已关 | 主 AI | last_access_at 进闸门 · AC-SESS-11 · status 收窄 |
 | W1 | T-06 | ✅ 已提交 `6209960` | generalPurpose≈executor | 主 AI 复跑 26/26 · 17/213 · 17/95 · E2E 13 |
 | W1 | T-06 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t06.md` |
+| W1 | T-07 | 实现已绿,待提交 | generalPurpose≈executor | 主 AI 复跑 34/34 · 7/7;T07-R1 CHANGE |
 | W2 | T-12 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-w2-t12-create.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -68,20 +69,22 @@
 | T12-R5 | AuthKey pepper 复用 `SHARE_SEC_PEPPER` / `SHARE_SEC_PEPPER_KID`，落断言交 T-08 | 不新开环境变量 |
 | T12-R6a | 授权改写 `mail-share-service.spec.js` 四条 W0 双写用例为 seed 工厂 | create 之后必写 binding，原前提失效 |
 | T12-R6b | `accountIds` 与 `accountId` 同时出现时以 `accountIds` 为准 | 同时发只可能是 bug |
+| T07-R1 | CHANGE:KV 查询在 `loadLiveAccount` 之后、快照配额/`assertAllowed` 之前 | design.md:357 / AC-SESS-10 `max_sessions=1` 重试;派单原位置会先被 `quota_snapshot` 拦死 |
 
 ## 冲突热区占用
 
 | 文件 | 当前写者 | 备注 |
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
-| `share-auth-service.js` | T-06 已收口 | T-07 独占 |
-| `share-api.js` | 无（T-07 起写） | 热区补登记 |
+| `share-auth-service.js` | T-07 收口中 | T-08 待独占 |
+| `share-api.js` | T-07 收口中 | T-08 读头透传 authKey |
 | `security.js` | 无 | T-14 / T-17 |
 | `mail-share-service.js` | W0 P0 已收口 | T-12 可写 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T07-R1 CHANGE（KV 在配额判定前）。主 AI 独立复跑 auth 34/34、share-api 7/7，均为 EXIT=0。前端 Idempotency-Key 归 T-26。未勾选尾：T-08 / T-12 → T-29。
 - 2026-08-24 · 主 AI：T-06 审查 APPROVED、p0=0。循环 import 与空 `options` HOLD。未勾选尾：T-07 / T-12 → T-29。
 - 2026-08-24 · 主 AI：裁 T-12 R1/R2/R3/R5/R6 并回写 design/requirements。派 T-07 与 T-12 并行（文件不重叠）。未勾选尾：T-07 / T-12 → T-29。
 - 2026-08-24 · 主 AI：T-06 提交 `6209960`。独立复跑 auth spec 26/26、worker 17/213、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-07 → T-29。

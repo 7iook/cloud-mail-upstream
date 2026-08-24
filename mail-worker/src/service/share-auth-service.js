@@ -1,6 +1,7 @@
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import dayjs from 'dayjs';
 import { isDel } from '../const/entity-const';
+import KvConst from '../const/kv-const';
 import account from '../entity/account';
 import { mailShare } from '../entity/mail-share';
 import orm from '../entity/orm';
@@ -15,6 +16,11 @@ const SHARE_UNAVAILABLE = 'SHARE_UNAVAILABLE';
 // the same-tab sessionStorage residual after a hard navigation (AC-VISIT-12 vs 15).
 const DEFAULT_SESSION_TTL = 900;
 const TOKEN_VER = 's1';
+// Workers KV refuses an expirationTtl below 60 seconds, and a token with less life
+// than that left is not worth replaying anyway, so the write is skipped instead.
+const KV_MIN_TTL = 60;
+// The replay window only has to outlive a client retry, not the session.
+const ESTABLISH_REPLAY_TTL = 120;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -185,7 +191,9 @@ async function issueToken(c, row) {
 	})));
 	const data = `${TOKEN_VER}.${kid}.${payloadB64}`;
 	const sig = await hmacBytes(keys[0].value, data);
-	return `${data}.${base64url(sig)}`;
+	// `exp` travels back out so the replay cache can size its TTL against the token's
+	// real remaining life rather than re-deriving it from the row.
+	return { sessionToken: `${data}.${base64url(sig)}`, exp };
 }
 
 async function verifyToken(c, sessionToken) {
@@ -276,8 +284,52 @@ async function consumeSessionQuota(c, shareId, expectedCv, now) {
 	)).returning({ accessCount: mailShare.accessCount });
 }
 
-// `options` is empty at T-06; it exists so T-07 (idempotencyKey) and T-08 (authKey)
-// do not have to change this signature again.
+function replayCacheKey(lid, key) {
+	return `${KvConst.SHARE_EST}${lid}:${key}`;
+}
+
+function readIdempotencyKey(options) {
+	const raw = options && options.idempotencyKey;
+	// Whitespace-only is the same as absent: a client that sends it gets the plain
+	// metered path rather than a cache entry nobody can address again.
+	return raw == null ? '' : String(raw).trim();
+}
+
+// Fail-open on both sides (AC-SESS-10): KV being down must not take the whole share
+// surface with it, so a read failure degrades to "cache miss" and a write failure to
+// "this attempt has no replay protection". Only shareId and a fixed reason reach the
+// log — the cache key embeds the lid, so the key itself must never be logged.
+async function readReplayCache(c, lid, key, shareId) {
+	try {
+		const cached = await c.env.kv.get(replayCacheKey(lid, key), { type: 'json' });
+		if (cached && cached.sessionToken) {
+			return cached;
+		}
+	} catch {
+		logShareEvent(SHARE_EVENT.SYSTEM_ERROR, { shareId, reason: 'replay_cache_read_failed' });
+	}
+	return null;
+}
+
+// A KV write is visible immediately at the writing location but takes up to 60s to
+// reach other PoPs, so a retry routed elsewhere can still miss and spend a second
+// slot. That is the documented fail-open window, not a bug to retry around.
+async function writeReplayCache(c, lid, key, shareId, result, exp) {
+	const remaining = exp - Math.floor(Date.now() / 1000);
+	if (remaining < KV_MIN_TTL) {
+		return;
+	}
+	try {
+		await c.env.kv.put(replayCacheKey(lid, key), JSON.stringify(result), {
+			expirationTtl: Math.min(ESTABLISH_REPLAY_TTL, remaining)
+		});
+	} catch {
+		logShareEvent(SHARE_EVENT.SYSTEM_ERROR, { shareId, reason: 'replay_cache_write_failed' });
+	}
+}
+
+// `options` carries the idempotency key at T-07; T-08 adds authKey without changing
+// this signature again.
 async function establishSession(c, lid, sec, options = {}) {
 	if (isShareDisabled(c)) {
 		throwUnavailable();
@@ -291,6 +343,20 @@ async function establishSession(c, lid, sec, options = {}) {
 	if (!row || !matched) {
 		throwUnavailable();
 	}
+	// ① sec already matched. ③ account must still be live before we return a
+	// cached token (④ authKey arrives in T-08, inserted above the KV lookup).
+	// Quota / ACTIVE checks are the UPDATE's job and MUST sit after replay:
+	// a max_sessions=1 first success leaves the snapshot ACCESS_LIMIT_REACHED,
+	// and putting denyQuota/assertAllowed first would refuse the exact retry
+	// AC-SESS-10 exists to recover (design.md:357 · requirements.md:95).
+	const accountRow = await loadLiveAccount(c, row.accountId);
+	const idempotencyKey = readIdempotencyKey(options);
+	if (idempotencyKey) {
+		const replayed = await readReplayCache(c, lidText, idempotencyKey, row.shareId);
+		if (replayed) {
+			return replayed;
+		}
+	}
 	// The snapshot read above stays: AC-SEC-08 bans a read-then-write state change,
 	// not a read. It carries sec_hmac for the credential check and credentials_version
 	// into the gate below, while the state change itself is still one statement.
@@ -300,7 +366,6 @@ async function establishSession(c, lid, sec, options = {}) {
 		denyQuota(row.shareId, 'quota_snapshot');
 	}
 	assertAllowed(row, ESTABLISH_ALLOWED);
-	const accountRow = await loadLiveAccount(c, row.accountId);
 	const now = nowText();
 	let applied;
 	try {
@@ -320,12 +385,17 @@ async function establishSession(c, lid, sec, options = {}) {
 	// Only now is the slot ours. A state change committing between here and the
 	// response is the documented TOCTOU window (AC-EDGE-13): the token dies on its
 	// first trip back and the slot is not refunded.
-	const sessionToken = await issueToken(c, row);
-	return {
+	const { sessionToken, exp } = await issueToken(c, row);
+	const result = {
 		sessionToken,
 		mailbox: accountRow.email,
 		expiresAt: row.expiresAt
 	};
+	if (idempotencyKey) {
+		// Cache the whole response so a replay is byte-identical to the first one.
+		await writeReplayCache(c, lidText, idempotencyKey, row.shareId, result, exp);
+	}
+	return result;
 }
 
 async function resolveSession(c, sessionToken) {
