@@ -72,7 +72,7 @@
 | W4 | T-21 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t21-r2.md` · P1-1/P2-1 CLOSED |
 | W4 | T-23 ShareDialog | ✅ 已提交 `4f4cc65` | generalPurpose≈executor | 主 AI 独立 10/10 · 邻接 18/18 |
 | W4 | T-23 审查 | ✅ APPROVED · P2-1 HOLD | gpt-5.6-sol-xhigh-fast | `review-t23.md` · 夹带 tasks.md 日志不改写历史 |
-| W4 | T-22 创建向导 | ⏳ 已提交 `5c9651f` 待审查 | generalPurpose≈executor | 主 AI 独立定点 6/56 · 全量 vue 21/183 |
+| W4 | T-22 创建向导 | ⏳ 已提交 `5c9651f` · 修复 `4648101` 待 R2 | generalPurpose≈executor | 主 AI 独立定点 6/58 · T22-P 2/2 |
 | W4 | T-22 向导侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t22-wizard.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -145,6 +145,8 @@
 | T22-CREATE-EXPAND | CHANGE:T-22 就地条件展开 `createMailShare`；禁止 `createMailShareV2` | recon-t22 F2(i)；旧四键 `toEqual` 必须仍绿 |
 | T22-AFTER-T21 | CHANGE:T-21 先落 `index.vue`/`index.spec.js`/`status.js`；T-22 其后 rebase，且不碰 `status.js` | recon-t21 §4.4；否决 T-22 先跑 |
 | T23-P2-1 | HOLD:T-23 提交夹带 `tasks.md` Update Log，不改写历史 | review-t23；非运行时缺陷 |
+| T22-P1-1 | CHANGE:提交中拒绝全部关闭路径，等明文落地 | review-t22；关窗会永久丢掉 shareUrl/authKey |
+| T22-P2-1 | CHANGE:刷新间隔必须是 ≥3000 的安全整数 | review-t22；3000.5 与栅栏共用 SHARE_INVALID_CONFIG |
 | T21-P1-1 | CHANGE:抽屉用 `reqGen` 丢弃迟到响应；切分享/关闭都 bump | review-t21；展示 A 写 B / 错 Key / 错关 |
 | T21-P2-1 | CHANGE:AuthKey 成功后 `authKeyOnce = authKey \|\| ''`，disable 清空明文 | review-t21；失效 Key 不得继续留在 DOM |
 
@@ -167,6 +169,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-22 审查 NEEDS_CHANGES p1=1 p2=1。T22-P1-1/P2-1 均 CHANGE。定点 T22-P 2/2 + 邻接 6/58。R2 pending。未勾选尾：T-22 R2 / T-24 → T-29。
 - 2026-08-24 · 主 AI：T-23 审查 APPROVED（P2-1 HOLD）。T-22 实现待审查。主 AI 独立定点 6 files / 56 + 全量 vue 21/183。未勾选尾：T-22 审查 / T-24 → T-29。
 - 2026-08-24 · 主 AI：T-23 实现待审查。定点 10/10 + 邻接 18/18；全量 vue 20/161 · worker 18/619 · E2E 13。未勾选尾：T-23 审查 / T-22 → T-29。
 - 2026-08-24 · 主 AI：T-21 R2 APPROVED p0=0。P1-1/P2-1 CLOSED。主 AI 独立 64/64 + 全量 vue 20/161 · worker 18/619 · E2E 13。未勾选尾：T-23 入库 / T-22 → T-29。
