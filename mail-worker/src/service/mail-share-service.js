@@ -108,21 +108,35 @@ function isRowId(value) {
 	return Number.isSafeInteger(value) && value > 0;
 }
 
+// AC-CAP-06:值域封在归一化边界,不是转换之后。`assertCreateBody` 只看得见转换后的数值,
+// 一旦 `'invalid'` / `2` / `{}` 在这里被折成 1,静默打开 AuthKey、关掉地址掩码就再也认不出来了。
+// 空串按「没传」处理:前端表单空值与缺省同义,当 falsy 会把 only_messages_after_created 打成 0。
+const FLAG_TOKENS = new Map([
+	[true, 1], [1, 1], ['1', 1], ['true', 1],
+	[false, 0], [0, 0], ['0', 0], ['false', 0]
+]);
+
 function toFlag(value, fallback) {
 	if (value == null || value === '') {
 		return fallback;
 	}
-	if (value === false || value === 0 || value === '0' || value === 'false') {
-		return 0;
+	const flag = FLAG_TOKENS.get(value);
+	if (flag === undefined) {
+		throw new BizError('SHARE_INVALID_CONFIG');
 	}
-	return 1;
+	return flag;
 }
 
+// 布尔要显式挡掉:`Number(true) === 1` 会让 `true` 变成一条合法配额。下界 `< 1` 归 assertCreateBody。
 function toNullableCount(value) {
 	if (value == null || value === '') {
 		return null;
 	}
-	return Number(value);
+	const count = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+	if (!Number.isSafeInteger(count)) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	return count;
 }
 
 // AC-CAP-09/10:`accountIds` 优先,缺失才回落旧 `accountId` 单值。去重 + 升序是三处口径的
@@ -174,6 +188,44 @@ async function sha256Hex(text) {
 
 function requestFingerprint(body) {
 	return sha256Hex(JSON.stringify(body));
+}
+
+// AC-LIFE-10 滚动发布:旧 Worker(基线 `5a81065`)的指纹只含 accountId/durationSeconds/name/remark。
+// 「兼容载荷」= 单邮箱且全部新字段停在 DDL 默认值 —— 这类请求旧/新 Worker 建出的行逐列相同,
+// 所以两边必须算出同一个指纹。字段顺序照抄旧 `normalizeCreateBody`,它也是指纹的一部分。
+// 非兼容载荷(multi / AuthKey / 有限配额 / 非默认 flag)返回 null:旧 Worker 根本执行不了这些策略,
+// 让它重放出来比 CONFLICT 更糟。
+function legacyCompatibleBody(body) {
+	if (body.accountIds.length !== 1
+		|| body.maxSessions != null
+		|| body.messageLimit != null
+		|| body.onlyMessagesAfterCreated !== 1
+		|| body.otpExtractionEnabled !== 1
+		|| body.autoRefresh !== 1
+		|| body.refreshIntervalMs !== MIN_REFRESH_INTERVAL_MS
+		|| body.showFullAddress !== 0
+		|| body.authKeyEnabled !== 0) {
+		return null;
+	}
+	return {
+		accountId: body.accountIds[0],
+		durationSeconds: body.durationSeconds,
+		name: body.name,
+		remark: body.remark
+	};
+}
+
+// `stored` 是要落库的那一个:兼容载荷落旧 hash,旧 Worker 才能重放新 Worker 建出的分享。
+// `accepted` 是重放时认的集合:同时收新 12 字段 hash,兼容窗口两侧写下的存量行都能命中。
+// 兼容载荷的四字段唯一决定整个 body,所以两个 hash 是一一对应,多认一个不会误重放另一个请求。
+async function createFingerprints(body) {
+	const modern = await requestFingerprint(body);
+	const legacy = legacyCompatibleBody(body);
+	if (!legacy) {
+		return { stored: modern, accepted: [modern] };
+	}
+	const legacyHash = await requestFingerprint(legacy);
+	return { stored: legacyHash, accepted: [modern, legacyHash] };
 }
 
 function activeLimit(c) {
@@ -360,12 +412,12 @@ async function replayFromIdempotency(c, row) {
 	};
 }
 
-async function replayOrConflict(c, userId, idempotencyKey, fingerprint, cutoff) {
+async function replayOrConflict(c, userId, idempotencyKey, accepted, cutoff) {
 	const existing = await readIdempotency(c, userId, idempotencyKey);
 	if (!existing || existing.created_at < cutoff) {
 		return null;
 	}
-	if (existing.request_fingerprint !== fingerprint) {
+	if (!accepted.includes(existing.request_fingerprint)) {
 		throw new BizError('SHARE_IDEMPOTENCY_CONFLICT');
 	}
 	return replayFromIdempotency(c, existing);
@@ -514,7 +566,7 @@ async function resolveReplay(c, values) {
 	if (!values.idempotencyKey) {
 		return null;
 	}
-	return replayOrConflict(c, values.userId, values.idempotencyKey, values.fingerprint, values.cutoff);
+	return replayOrConflict(c, values.userId, values.idempotencyKey, values.accepted, values.cutoff);
 }
 
 async function insertShareAndIdempotency(c, values) {
@@ -578,10 +630,10 @@ const mailShareService = {
 		const idempotencyKey = params && params.idempotencyKey != null && String(params.idempotencyKey) !== ''
 			? String(params.idempotencyKey)
 			: '';
-		const fingerprint = await requestFingerprint(body);
+		const { stored: fingerprint, accepted } = await createFingerprints(body);
 		const cutoff = idempotencyCutoff();
 		if (idempotencyKey) {
-			const replay = await replayOrConflict(c, userId, idempotencyKey, fingerprint, cutoff);
+			const replay = await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff);
 			if (replay) {
 				return replay;
 			}
@@ -624,6 +676,7 @@ const mailShareService = {
 			limit: activeLimit(c),
 			idempotencyKey,
 			fingerprint,
+			accepted,
 			cutoff
 		});
 		if (inserted && inserted.replay) {

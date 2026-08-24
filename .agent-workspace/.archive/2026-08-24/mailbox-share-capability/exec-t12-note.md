@@ -191,6 +191,38 @@ Negative: no share_type column; no leftover binding when insertShare misses; no 
 
 ## Update Log
 
+- 2026-08-24 · executor:落地 T-12 代码审查的两条 CHANGE(review-t12.md P0-1 / P1-1),只动
+  `mail-share-service.js` + `mail-share-service.spec.js`,未 commit。
+  - **红**:`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` →
+    **EXIT=1** · `19 failed | 113 passed (132)`。分布:P1-1 的 flag 15 条(五个 flag × `'invalid'`/`2`/`{}`)
+    + count 2 条(`maxSessions: true` / `messageLimit: true`);P0-1 的 old→new 重放 1 条(实际抛
+    `SHARE_IDEMPOTENCY_CONFLICT`)+ new→old 存储指纹 1 条(`4e1bac…` ≠ 旧 `448447…`)。
+    日志 `/opt/cursor/artifacts/t12_change_red.log`。
+    `MALFORMED_COUNTS` 里的 `false` / `'invalid'` 红阶段已绿 —— 旧 `Number()` 路径撞上
+    `assertCreateBody` 的 `isSafeInteger` / `< 1`,它们是护栏不是驱动用例;真正的洞只有布尔。
+  - **绿**:同命令 → **EXIT=0** · `132 passed (132)`。日志 `/opt/cursor/artifacts/t12_change_green.log`。
+  - **全量**:`pnpm --dir mail-worker test --no-cache` → **EXIT=0** · `17 files / 317 tests`。
+    日志 `/opt/cursor/artifacts/t12_change_full_worker.log`。⚠️ 该数字含同一工作树里并行 T-08
+    未入库的 `share-auth-service.js` / `share-auth-service.spec.js` / `mail-share.schema.spec.js`
+    改动,不是本次改动的净增。本次净增 26 条,口径取定点 spec 的 `106 → 132`。
+  - **P0-1**(`service:193-227`)新增 `legacyCompatibleBody` + `createFingerprints`。兼容载荷
+    = 单 accountId 且 `maxSessions`/`messageLimit` 为 null、三个 1-默认 flag 为 1、
+    `refreshIntervalMs === MIN_REFRESH_INTERVAL_MS`、`showFullAddress`/`authKeyEnabled` 为 0。
+    这类载荷**落库存旧四字段 hash**(new→old 方向),重放时 `accepted = [新 12 字段 hash, 旧 hash]`
+    两个都认(old→new 方向 + 修复前新 Worker 写下的存量行)。非兼容载荷只走新 hash。
+    `replayOrConflict` 第四参从单值改成 `accepted` 数组(`service:415-422`),`resolveReplay`
+    与 `create` 同步换参。**未加版本列、未加第二张表。**独立复算佐证:
+    `{accountId:909101,durationSeconds:3600,name:'',remark:''}` 的旧四字段 hash =
+    `d5c870aaf938ac6df25f53f9847c50073d56e7abcac76be846b786af95e852bf`,与 review 的探针一致。
+    → **本条关闭上面「遗留风险 2」(幂等指纹跨部署 24h 窗口)。**
+  - **P1-1**(`service:111-139`)`toFlag` 改成 `FLAG_TOKENS` Map 白名单
+    (`true/false/0/1/'0'/'1'/'true'/'false'`,`null`/`''` 仍回落默认),命不中即
+    `BizError('SHARE_INVALID_CONFIG')`;`toNullableCount` 只收 number/string 且必须是安全整数,
+    布尔显式落到 NaN 分支。下界 `< 1` 仍留在 `assertCreateBody`(未动那段)。
+  - 新增用例 26 条:P0-1 三条(old→new 重放 / new→old 存旧 hash / 非兼容载荷不落旧 hash),
+    P1-1 二十三条(15 flag 负向 + 6 count 负向 + 「全部合法 flag token 仍接受」+
+    「整数字符串配额仍接受」)。既有 `treats omitted new config fields as their defaults`
+    与 8 条指纹 CONFLICT 参数化表全部保持绿。
 - 2026-08-24 · 主 AI:工件审查 `exec-t12-note.review1.sub.md` NEEDS_CHANGES。A1 HOLD（T-12.1 权威范围是 service spec；API `{...body}` 既有透传，HTTP 多邮箱入口不扩进本任务）；E1 CHANGE（权威快照钉到 `b6f5a28` / 17/289）；H1 HOLD（0-binding replay=`single` 交 T-15 list 投影；v3_2DB 已回填/撤销不合规旧行）。
 - 2026-08-24 · 主 AI:入库 `b6f5a28`。独立复跑 mail-share spec 含在 185/185 内（106/106）+ 全量 17/289 EXIT=0。vue 17/95 EXIT=0。
 - 2026-08-24 · executor:T-12 落地。红 EXIT=1(37 failed / 68 passed / 105)→ 绿 EXIT=0(spec 105/105;全量 17 files / 264→265 tests,尾数随并行写者 T-07 浮动)。改动 2 文件:`mail-share-service.js`(归一化集合化 + 域校验 + 五条 V2 栅栏接线 + 批量归属校验 + 三条写语句扩写/新增 + `syncPrimaryAccountId` 扩 lid 定位与 window 双写 + 响应扩 shareType/bindings/authKey)、`mail-share-service.spec.js`(+42 用例、改写 4 条 W0 双写用例、栅栏冻结断言补第五条 intent)。`test/setup.js` 未动。踩到的坑:vitest transform 缓存导致第一次红跑报出改动前的用例数,须带 `--no-cache`;`mail_share_binding` 会被既有的 `INSERT INTO mail_share` 正则前缀误命中。写入侧归属谓词另做了一次反证探针(改成恒真 → 该用例转红),探针已还原。未 commit、未 push。

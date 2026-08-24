@@ -166,6 +166,21 @@ async function clearPrimaryAccountId(shareId) {
 	await env.db.prepare('UPDATE mail_share SET account_id = 0 WHERE share_id = ?').bind(shareId).run();
 }
 
+const FLAG_FIELDS = ['onlyMessagesAfterCreated', 'otpExtractionEnabled', 'autoRefresh', 'showFullAddress', 'authKeyEnabled'];
+const COUNT_FIELDS = ['maxSessions', 'messageLimit'];
+const MALFORMED_FLAGS = ['invalid', 2, {}];
+const MALFORMED_COUNTS = [true, false, 'invalid'];
+
+// 旧 Worker(基线 `5a81065`)的请求指纹:四字段 canonical body 的 SHA-256。
+// 现算而不是硬编码,用例钉的是「两个 Worker 算出同一个值」而不是某一组常量。
+async function legacyFingerprint({ accountId, durationSeconds, name = '', remark = '' }) {
+	const digest = await crypto.subtle.digest(
+		'SHA-256',
+		new TextEncoder().encode(JSON.stringify({ accountId, durationSeconds, name, remark }))
+	);
+	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function createParams(overrides = {}) {
 	return {
 		accountId: ACC_A,
@@ -808,6 +823,57 @@ describe('mailShareService multi-mailbox create (T-12)', () => {
 		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
 	});
 
+	// AC-CAP-06 要求「校验取值域后随行存储」。归一化过宽时 `'invalid'` / `2` / `{}` 会静默变成 1,
+	// 也就是静默打开 AuthKey、关掉地址掩码;`true` 会静默变成配额 1。值域必须封在归一化边界。
+	it.each(FLAG_FIELDS.flatMap((field) => MALFORMED_FLAGS.map((value) => [field, value])))(
+		'rejects a malformed %s (%o) with SHARE_INVALID_CONFIG (AC-CAP-06)',
+		async (field, value) => {
+			await seedOwners();
+			expect(await catchBiz(mailShareService.create(v2ctx(), createParams({ [field]: value }), USER_A)))
+				.toBe('SHARE_INVALID_CONFIG');
+			expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+		}
+	);
+
+	it.each(COUNT_FIELDS.flatMap((field) => MALFORMED_COUNTS.map((value) => [field, value])))(
+		'rejects a malformed %s (%o) with SHARE_INVALID_CONFIG (AC-CAP-06)',
+		async (field, value) => {
+			await seedOwners();
+			expect(await catchBiz(mailShareService.create(v2ctx(), createParams({ [field]: value }), USER_A)))
+				.toBe('SHARE_INVALID_CONFIG');
+			expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+		}
+	);
+
+	it('still accepts every flag token the contract allows (AC-CAP-06)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams({
+			onlyMessagesAfterCreated: '0',
+			otpExtractionEnabled: 'false',
+			autoRefresh: 0,
+			showFullAddress: '1',
+			authKeyEnabled: false
+		}), USER_A);
+
+		expect(await readShareRow(created.shareId)).toMatchObject({
+			only_messages_after_created: 0,
+			otp_extraction_enabled: 0,
+			auto_refresh: 0,
+			show_full_address: 1,
+			auth_key_enabled: 0
+		});
+	});
+
+	it('still accepts integer-valued count strings (AC-CAP-06)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(v2ctx(), createParams({
+			maxSessions: '3',
+			messageLimit: '5'
+		}), USER_A);
+
+		expect(await readShareRow(created.shareId)).toMatchObject({ max_sessions: 3, message_limit: 5 });
+	});
+
 	it('stores the accepted configuration set on the share row (AC-CAP-06)', async () => {
 		await seedOwners();
 		const created = await mailShareService.create(v2ctx(), createParams({
@@ -1023,6 +1089,64 @@ describe('mailShareService multi-mailbox create (T-12)', () => {
 		expect(message).toBe('SHARE_IDEMPOTENCY_CONFLICT');
 		const { shares } = await countOwnerRows(USER_A);
 		expect(shares).toBe(1);
+	});
+
+	// 滚动发布 old→new:旧 Worker 建成分享后响应丢失,同一 key + 同一载荷落到新 Worker。
+	// 存量行里的指纹是旧四字段 hash,新代码必须认它并安全重放,而不是 SHARE_IDEMPOTENCY_CONFLICT
+	// —— Owner 已经拿不到 sec,换 key 重试只会建出第二条分享(AC-CAP-09/14, AC-LIFE-10)。
+	it('replays an idempotency row written with the old four-field fingerprint (AC-CAP-09, AC-CAP-14, AC-LIFE-10)', async () => {
+		await seedOwners();
+		const legacyParams = { accountId: ACC_A, durationSeconds: 3600, name: 'colleague', remark: 'otp handoff' };
+		const first = await mailShareService.create(ctx(), legacyParams, USER_A);
+		await env.db.prepare(`
+			INSERT INTO share_idempotency (
+				user_id, idempotency_key, operation, request_fingerprint, share_id, response_fingerprint
+			) VALUES (?, ?, 'create', ?, ?, ?)
+		`).bind(
+			USER_A,
+			't12-rolling-old',
+			await legacyFingerprint(legacyParams),
+			first.shareId,
+			JSON.stringify({ lid: first.lid })
+		).run();
+
+		const replay = await mailShareService.create(ctx(), {
+			...legacyParams,
+			idempotencyKey: 't12-rolling-old'
+		}, USER_A);
+
+		expect(replay.shareId).toBe(first.shareId);
+		expect(replay.lid).toBe(first.lid);
+		expect(replay.idempotentReplay).toBe(true);
+		expect(replay.sec).toBeUndefined();
+		expect(replay.authKey).toBeUndefined();
+		expect((await countOwnerRows(USER_A)).shares).toBe(1);
+	});
+
+	// 滚动发布 new→old:同一窗口内路由是随机的,所以新 Worker 为兼容载荷落库的指纹
+	// 必须是旧 Worker 也会算出的那一个,否则回滚/重试打到旧 Worker 时同样 CONFLICT。
+	it('persists the old four-field fingerprint for a legacy-compatible create (AC-CAP-09, AC-LIFE-10)', async () => {
+		await seedOwners();
+		const legacyParams = { accountId: ACC_A, durationSeconds: 3600, name: 'colleague', remark: 'otp handoff' };
+		await mailShareService.create(ctx(), { ...legacyParams, idempotencyKey: 't12-rolling-new' }, USER_A);
+
+		const row = await env.db.prepare(`
+			SELECT request_fingerprint FROM share_idempotency WHERE user_id = ? AND idempotency_key = ?
+		`).bind(USER_A, 't12-rolling-new').first();
+		expect(row.request_fingerprint).toBe(await legacyFingerprint(legacyParams));
+	});
+
+	// 兼容口径只对「单邮箱 + 全默认」开放。任一新字段离开默认值就只认 12 字段 hash,
+	// 否则旧 Worker 会重放出一条它根本无法执行的策略。
+	it('keeps a non-legacy create off the old fingerprint (AC-CAP-09)', async () => {
+		await seedOwners();
+		const params = { accountId: ACC_A, durationSeconds: 3600, name: 'colleague', remark: 'otp handoff' };
+		await mailShareService.create(v2ctx(), { ...params, maxSessions: 3, idempotencyKey: 't12-rolling-multi' }, USER_A);
+
+		const row = await env.db.prepare(`
+			SELECT request_fingerprint FROM share_idempotency WHERE user_id = ? AND idempotency_key = ?
+		`).bind(USER_A, 't12-rolling-multi').first();
+		expect(row.request_fingerprint).not.toBe(await legacyFingerprint(params));
 	});
 
 	it('creates the legacy single-accountId payload with every configuration default (AC-CAP-10)', async () => {
