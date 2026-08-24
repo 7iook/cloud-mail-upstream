@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W0 done · W1/T-08 landed · T-12 landed · T-09/T-13 next |
+| 状态 Status | in-progress · W0 done · W1/T-08 landed · T-12 landed · 代码审查 CHANGE 落地中 · T-09/T-13 next |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -386,6 +386,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-08 代码审查 NEEDS_CHANGES（C1/I1/M1 CHANGE）；T-12 代码审查 NEEDS_CHANGES（P0-1/P1-1 CHANGE）。并行派修复。未勾选尾：审查收口 → T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08/T-12 工件审查过筛。T08-A1 CHANGE；T08-A2/A3/A4 HOLD。T12-E1 CHANGE；T12-A1/H1 HOLD。代码审查未回。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08 / T-12 勾选。T-08 `5a81065`（AuthKey+cv+ShareContext，围栏 4→3）；T-12 `b6f5a28`（多邮箱 create+V2 栅栏）。主 AI 独立 185/185 + 全量 17/289 EXIT=0。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-07 勾选。`c2087ce`。T07-R1 CHANGE：KV 在快照配额判定前。主 AI 独立 34/34 + 7/7 EXIT=0。前端 key 归 T-26。未勾选尾：T-08 / T-12 → T-29。
