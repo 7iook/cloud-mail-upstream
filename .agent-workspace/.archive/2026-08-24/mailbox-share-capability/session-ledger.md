@@ -45,6 +45,8 @@
 | W1 | T-09 Checkpoint | ✅ 已提交 `dd1de15` | 主 AI | `share-context-freeze.md` · worker 17/317 |
 | W2 | T-10 scoped repo | ✅ 已提交 `bca7bc2` | generalPurpose≈executor | 主 AI 复跑 repo 13 + api/integ DESC · 全量 17/349 |
 | W2 | T-13 bindings PUT | ✅ 已提交 `ee2db41` | generalPurpose≈executor | 主 AI 复跑 mail-share 155/155 · 全量 17/349 |
+| W2 | T-13 审查修复 | ✅ 已提交 `22d9832` | generalPurpose≈executor | 主 AI 独立 164/164 · 全量 17/358；复审 pending |
+| W1 | T-08 R2 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t08-r2.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -99,12 +101,13 @@
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` | T-08 已收口 | 下一写者 T-14 只加新 `app.get` |
 | `security.js` | 无 | T-14 / T-17 |
-| `mail-share-service.js` | T-13 已入库 `ee2db41` | 下一写者 T-15（update）审查通过后放行 |
+| `mail-share-service.js` | T-13 修复 `22d9832` 待复审 | 下一写者 T-15；复审绿前禁止第三写者 |
 | `share-scoped-email-repository.js` | T-10 已入库 `bca7bc2` | 下一消费者 T-11 / T-14 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-13 CHANGE 入库 `22d9832`。T-08 R2 APPROVED p0=0。主 AI 独立 164/164 + 全量 17/358 · 17/95 · E2E 13。未勾选尾：T-13 复审 / T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-10 审查 APPROVED p0=0。T-13 审查 NEEDS_CHANGES：P0-1/P1-1 均 CHANGE。未勾选尾：T-13 审查修复 → T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-10 `bca7bc2` + T-13 `ee2db41` 入库。主 AI 独立定点 189/189 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-09 Evidence 回写 `dd1de15`。未勾选尾：T-10 / T-11 / T-13 → T-29。

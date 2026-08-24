@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W1 收口 · T-10/T-13 已入库 · 待审查 · T-11/T-14 next |
+| 状态 Status | in-progress · W2 · T-10 APPROVED · T-13 审查修复 `22d9832` 待复审 · T-11/T-14 next |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -283,26 +283,27 @@
 
 - [x] T-13 bindings 增删:全有或全无原子命令 + `PUT /mailShare/bindings` 端点
   - **Evidence**
-    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` → EXIT=1（21 failed / 132 passed / 153）；绿同命令 → EXIT=0（155/155）；主 AI 独立定点 155 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0
-    - files: `mail-worker/src/service/mail-share-service.js:505-557,664-840` · `mail-worker/src/api/mail-share-api.js:35-39` · `mail-worker/test/mail-share-service.spec.js`
+    - verify: 红（执行者初版）`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` → EXIT=1（21 failed / 132 passed / 153）；绿初版 → EXIT=0（155/155）；审查修复后主 AI 独立同命令 → EXIT=0（164/164）；全量 worker 17/358、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/src/service/mail-share-service.js:276-287,528-591,816-887` · `mail-worker/src/api/mail-share-api.js:35-39` · `mail-worker/test/mail-share-service.spec.js`
     - AC: AC-BIND-02, AC-BIND-03, AC-BIND-04, AC-BIND-07, AC-BIND-08, AC-BIND-10, AC-BIND-12, AC-CAP-13, AC-LIFE-10, AC-LIFE-11
-    - commit: ee2db41
-    - decision: 复用 `prepareBindingInsert`；0 行 INSERT 靠归属计数 + DELETE 守卫互锁；同 account 同时 add+remove 判 DUPLICATE
+    - commit: 22d9832
+    - decision: 复用 `prepareBindingInsert`；同 account 同时 add+remove 判 DUPLICATE；T13-P0-1 CAS 快照谓词 + `SHARE_BINDING_CONFLICT`；T13-P1-1 `COUNT(*) OVER ()` 压绑定到 N+6
+    - review: `review-t13.md` NEEDS_CHANGES → P0-1/P1-1 CHANGE `22d9832`；复审 pending
   - [x]* T-13.1 红:`mail-worker/test/mail-share-service.spec.js` —— add 单语句条件 `INSERT ... SELECT`(account 存活/归属),与 account 删除并发 → 零行 + `SHARE_ACCOUNT_FORBIDDEN`;重复绑定 → `SHARE_BINDING_DUPLICATE`(UNIQUE 兜底);remove 三重谓词 `binding_id+share_id+owner`,跨分享/跨租户 bindingId 混入 → 整单 `SHARE_BINDING_FORBIDDEN` 零残留;删光 → REVOKED;增删后立即拉取结果集与新集合一致(P-BIND-02 property);V2=false 时 1→N 拒绝;超 50 → `SHARE_BINDING_LIMIT_EXCEEDED`
     - **P-BIND-02: Binding 增删即时性** _Validates: AC-BIND-03, AC-BIND-08, AC-EDGE-04_
     - _Requirements: AC-BIND-02, AC-BIND-03, AC-BIND-04, AC-BIND-07, AC-BIND-08, AC-BIND-10, AC-BIND-12, AC-CAP-13_
     - **Evidence**
-      - verify: 红（执行者）→ EXIT=1（21 failed / 132 passed / 153）
+      - verify: 红（执行者初版）→ EXIT=1（21 failed / 132 passed / 153）；审查修复并发/50 边界红（执行者）8 failed / 156 passed / 164
       - files: `mail-worker/test/mail-share-service.spec.js`
       - AC: AC-BIND-02, AC-BIND-07, AC-BIND-10, AC-BIND-12, AC-CAP-13
-      - commit: ee2db41
+      - commit: 22d9832
   - [x] T-13.2 绿:`mail-share-service.js` 新增 bindings 变更(同一 `c.env.db.batch()`:add 条件 INSERT + remove + window 快照 + 双写主表 + 删空转 REVOKED);`mail-worker/src/api/mail-share-api.js` 新增 `PUT /mailShare/bindings`
     - _Requirements: AC-BIND-02, AC-BIND-12, AC-LIFE-10_
     - **Evidence**
-      - verify: 绿 spec → EXIT=0（155/155）；主 AI 全量 17/349
-      - files: `mail-worker/src/service/mail-share-service.js:781-840` · `mail-worker/src/api/mail-share-api.js:35-39`
+      - verify: 绿初版 155/155；审查修复后主 AI 独立 164/164 + 全量 worker 17/358
+      - files: `mail-worker/src/service/mail-share-service.js:528-591,816-887` · `mail-worker/src/api/mail-share-api.js:35-39`
       - AC: AC-BIND-02, AC-BIND-12, AC-LIFE-10
-      - commit: ee2db41
+      - commit: 22d9832
 
 - [ ] T-14 status 水位端点 `GET /share/mailboxes/status`(无游标,R2-A2)
   - [ ]* T-14.1 红:`mail-worker/test/share-api.spec.js` + `share-integration.spec.js` —— API 面断言不接受 `sinceEmailId`/任何游标参数;返回每 Binding 在 VisibleWindow ∩ message_limit ∩ 排除条件内的 `latestEmailId`(无可见邮件为 null)+ 可选 `latestReceivedAt`;窗口外/被 N 滚出邮件注入 → 水位不反映(侧信道封闭);与 mails 同周期调用零配额、同 token 同范围;`/share/mailboxes/statusX` 前缀近似不豁免
@@ -423,6 +424,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-13 审查 CHANGE 入库 `22d9832`（CAS 快照谓词 + INSERT 绑定 N+6）。T-08 R2 APPROVED p0=0。主 AI 独立 mail-share 164/164 + 全量 worker 17/358、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-13 复审 / T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI:T-10 `bca7bc2` + T-13 `ee2db41` 勾选。主 AI 独立定点 189/189 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI:T-09 Evidence `commit` 回写 `dd1de15`。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08/T-12 复审 APPROVED p0=0。T-09 冻结公告已落。并行派 T-10 / T-13。未勾选尾：T-10 / T-11 / T-13 → T-29。
