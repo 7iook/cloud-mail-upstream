@@ -29,7 +29,7 @@ one_line: 在既有 mail-share 上扩展多邮箱 Binding、Session 配额闸门
 把已交付的 mail-share(单邮箱 capability URL 分享)扩展为「邮箱访问能力分享」:一条 `/s/<lid>#<sec>` 链接可绑定 1..N 个邮箱,可设累计 Session 配额、可选认证 Key、每邮箱最近 N 封可见集、脱敏与刷新策略。三个关键权衡在此定死:
 
 1. **演进 vs 重建**:既有架构(capability URL + 无状态 HMAC Session token + `share-scoped-email-repository` 反腐层)没有坏,五个目标领域对象中三个已存在或半存在。选择**就地演进**——`mail_share` 加列 + 新建 `mail_share_binding` 表,不建 `mail_share_v2` 平行表、不建服务端 Session 表。全部读路径为显式列名 SELECT(`mail-share-service.js:354-364`、drizzle 实体列枚举),加列零破坏;旧 `s1.` token 在新代码下天然可验。代价:`account_id` 旧列与 Binding 表并存期的双真源风险,用「迁移内同步回填 + 读路径一次性切 Binding + 旧列降级为只读遗留」封死。
-2. **无状态 token + 配额闸门**:`max_sessions` 是累计建立次数上限(用户裁决 D5),不是并发数——因此**不需要**服务端 Session 表,单条原子条件 UPDATE(`used_sessions++ WHERE used_sessions < max_sessions`,模式已被 `transaction.spec.js`/`mail-share-service.js:187-218` 验证)即是闸门。旧 charter「无服务端 session 表」的 A1 裁决得以保留;AuthKey 重置的「旧 Session 立即失效」用行上 `credentials_version` + token 携带版本号回源比对实现,同样零 Session 存储。
+2. **无状态 token + 配额闸门**:`max_sessions` 是累计建立次数上限(用户裁决 D5),不是并发数——因此**不需要**服务端 Session 表,单条原子条件 UPDATE(物理列 `access_count` 承载领域量 `used_sessions`,条件含生命周期/凭据版本/配额,模式已被 `transaction.spec.js`/`mail-share-service.js:187-218` 验证)即是闸门。旧 charter「无服务端 session 表」的 A1 裁决得以保留;AuthKey 重置的「旧 Session 立即失效」用行上 `credentials_version` + token 携带版本号回源比对实现,同样零 Session 存储。
 3. **统一 status 轮询**:多邮箱页禁止 N 路并行轮询(用户裁决 D16,Cloudflare 边缘限流 100/60s 下 N 路轮询会自我 DoS)。`email_id` 全局单调(`email.js` PK AUTOINCREMENT)使**单游标跨邮箱聚合天然可用**——新增一个 `GET /share/mailboxes/status` 端点一次返回各 Binding 新邮件标志,前端 `useSharePolling` 保持单实例。
 
 ## Current-State Inventory (from recon — MANDATORY)
@@ -58,7 +58,7 @@ one_line: 在既有 mail-share 上扩展多邮箱 Binding、Session 配额闸门
 | `mail-worker/src/security/security.js:23-29` | 配置 | `excludeExact` 精确豁免 4 条 Visitor 路由 | ✅ extend:加 `GET /share/mailboxes/status` 一行 |
 | `security.js:103` | 配置 | `premKey['share:manage']` → 3 条 `/mailShare/*` | ✅ extend:path 列表加新端点 |
 | `mail-worker/src/security/share-rate-limit.js` | 中间件 | CF 边缘限流(IP 维度),429+Retry-After,fail-open | ✅ reuse:新端点直接套用 |
-| `mail-worker/src/service/mail-share-cleanup-service.js:20-28` | 定时任务 | 删幂等行 + 删到期 `mail_share` 行(2 表) | ✅ extend:同批删 Binding 行 |
+| `mail-worker/src/service/mail-share-cleanup-service.js:20-28` | 定时任务 | 删幂等行 + 删到期 `mail_share` 行(2 表) | ✅ extend:同批删 Binding 行 + `mail_share_auth_fail` 过期行/孤儿 Binding 补偿(R1-A6/A9) |
 | `mail-worker/src/email/email.js:95-131` + `ai-service.js:5-69` | 摄取链 | OTP 提取写 `email.code`,失败空串,全局门控 | ❌ don't touch:`otp_extraction_enabled` 只动投影 |
 | `mail-vue/src/composables/useSharePolling.js:9,56-214` | composable | 3s 链式轮询、后台暂停、429 退避、单游标 | ✅ extend:`intervalMs` 已可注入,改拉 status+mails |
 | `mail-vue/src/views/share/index.vue:160-266,514-556` | 页面 | 访客页状态机 + featuredMail OTP 区(内嵌未抽组件) | ✅ extend:抽 `ShareOtpCard`,加多邮箱 Tab |
@@ -75,7 +75,7 @@ one_line: 在既有 mail-share 上扩展多邮箱 Binding、Session 配额闸门
 |---|---|---|
 | 按五对象领域模型(Share/Binding/Session/AccessEvent/…)重建 bounded context | capability URL + 无状态 token + scoped repository 架构健康,三个对象已存在或半存在(recon-backend §6) | 就地演进:加列 + Binding 表;Session 不落库;AccessEvent deferred(D17) |
 | ShareSession 需要服务端落库才能限次 | `max_sessions` 是**累计**上限(D5),原子条件 UPDATE 即闸门;并发上限才需要 Session 表 | 不建 session 表,不升 token 版本(保持 `s1`),规避 recon R7 双版本窗口成本 |
-| 访问计数 = HTTP 请求 visit_count++ | `access_count` 已是「建立 Session 时 +1」(`share-auth-service.js:236-241`),口径天然一致,只缺闸门 | 列改名语义升级为 `used_sessions` + 条件递增;轮询零消耗(AC-SESS-02) |
+| 访问计数 = HTTP 请求 visit_count++ | `access_count` 已是「建立 Session 时 +1」(`share-auth-service.js:236-241`),口径天然一致,只缺闸门 | 物理列名保留 `access_count`(expand-only,R1-A1),领域语义升级为 `used_sessions` + 条件递增;轮询零消耗(AC-SESS-02) |
 | `only_messages_after_created` 是新能力 | `window_start_email_id` 快照已存在且恒开启(`mail-share-service.js:195`) | 降级为可选布尔 + 快照从主表移到 per-binding(多邮箱各自下界,recon-backend §5) |
 | 已有管理界面可增强 | 只有收件箱内 ShareDialog,无独立路由/页面/分页(recon-frontend §2) | 新建 `views/share-admin/` 管理模块;ShareDialog 保留为快捷入口 |
 | 多邮箱要新轮询机制或 N 路轮询 | `useSharePolling` 成熟但单实例单游标;`email_id` 全局单调使单游标聚合可行(recon-backend §5) | 统一 StatusEndpoint + 单实例轮询(D16),不做 N 路 |
@@ -87,20 +87,20 @@ one_line: 在既有 mail-share 上扩展多邮箱 Binding、Session 配额闸门
 
 ## Decision(s)
 
-- **Decision 1 · 统一模型**:单/多邮箱共用 `MailboxShare`(`mail_share` 就地演进)+ `ShareMailboxBinding`(新表);`share_type` 取 `single`|`multi`,由绑定数派生写入。拒绝:平行 `mail_share_v2` 表(双真源、迁移成本)与「多邮箱=多条 share 的聚合入口」(撤销/配额语义不可组合)。
+- **Decision 1 · 统一模型**:单/多邮箱共用 `MailboxShare`(`mail_share` 就地演进)+ `ShareMailboxBinding`(新表);`share_type` 取 `single`|`multi`,**不落库**,由现存 Binding 计数在响应组装时实时派生(恰 1 → `single`,>1 → `multi`,0 → 已进入撤销路径),`mail_share_binding` 是该类型的唯一真源(R1-A2:持久化派生列会与 Binding 增删/级联/迁移形成无维护闭环的双真源)。拒绝:平行 `mail_share_v2` 表(双真源、迁移成本)、「多邮箱=多条 share 的聚合入口」(撤销/配额语义不可组合)、持久化 `share_type` 列(派生双真源)。
 - **Decision 2 · 全面复用既有设施**:`lid`+`sec` fragment、HMAC pepper(`pepper_kid` 轮换)、无状态 `s1.` token、`share-auth-service` 唯一授权入口、`share-scoped-email-repository` 唯一范围查询、`useSharePolling`、SafeMailRenderer、`share:manage` 权限。拒绝:重建授权链(旧链 17 个 spec 全绿是资产不是包袱)。
 - **Decision 3 · 新旧 charter 关系**:新 slug `mailbox-share-capability`,`related_specs: [docs/specs/mail-share]`;旧单邮箱链接迁移回填 Binding 后继续有效;旧 ShareDialog 继续调 create(升级 payload,向后兼容);完整管理模块新建;发布后不立刻 supersede(观察期后由用户决定 supersede 时点)。
-- **Decision 4 · Session 计数口径**:建立 Session 计 1;`access_count` 列语义升级为 `used_sessions`(RENAME COLUMN);轮询/刷新/同 tab sessionStorage 恢复不计;新 tab 无恢复凭据则新建并计数。计数从 fire-and-forget 统计升级为**准入闸门**(原子条件 UPDATE),`last_access_at` 保持 fire-and-forget。
+- **Decision 4 · Session 计数口径**:建立 Session 计 1;`access_count` 列**语义**升级为 `used_sessions`,**物理列名不改**(R1-A1:RENAME 会使旧版本 Worker/在途实例/回滚版本立即失配;expand 语义 = 应用层读写 `access_count` 列、DTO 映射为 `usedSessions`,旧 Worker 读旧列名保持兼容,天然可回滚);轮询/刷新/同 tab sessionStorage 恢复不计;新 tab 无恢复凭据则新建并计数。计数从 fire-and-forget 统计升级为**准入闸门**(原子条件 UPDATE),`last_access_at` 保持 fire-and-forget。
 - **Decision 5 · max_sessions 语义**:累计建立次数上限(非并发)。触顶 → effectiveStatus `ACCESS_LIMIT_REACHED`(计算态,不落库);已建立 Session 在自身 TTL 内继续可用,禁止新建。存量旧行 `max_sessions=NULL` 不限,历史 `access_count` 值不追溯为配额消耗(规避 recon R5 风险)。
 - **Decision 6 · Session TTL**:默认 900s(`SHARE_SESSION_TTL`),绝对、不续期;`exp = min(expires_at, iat + TTL)` 不变。
 - **Decision 7 · IP 变化**:不新建 Session,token 自绑定;不做 IP 绑定校验(与 CF 多 PoP 出口漂移冲突)。
-- **Decision 8 · AuthKey**:可选第二因子,默认关;独立于 fragment `sec`;服务端生成,只存 `auth_key_hash`(+`auth_key_kid`,复用 digest+pepper);Owner 可生成/修改/重置;重置或修改 bump `credentials_version`,旧 Session 立即失效(token 携带 `cv` 回源比对)。错误暴露面:仅 `lid`+`sec` 通过后才返回 `SHARE_AUTH_REQUIRED`,其余一律 `SHARE_UNAVAILABLE`(P-AUTH-01 保持)。
-- **Decision 9 · 暴力防护**:IP 边缘限流(既有)+ per-share 失败计数原子条件写、短窗锁定(`auth_lock_until`);锁定期间不评估 Key、统一 `SHARE_AUTH_REQUIRED`;禁止按 lid 永久锁死(防第三方 DoS,继承旧 R1-A6 精神)。
+- **Decision 8 · AuthKey**:可选第二因子,默认关;独立于 fragment `sec`;服务端生成(规格:128-bit CSPRNG、base64url 编码、定长 22 字符,展示可分组,校验侧规范化仅 trim,R1-F1),只存 `auth_key_hash`(+`auth_key_kid`,复用 digest+pepper);生命周期为完整状态机 `disabled → enable → reset → disable`(见 API 契约「AuthKey 状态机」小节与 AC-AUTH-07/08,R1-A5);reset/disable bump `credentials_version`,旧 Session 立即失效(token 携带 `cv` 回源比对)。错误暴露面:仅 `lid`+`sec` 通过后才返回 `SHARE_AUTH_REQUIRED`,其余一律 `SHARE_UNAVAILABLE`(P-AUTH-01 保持)。
+- **Decision 9 · 暴力防护**:IP 边缘限流(既有)+ **`(shareId, IP)` 维度**失败计数原子条件写、短窗锁定(R1-A6:per-share 全局锁可被任一持链者用错误 Key 反复锁死全部合法访客,是 DoS 放大器)。参数写死可验收:10 次失败 / 5 分钟滚动窗口,成功校验清零该组合计数,窗口到期自动解锁;锁定仅影响该 IP,其他 IP 合法访客不受影响;锁定期间不评估 Key、统一 `SHARE_AUTH_REQUIRED`;禁止按 lid 永久锁死。载体为新轻量状态表 `mail_share_auth_fail`(见 Data Models),不落 `mail_share` 行。
 - **Decision 10 · message_limit**:每 Binding 各自最近 N 封(`email_id` DESC),N=1 合法,NULL 不限;服务端在列表、详情、附件三处强制。
 - **Decision 11 · only_messages_after_created**:true → per-binding `window_start_email_id` 原子快照;false → 下界 0(仍受 N 限制)。
 - **Decision 12 · otp_extraction_enabled**:仅控投影是否返回 `code`;摄取链零改动;提取失败(`code=''`)仍展示邮件。
 - **Decision 13 · auto_refresh / refresh_interval_ms**:share 配置随 session 响应下发;默认开/3000ms;服务端写入与下发双侧钳制 ≥3000。
-- **Decision 14 · 脱敏**:Visitor 默认掩码绑定邮箱地址(`a***@x.com` 规则:local-part 留首字符);`show_full_address=true` 关闭掩码;发件人默认不掩码(OTP 场景需要判断来源可信度)。
+- **Decision 14 · 脱敏**:Visitor 默认掩码**系统生成的绑定邮箱身份字段**(session/status/list/detail 投影中的 mailbox address,`a***@x.com` 规则:local-part 留首字符);`show_full_address=true` 关闭掩码;发件人默认不掩码(OTP 场景需要判断来源可信度)。掩码契约**不**覆盖用户邮件内容(R1-A3:全响应非出现性与「发件人不掩码/正文原样」不可同时满足):主题/正文不承诺不出现绑定地址,命中绑定地址的内容不改写,SafeMailRenderer 原样渲染。
 - **Decision 15 · Binding 增删语义**:立即影响下次拉取;删光 Binding 撤销分享;account 删除剔除对应 Binding、剩余继续、剩 0 撤销。
 - **Decision 16 · 实时机制**:客户端轮询不变;多邮箱统一 `GET /share/mailboxes/status`(单请求返回各 Binding 新邮件标志),禁止 N 路并行轮询。
 - **Decision 17 · ShareAccessEvent**:本期不建独立事件表(deferred,B/C 类非必做);保留 `used_sessions`/`last_access_at` 聚合观测。
@@ -132,7 +132,7 @@ mail-share-api.js ──┐                        share-api.js ──┐
 - **Visitor 永不进入登录态 `email-service`**;新增 StatusEndpoint 同样只经 `share-auth-service` + scoped repository。
 - **新表/新列全部落 v3_2DB**(`init.js` 注册链尾追加),幂等模式照抄 v3_1DB(`CREATE TABLE IF NOT EXISTS` + try/catch ALTER + `INSERT ... WHERE NOT EXISTS` 回填)。
 - **前端两域**:访客域(share chunk,隔离闭包,`shareHttp` 专用实例)与管理域(layout 内新 `views/share-admin/`,走登录态 axios)。二者不共享网络层;共享的仅纯组件(`ShareOtpCard`、SafeMailRenderer)。
-- **D1 约束**(勿再踩):`.transaction()` 不可用;跨表原子 = `c.env.db.batch()`;单语句 `INSERT ... SELECT`/条件 UPDATE 做快照与闸门。
+- **D1 约束**(勿再踩):`.transaction()` 不可用;跨表原子 = `c.env.db.batch()`;单语句 `INSERT ... SELECT`/条件 UPDATE 做快照与闸门。跨聚合不变量(Binding ↔ account 存活)不靠应用层多步检查,靠单语句条件写 + 清理补偿(R1-A9,见 Data Models「Binding 写入的并发一致性」与 AC-BIND-10)。
 
 ## Data Models
 
@@ -140,8 +140,10 @@ mail-share-api.js ──┐                        share-api.js ──┐
 
 ```sql
 -- v3_2DB:每语句独立 try/catch 幂等(照抄 init.js v3_1DB 模式)
-ALTER TABLE mail_share RENAME COLUMN access_count TO used_sessions;   -- D4 语义升级
-ALTER TABLE mail_share ADD COLUMN share_type TEXT NOT NULL DEFAULT 'single';
+-- R1-A1:全程 expand-only,零 RENAME、零 DROP。access_count 物理列名保留,
+--        应用层读写 access_count、DTO 映射为 usedSessions;旧版本 Worker 读旧列名兼容,可回滚。
+-- R1-A2:不加 share_type 列——该值由 Binding 计数实时派生,持久化即双真源。
+-- R1-A6:失败计数/锁定不落 mail_share 行(per-share 全局锁 = DoS 放大器),见下方 mail_share_auth_fail 表。
 ALTER TABLE mail_share ADD COLUMN max_sessions INTEGER;               -- NULL = 不限(存量旧行)
 ALTER TABLE mail_share ADD COLUMN message_limit INTEGER;              -- NULL = 不限;>=1
 ALTER TABLE mail_share ADD COLUMN only_messages_after_created INTEGER NOT NULL DEFAULT 1;
@@ -153,12 +155,9 @@ ALTER TABLE mail_share ADD COLUMN auth_key_enabled INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE mail_share ADD COLUMN auth_key_hash TEXT;                 -- HMAC-SHA256(authKey, PEPPER[auth_key_kid])
 ALTER TABLE mail_share ADD COLUMN auth_key_kid TEXT;
 ALTER TABLE mail_share ADD COLUMN credentials_version INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE mail_share ADD COLUMN auth_fail_count INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE mail_share ADD COLUMN auth_fail_window_start TEXT;        -- 失败计数窗口起点
-ALTER TABLE mail_share ADD COLUMN auth_lock_until TEXT;               -- 短窗锁定截止;NULL = 未锁定
 ```
 
-保留列:`lid`/`sec_hmac`/`pepper_kid`/`user_id`/`name`/`remark`/`status`/`expires_at`/`delete_at`/`last_access_at`/`revoked_at`/`create_time` 全部不动。`account_id` 与 `window_start_email_id` 两列**保留为迁移遗留只读**(AC-BIND-01):不删列(D1 ALTER DROP 风险高、schema spec 钉死),但任何鉴权/范围逻辑不得再读它们;`mail-share.schema.spec.js` 扩展断言该语义。
+保留列:`lid`/`sec_hmac`/`pepper_kid`/`user_id`/`name`/`remark`/`status`/`expires_at`/`delete_at`/`access_count`/`last_access_at`/`revoked_at`/`create_time` 全部不动(`access_count` 列名保留,领域量 `used_sessions` 的物理载体,R1-A1)。`account_id` 与 `window_start_email_id` 两列**保留为迁移遗留只读**(AC-BIND-01):不删列(D1 ALTER DROP 风险高、schema spec 钉死),但任何鉴权/范围逻辑不得再读它们;`mail-share.schema.spec.js` 扩展断言该语义。
 
 ### `mail_share_binding`(新表)
 
@@ -176,6 +175,25 @@ CREATE INDEX IF NOT EXISTS idx_msb_account ON mail_share_binding(account_id);   
 
 无外键(D1 惯例,与全库一致);清理守恒由 cleanup 任务显式保证(AC-LIFE-06)。
 
+**Binding 写入的并发一致性(R1-A9)**:新增 Binding 不做「先批量校验、再写入」两步——与 account 删除并发时会在删除完成后插入指向已删 account 的孤儿行。写入为单语句条件 `INSERT ... SELECT`:仅当目标 `account` 行仍存在、`is_del = NORMAL` 且 `user_id = :owner` 时插入(UNIQUE 索引兜底防重复);受影响行数为 0 → 返回 `SHARE_ACCOUNT_FORBIDDEN`(AC-BIND-10)。极端交错仍产生的孤儿由级联路径(AC-LIFE-09)与定时清理任务补偿剔除。
+
+### `mail_share_auth_fail`(新表 · AuthKey 失败计数/短窗锁定,R1-A6)
+
+```sql
+CREATE TABLE IF NOT EXISTS mail_share_auth_fail (
+  share_id     INTEGER NOT NULL,
+  ip_hash      TEXT NOT NULL,               -- HMAC-SHA256(CF-Connecting-IP, PEPPER),不存 IP 明文(无 PII)
+  fail_count   INTEGER NOT NULL DEFAULT 0,
+  window_start TEXT NOT NULL,               -- 5 分钟滚动窗口起点
+  PRIMARY KEY (share_id, ip_hash)
+);
+```
+
+- 键 = `(shareId, IP)`:任一持链者用错误 Key 只能锁自己的 IP,锁不死其他合法访客(AC-AUTH-05)。
+- 全部写路径为单条原子 UPSERT/条件 UPDATE(无先读后写,AC-SEC-08):失败 → `fail_count+1`(窗口过期则重置 `window_start` 与计数);`fail_count >= 10` 且窗口内 → 判定锁定;成功校验 → DELETE 该键(清零);窗口到期自然失效,无需解锁写。
+- 参数写死可验收:**10 次 / 5 分钟滚动窗口**(AC-AUTH-05/AC-EDGE-12)。
+- cleanup 任务同批清理 `window_start` 过期行,防表膨胀。
+
 ### 迁移 v3_2DB · 旧行回填
 
 ```sql
@@ -188,7 +206,7 @@ WHERE NOT EXISTS (
 );
 ```
 
-迁移后不再写 `mail_share.account_id`(新建行写 0);`share_type` 存量行走默认值 `'single'`;`used_sessions` 承接历史 `access_count` 值但 `max_sessions=NULL` 使其不构成配额消耗(AC-EDGE-09)。`share_idempotency` 表原样保留,请求指纹扩展在 service 层(新字段纳入规范化 JSON)。
+迁移后不再写 `mail_share.account_id`(新建行写 0);`share_type` 无列可回填(实时派生,存量行恰一条 Binding → 天然 `single`,R1-A2);`access_count` 列值原样保留(即领域量 `used_sessions` 历史值)且 `max_sessions=NULL` 使其不构成配额消耗(AC-EDGE-09)。`share_idempotency` 表原样保留,请求指纹扩展在 service 层(新字段纳入规范化 JSON)。
 
 ### Session token(`s1` 保持,payload 扩展)
 
@@ -228,7 +246,7 @@ row ────┼─ expires_at <= now ─────────────
 
 | 问题 | 裁决后的精确行为 | 强制点 |
 |---|---|---|
-| 建立 Session 何时计数? | `POST /share/session` 成功签发即 +1,原子条件 UPDATE:`UPDATE mail_share SET used_sessions = used_sessions + 1, last_access_at = ? WHERE share_id = ? AND (max_sessions IS NULL OR used_sessions < max_sessions) RETURNING used_sessions`;RETURNING 空 = 触顶拒发 | share-auth-service `establishSession`(AC-SESS-01) |
+| 建立 Session 何时计数? | `POST /share/session` 成功签发即 +1,单一线性化点(R1-A4):先读快照取 `credentials_version`,再原子条件 UPDATE:`UPDATE mail_share SET access_count = access_count + 1, last_access_at = ? WHERE share_id = ? AND status = 'ACTIVE' AND expires_at > ? AND credentials_version = ? AND (max_sessions IS NULL OR access_count < max_sessions) RETURNING access_count`(物理列 `access_count` 承载 `used_sessions`);RETURNING 空 = 拒发(触顶/已撤销/已过期/版本已变,不签发即死 token、不白耗配额);RETURNING 非空才 issueToken(携带该 cv) | share-auth-service `establishSession`(AC-SESS-01/AC-EDGE-13) |
 | 同一人刷新页面算几次? | 同 tab `sessionStorage` 键 `share:session:<lid>` 内 token 未过 TTL → 恢复,不计数;TTL 已过 → 页面内存/重开链接重建 Session,计 1 | 前端 bootstrap + 后端闸门(AC-SESS-03) |
 | 新开 tab 算几次? | `sessionStorage` 不跨 tab,新 tab 无恢复凭据 → 新建 Session,计 1 | 浏览器语义 + 闸门(AC-SESS-04) |
 | HTTP 轮询消耗次数吗? | 不。mails/mail/attachment/status 全部零配额消耗,`used_sessions` 只在 establish 时变化 | resolveSession 无写路径(AC-SESS-02/AC-EDGE-01/11) |
@@ -237,7 +255,7 @@ row ────┼─ expires_at <= now ─────────────
 | 配额用完后过一段时间恢复吗? | 不恢复。累计上限,无滑动窗口;Owner 可 update 上调 `max_sessions` 重新开门 | AC-ADMIN-03/04 |
 | 并发抢最后一个名额? | 单语句条件 UPDATE 保证恰好 max 次成功,无超发 | AC-EDGE-02(D1 单语句原子,`transaction.spec.js` 已验证) |
 | AuthKey 谁生成、谁输入? | 服务端 CSPRNG 生成,Owner 创建/重置时看到一次并另行传达;Visitor 在访客页输入(仅当 `SHARE_AUTH_REQUIRED` 返回时展示输入框) | AC-CAP-05/AC-AUTH-01 |
-| 输错 Key 有惩罚吗? | per-share 失败计数(原子条件写),短窗达阈值 → `auth_lock_until` 锁定;锁定期不评估 Key、统一 `SHARE_AUTH_REQUIRED`;窗口到期自动解锁;永不永久锁死 | AC-AUTH-05/AC-EDGE-12(阈值/窗口建议 5 次/60s,实现时环境变量化) |
+| 输错 Key 有惩罚吗? | `(shareId, IP)` 维度失败计数(`mail_share_auth_fail` 表,原子条件写),5 分钟滚动窗口内达 10 次 → 锁定该 IP;锁定期不评估 Key、统一 `SHARE_AUTH_REQUIRED`;成功清零、窗口到期自动解锁;其他 IP 的合法访客不受影响,永不永久锁死 | AC-AUTH-05/AC-EDGE-12(参数写死 10 次/5 分钟,可验收) |
 | 重置 Key 后老 Session 呢? | 立即失效:`credentials_version` bump,token `cv` 回源不匹配即拒;重新进入需新 Key + 消耗新配额 | AC-AUTH-04/AC-EDGE-05 |
 | 错误会泄露什么? | `lid`+`sec` 未通过 → 一律 `SHARE_UNAVAILABLE`(不可区分);通过后才可能 `SHARE_AUTH_REQUIRED`(只有合法持链者能得知需要 Key);Key 对错/锁定与否不可区分 | AC-AUTH-02(P-AUTH-01 扩展) |
 | 429 消耗配额吗? | 不。边缘限流在闸门之前,运输层独立语义 | AC-AUTH-06 |
@@ -249,35 +267,64 @@ row ────┼─ expires_at <= now ─────────────
 | Method + Path | 状态 | 请求 | 响应要点 |
 |---|---|---|---|
 | `POST /mailShare/create` | 扩展 | `{accountIds: number[]`(或旧 `accountId` 单值,兼容 AC-CAP-10)`, durationSeconds, name?, remark?, maxSessions?, messageLimit?, onlyMessagesAfterCreated?, otpExtractionEnabled?, autoRefresh?, refreshIntervalMs?, showFullAddress?, authKeyEnabled?}` + `Idempotency-Key` 头 | `shareId, lid, shareUrl, sec`(仅首次)`, authKey`(仅首次且启用时)`, shareType, bindings[]`;重放含 `idempotentReplay: true` 且无 `sec`/`authKey` |
-| `GET /mailShare/list` | 扩展 | `page?, size?, status?`(新增分页/筛选,兼容无参全量) | 行含 `shareType, effectiveStatus`(四态)`, usedSessions, maxSessions, bindings 摘要, expiresAt, lastAccessAt` |
+| `GET /mailShare/list` | 扩展 | `page?, size?, status?`(R1-F2:`size` 默认 20、上限 100;稳定排序恒为 `share_id DESC`;无参全量兼容期保留但标注 **deprecated**,兼容期硬上限 500 行) | 行含 `shareType`(由 Binding 计数派生)`, effectiveStatus`(四态)`, usedSessions, maxSessions, bindings 摘要, expiresAt, lastAccessAt` |
 | `GET /mailShare/get` | 新建 | `shareId` | 单条详情 + Binding 清单 + 全部配置;他人 `shareId` → `SHARE_NOT_FOUND` |
-| `PUT /mailShare/update` | 新建 | `shareId` + 可变配置(`name/remark/maxSessions/messageLimit/otpExtractionEnabled/autoRefresh/refreshIntervalMs/showFullAddress`) | 校验后落库,下次 Visitor 请求生效;不可改 `lid/sec/expires_at/share_type` |
+| `PUT /mailShare/update` | 新建 | `shareId` + 可变配置(`name/remark/maxSessions/messageLimit/otpExtractionEnabled/autoRefresh/refreshIntervalMs/showFullAddress`) | 校验后落库,下次 Visitor 请求生效;不可改 `lid/sec/expires_at`;`shareType` 为派生值无此字段;SHALL NOT 直接改 `auth_key_hash`(AC-AUTH-07) |
 | `PUT /mailShare/bindings` | 新建 | `shareId, add?: accountIds[], remove?: bindingIds[]` | 归属批量校验;加时快照 window;删光 → 撤销(AC-BIND-04) |
 | `DELETE /mailShare/revoke` | 沿用 | `shareId` | `status='REVOKED'` + `revoked_at` |
 | `DELETE /mailShare/delete` | 新建 | `shareId` | 物理删除 share + bindings + 幂等行(`c.env.db.batch()` 原子) |
-| `POST /mailShare/resetAuthKey` | 新建 | `shareId` | 新 `authKey` 明文恰一次;`credentials_version+1`;`auth_key_enabled=1` |
+| `POST /mailShare/resetAuthKey` | 新建 | `shareId, action: 'enable'\|'reset'\|'disable'` | `enable`/`reset`:新 `authKey` 明文恰一次 + `auth_key_enabled=1`(`reset` 另 `credentials_version+1`);`disable`:清空 hash/kid + `auth_key_enabled=0` + `credentials_version+1`,无明文返回 |
 
 `premKey['share:manage']` 扩展为全部 8 条路径(`security.js:103`)。
+
+### AuthKey 状态机(R1-A5)
+
+```
+disabled(默认)                    enabled
+auth_key_hash IS NULL   ──enable──►  auth_key_hash NOT NULL
+auth_key_enabled = 0    ◄─disable──  auth_key_enabled = 1
+                                       │  ▲
+                                       └──┘ reset(换 hash + kid)
+```
+
+| 迁移 | 触发 | 字段变化 | `credentials_version` | 对既有 Session |
+|---|---|---|---|---|
+| `enable` | resetAuthKey `action='enable'`(或创建时 `authKeyEnabled=true`) | 生成新 Key,写 hash+kid,`auth_key_enabled=1` | 不变 | 不失效(建立时本无 Key 要求,不追溯) |
+| `reset` | resetAuthKey `action='reset'` | 换 hash+kid | +1 | 立即失效(cv 回源不匹配) |
+| `disable` | resetAuthKey `action='disable'` | 清空 hash+kid,`auth_key_enabled=0` | +1 | 立即失效;新 Session 不再要求 Key |
+
+- **字段不变量**:`auth_key_enabled=1` IFF `auth_key_hash IS NOT NULL`(AC-AUTH-07,schema/service spec 双侧断言,杜绝「要求一个无法验证的 Key」的非法组合)。
+- `PUT /mailShare/update` 不触碰 AuthKey 字段;一切 Key 迁移只经 resetAuthKey 单入口。
+- 失败计数/锁定状态(`mail_share_auth_fail`)与本状态机独立:`disable` 后该表历史行由窗口到期与 cleanup 自然回收,不需级联清理。
 
 ### Visitor 面 `/share/*`(匿名,`excludeExact` 精确豁免 + 边缘限流)
 
 | Method + Path | 状态 | 请求 | 响应要点 |
 |---|---|---|---|
 | `POST /share/session` | 扩展 | `{lid, sec, authKey?}` | 成功:`{sessionToken, shareType, mailboxes: [{bindingId, address(掩码策略后)}], expiresAt, config: {autoRefresh, refreshIntervalMs, otpExtractionEnabled, messageLimit}}`;失败:`SHARE_UNAVAILABLE` 或(lid+sec 通过后)`SHARE_AUTH_REQUIRED` |
-| `GET /share/mailboxes/status` | 新建 | `Bearer token` + `sinceEmailId?`(全局游标) | `{mailboxes: [{bindingId, latestEmailId, newCount}], serverTime}`;单请求覆盖全部 Binding(D16);挂 `SHARE_READ_RATE_LIMITER` |
+| `GET /share/mailboxes/status` | 新建 | `Bearer token` + `sinceEmailId?`(全局游标,缺省 0;协议见下「Status 游标协议」) | `{mailboxes: [{bindingId, latestEmailId, newCount}], serverTime}`;单请求覆盖全部 Binding(D16);挂 `SHARE_READ_RATE_LIMITER` |
 | `GET /share/mails` | 扩展 | `Bearer token` + `bindingId?`(multi 必带;single 可省)`, cursor?, limit?` | 该 Binding 可见集(window ∩ 最新 N)按 `email_id` DESC;`limit` 服务端钳制 ≤ min(50, messageLimit) |
 | `GET /share/mail` | 扩展 | `Bearer token` + `mailId` | 白名单投影(含 Binding 标识、掩码地址、按开关裁剪的 `code`);可见集外(含被 N 滚出)→ `SHARE_UNAVAILABLE` |
 | `GET /share/attachment` | 扩展 | `Bearer token` + `mailId, attachmentId` | 三重校验扩展为多 Binding 集合;可见集外 → `SHARE_UNAVAILABLE` |
 
 `excludeExact`(`security.js:23-29`)追加 `{ method: 'GET', path: '/share/mailboxes/status' }` 一行;禁止前缀豁免(AC-SEC-03)。
 
+### Status 游标协议(R1-A7 · AC-OTP-09)
+
+- **游标所有权**:`sinceEmailId` 由**客户端**持有并推进,服务端无状态。缺省 0(首次请求 = 「以当前为基准」场景由客户端用返回的 `latestEmailId` 立即建立基准,不据 `newCount` 首帧渲染角标)。
+- **推进时机**:客户端在消费完某 Binding 的 mails 拉取后,把该 Binding 游标推进到本次响应的 `latestEmailId`;未拉取的 Binding 游标不动(跨 Tab 未读=该 Binding `newCount`)。
+- **范围规则**:`latestEmailId`/`newCount` 只统计该 Binding 的 VisibleWindow ∩ `message_limit` ∩ 既有排除条件(`is_del=NORMAL`、`status != SAVING`)内的邮件——与 mails 端点**共用 scoped repository 同一范围条件**,不形成第二套范围模型;窗口外/被 N 滚出的邮件不进任何计数(禁止侧信道,防泄露可见集之外邮件的数量/存在性)。
+- **Binding 变更**:Binding 增删后,客户端对新出现的 Binding 以本次返回的 `latestEmailId` 建立游标基准(重置 since);已删 Binding 直接丢弃其游标。
+- **重连/刷新**:sessionStorage 恢复会话后游标随会话状态恢复;丢失则回缺省 0 并按首帧基准规则重建(可能多报、绝不漏报窗口内新邮件)。
+
 ## Key Functions — Formal Specifications
 
 ### `shareAuthService.establishSession(c, lid, sec, authKey?) -> { sessionToken, ... }`(扩展 `share-auth-service.js:243-272`)
 - **Preconditions**:`lid`/`sec` 为字符串;分享功能未关闭。
-- **Postconditions**:仅当 ① `sec` 摘要匹配 ② `effectiveStatus=ACTIVE` ③ 至少一条 Binding 的 account 存活 ④ WHERE `auth_key_enabled=1` 时 `authKey` 摘要匹配且未处锁定窗口 ⑤ 配额条件 UPDATE 命中(RETURNING 非空)——五条全部成立时返回 token 与配置;`used_sessions` 恰 +1;其余任何路径零配额消耗、零 token。
+- **流程(单一线性化点,R1-A4)**:读行快照(得 `credentials_version = cv`、hash、Binding 等)→ 校验 ①③④ → 条件 UPDATE(WHERE 同时含 `status='ACTIVE'`、`expires_at > now`、`credentials_version = :cv`、配额条件)→ RETURNING 非空才 `issueToken`(token 携带该 `cv`)。快照与 UPDATE 之间发生的撤销/过期/Key 重置/版本递增,一律使 UPDATE 条件失配而拒发——授权生命周期、凭据版本、配额三者在同一条 SQL 上提交。
+- **Postconditions**:仅当 ① `sec` 摘要匹配 ② 条件 UPDATE 命中(RETURNING 非空,自证快照时刻至提交时刻 `ACTIVE`、未过期、cv 未变、配额未触顶) ③ 至少一条 Binding 的 account 存活 ④ WHERE `auth_key_enabled=1` 时 `authKey` 摘要匹配且该 `(shareId, IP)` 未处锁定窗口——全部成立时返回 token 与配置;`used_sessions`(物理列 `access_count`)恰 +1;其余任何路径零配额消耗、零 token;SHALL NOT 签发在签发时刻即不可用的即死 token(AC-EDGE-13)。
 - **Loop invariants**:N/A。
-- **Errors**:①②③⑤ 失败 → `SHARE_UNAVAILABLE`(不可区分);④ 失败(含锁定)→ `SHARE_AUTH_REQUIRED`。429 为运输层,先于本函数。
+- **Errors**:①②③ 失败 → `SHARE_UNAVAILABLE`(不可区分);④ 失败(含锁定)→ `SHARE_AUTH_REQUIRED`。429 为运输层,先于本函数。
 
 ### `shareAuthService.resolveSession(c, sessionToken) -> ShareContext`(扩展 `share-auth-service.js:274-296`)
 - **Preconditions**:token 为 `s1` 四段格式。
@@ -291,9 +338,9 @@ row ────┼─ expires_at <= now ─────────────
 - **Loop invariants**:N/A(单查询)。
 - **Errors**:范围外/不存在一律空集,由调用方映射 `SHARE_UNAVAILABLE`;不抛「不存在 vs 越权」可区分错误。
 
-### `mailShareService.consumeSessionQuota(c, shareId) -> boolean`(新建,内嵌于 establishSession 流)
-- **Preconditions**:行存在且 `effectiveStatus=ACTIVE` 已判定(判定与消耗之间的竞态由 UPDATE 条件自身闭合)。
-- **Postconditions**:返回 true 时 `used_sessions` 恰 +1 且未越过 `max_sessions`;返回 false 时行零变更。单条 SQL,无先读后写。
+### `mailShareService.consumeSessionQuota(c, shareId, expectedCv) -> boolean`(新建,内嵌于 establishSession 流)
+- **Preconditions**:行存在;`expectedCv` 为快照读取的 `credentials_version`。
+- **Postconditions**:单条条件 UPDATE,WHERE 同时含 `status = 'ACTIVE'`、`expires_at > now`、`credentials_version = :expectedCv`、`(max_sessions IS NULL OR access_count < max_sessions)`(R1-A4:生命周期 + 凭据版本 + 配额共提交,不只闭合配额竞态)。返回 true 时 `used_sessions`(物理列 `access_count`)恰 +1 且提交时刻上述条件全部成立;返回 false 时行零变更。单条 SQL,无先读后写。
 - **Loop invariants**:N/A。
 - **Errors**:D1 故障向上抛(基础设施层翻译),不吞。
 
@@ -328,11 +375,11 @@ row ────┼─ expires_at <= now ─────────────
 | 边界 | 规则 |
 |---|---|
 | URL 形态 | 只含 `lid` + fragment `sec`;无 mailbox_id/account_id/真实地址(AC-SEC-01)。多邮箱不引入新 URL 形态 |
-| Owner 面 | JWT + `share:manage` 精确 method+path(8 条);缺权限 `SHARE_FORBIDDEN`;跨用户操作 `SHARE_NOT_FOUND` |
+| Owner 面 | JWT + `share:manage` 精确 method+path(8 条);缺权限 `SHARE_FORBIDDEN`;跨用户操作 `SHARE_NOT_FOUND`。**授权矩阵(R1-A8)**:本期 `share:manage` 仅为「操作本人分享」的路由级权限,全部 Owner 端点资源谓词恒为 `user_id = 当前用户`;跨用户管理员审计不在本期;`security.js:163` 的 `c.env.admin` 邮箱豁免仅为运维超级账号的路由豁免,资源谓词不变,非跨租户产品能力 |
 | Visitor 面 | 全部经 `share-auth-service` token + 每请求回源;不复用 JWT/`share:manage`/`/public/*`(AC-SEC-02);豁免仅精确白名单(AC-SEC-03/10) |
 | 越权邮箱 | 范围唯一强制点 = scoped repository 的 Binding 集合条件;`bindingId`/`mailId`/`attachmentId` 篡改一律 `SHARE_UNAVAILABLE`(AC-MAIL-06/AC-EDGE-08) |
 | N 封截断 | 列表/详情/附件三处服务端强制(AC-MAIL-05);「前端限 N 后端全量」被 P-SCOPE-03 property 钉死 |
-| AuthKey | 只存 hash;常量时间比较;失败原子计数 + 短窗锁定;错误暴露面最小化(仅合法持链者见 `SHARE_AUTH_REQUIRED`) |
+| AuthKey | 只存 hash;常量时间比较;`(shareId, IP)` 维度失败原子计数 + 短窗锁定(10 次/5 分钟,锁不死其他 IP);错误暴露面最小化(仅合法持链者见 `SHARE_AUTH_REQUIRED`) |
 | 凭据日志 | `sec`/`authKey`/token 不进服务端日志、查询串、Referer(AC-SEC-09);fragment 方案与一次性捕获沿用 |
 | 前端隔离 | share chunk 禁入登录态 axios/layout/Dexie/websiteConfig;会话存储清理契约含新路由态(AC-SEC-06/07) |
 | 写能力 | Visitor 面零写端点;唯一服务端写(`used_sessions`/`last_access_at`/失败计数)均为鉴权流内部簿记,不是资源写能力 |
@@ -342,7 +389,7 @@ row ────┼─ expires_at <= now ─────────────
 | Scenario | Layer | Handling(stable error code) |
 |---|---|---|
 | `lid` 不存在 / `sec` 错 / 过期 / 撤销 / account 全失效 / 功能关 / 配额触顶(建立时) | share-auth-service | `SHARE_UNAVAILABLE`(不可区分,防 oracle) |
-| `lid`+`sec` 通过但 AuthKey 缺失/错误/处于锁定窗口 | share-auth-service | `SHARE_AUTH_REQUIRED`(仅此一处可区分;不泄露错 vs 锁) |
+| `lid`+`sec` 通过但 AuthKey 缺失/错误/该 `(shareId, IP)` 处于锁定窗口 | share-auth-service | `SHARE_AUTH_REQUIRED`(仅此一处可区分;不泄露错 vs 锁) |
 | token 过期 / `cv` 不匹配 / 差异态外的非 ACTIVE | share-auth-service | `SHARE_UNAVAILABLE` |
 | `mailId`/`attachmentId`/`bindingId` 越出可见集 | share-mail-service / share-attachment-service | `SHARE_UNAVAILABLE`(不泄露存在性) |
 | 创建携带非本人/已删 accountId | mail-share-service | `SHARE_ACCOUNT_FORBIDDEN`(整单拒绝,无部分 Binding) |
@@ -357,7 +404,17 @@ row ────┼─ expires_at <= now ─────────────
 | `last_access_at` 等统计写失败 | share-auth-service | log + 继续签发(fire-and-forget 沿用);配额 UPDATE 失败则**必须**拒发,不属统计 |
 | D1 异常 / 迁移半途 | init.js / service | 逐语句幂等 + try/catch 记录;service 层向上抛翻译为 5xx,不吞不假成功 |
 
-## Testing Strategy
+### 结构化观测(R1-F3 · 不新增事件表)
+
+核心状态机的拒绝/异常路径打结构化日志(`console.log` JSON 一行),事件名固定清单、**无 PII、无凭据**(不含 `sec`/authKey/token/IP 明文/邮箱地址;可含 shareId、错误分类、时间戳):
+
+- `share.session.denied_quota` —— 配额触顶拒发
+- `share.session.denied_auth` —— AuthKey 缺失/错误拒发
+- `share.session.denied_lock` —— `(shareId, IP)` 锁定窗口内拒发
+- `share.session.denied_cv` —— `credentials_version` 不匹配拒绝(建立或回源)
+- `share.binding.cascade` —— account 删除触发的 Binding 级联剔除/撤销
+
+运营方据此区分「配额/锁定/撤销/孤儿/系统故障」五类用户反馈;无新表(D17 deferred 不变),Cloudflare 日志检索即消费端。
 
 - **基线守恒**:既有 worker 16 文件/138、vue 17 文件/95、E2E 13 场景全绿(recon-crosscut §7 亲跑)是回归底线;单邮箱旧行为断言**不改**,只扩展。
 - **TDD red→green 顺序**(实现期):① `v3-2-db.spec.js` 新迁移/回填断言 → ② `share-auth-service.spec.js` 配额闸门/authKey/cv/锁定 → ③ `share-scoped-email-repository.spec.js` 集合化 + per-binding window + DESC 截断 → ④ `mail-share-service.spec.js` 多 accountId 创建/bindings 增删/级联新语义 → ⑤ API 层与前端 spec → ⑥ `share-integration.spec.js` + E2E 新场景。
@@ -371,7 +428,7 @@ row ────┼─ expires_at <= now ─────────────
 | AC | 验证手段 | 类 |
 |---|---|---|
 | AC-CAP-01 | create 多 accountId → 断言 share 行 + N 条 binding 行 + URL 形状 | I |
-| AC-CAP-02 | 1 个/多个 accountId 创建 → `share_type` 分别为 single/multi | U |
+| AC-CAP-02 | 创建/增删 Binding 后各响应 `shareType` 实时派生正确(1→single,>1→multi);扫表断言无 share_type 列 | U |
 | AC-CAP-03 | 混入他人/已删 accountId → `SHARE_ACCOUNT_FORBIDDEN` 且零 binding 残留 | I |
 | AC-CAP-04 | 沿用 mail-share 基线断言(lid/sec 位宽、hmac 存储、sec 仅一次)保持全绿 | U |
 | AC-CAP-05 | 启用 authKey 创建 → 响应含明文一次、库中仅 hash+kid;二次查询无明文 | I |
@@ -391,7 +448,8 @@ row ────┼─ expires_at <= now ─────────────
 | AC-BIND-07 | 重复添加同 accountId → `SHARE_BINDING_DUPLICATE`(UNIQUE 索引兜底) | U |
 | AC-BIND-08 | 增删 binding 后立即拉取 → 结果集与新集合一致(P-BIND-02) | P |
 | AC-BIND-09 | v3_1 形状旧行跑迁移 → 恰一条 binding 回填、重复跑幂等 | M |
-| AC-SESS-01 | establish 成功 → used_sessions 恰 +1(RETURNING);触顶 → 拒发零变更 | U |
+| AC-BIND-10 | 先删 account 再并发加 Binding → 单语句条件 INSERT 零行 + `SHARE_ACCOUNT_FORBIDDEN`;注入孤儿行 → 级联/清理路径剔除 | I |
+| AC-SESS-01 | establish 成功 → used_sessions(物理列 access_count)恰 +1(RETURNING 含 status/expires/cv/配额四条件);触顶/撤销/过期/cv 变 → 拒发零变更 | U |
 | AC-SESS-02 | 建会话后跑 mails/mail/attachment/status 各 N 次 → used_sessions 不变(P-SESS-02) | P |
 | AC-SESS-03 | 前端 spec:sessionStorage 有效 token 时 bootstrap 不调 `/share/session` | E |
 | AC-SESS-04 | E2E:新隐身窗口打开 → used_sessions +1 | E |
@@ -404,8 +462,10 @@ row ────┼─ expires_at <= now ─────────────
 | AC-AUTH-02 | lid 不存在/sec 错 + 任意 authKey 组合 → 恒 `SHARE_UNAVAILABLE`(P-AUTH-01) | P |
 | AC-AUTH-03 | 库中无明文断言;比较走常量时间工具(代码断言 + 单测) | U |
 | AC-AUTH-04 | resetAuthKey 后旧 token 读 → `SHARE_UNAVAILABLE`;新 Key 建会话成功(P-AUTH-02) | I |
-| AC-AUTH-05 | 连续错 Key 达阈值 → 锁定窗口内正确 Key 也 `SHARE_AUTH_REQUIRED`;窗口过后恢复 | I |
+| AC-AUTH-05 | 同 (shareId, IP) 5 分钟内错 10 次 → 该 IP 锁定、正确 Key 也 `SHARE_AUTH_REQUIRED`;换 IP 头的合法访客不受影响;成功清零;窗口过后恢复 | I |
 | AC-AUTH-06 | 限流命中 → 429 + Retry-After、非业务码、used_sessions 不变(基线扩展) | I |
+| AC-AUTH-07 | 状态机全迁移断言:enable/reset/disable 后 hash/enabled/cv 组合合法;`auth_key_enabled=1` IFF hash 非空;update 端点改 Key 字段被拒 | U |
+| AC-AUTH-08 | disable → hash/kid 清空 + enabled=0 + cv+1;旧 token 读 → `SHARE_UNAVAILABLE`;新建会话不再要求 Key | I |
 | AC-MAIL-01 | 多 binding 下越邮箱查询 → 空/`SHARE_UNAVAILABLE`(P-BIND-01) | P |
 | AC-MAIL-02 | 两邮箱不同 window → 各自下界独立生效 | U |
 | AC-MAIL-03 | messageLimit=N 各邮箱投 N+2 封 → 各返回最新 N;N=1 合法 | U |
@@ -423,6 +483,7 @@ row ────┼─ expires_at <= now ─────────────
 | AC-OTP-06 | 写入 2000 → 落库/下发均被钳制为 3000 | U |
 | AC-OTP-07 | 多邮箱页轮询 spec:每 tick 恰一次 status 请求,无 N 路并发 | E |
 | AC-OTP-08 | 429 注入 → 按 Retry-After 退避继续,不清会话(基线扩展) | E |
+| AC-OTP-09 | since=0/推进/Binding 增删重置基准断言;窗口外与被 N 滚出邮件注入 → newCount/latestEmailId 不反映(侧信道封闭) | I+P |
 | AC-ADMIN-01 | 管理列表组件 spec:字段齐全 + 路由 meta perm | E |
 | AC-ADMIN-02 | get 本人 → 详情+bindings+config;他人 shareId → `SHARE_NOT_FOUND` | I |
 | AC-ADMIN-03 | update 各字段 → 落库 + 下次 Visitor 请求生效 | I |
@@ -463,7 +524,8 @@ row ────┼─ expires_at <= now ─────────────
 | AC-EDGE-09 | 迁移旧行 used_sessions>0 且 max=NULL → 无配额判定 | M |
 | AC-EDGE-10 | 剩余有效期 < TTL → token exp 被 expires_at 截短 | U |
 | AC-EDGE-11 | status 与 mails 同周期调用 → 零配额、同 token、同范围 | I |
-| AC-EDGE-12 | 锁定窗口内正确 Key → `SHARE_AUTH_REQUIRED`;窗口后成功 | I |
+| AC-EDGE-12 | 锁定 (shareId, IP) 内正确 Key → `SHARE_AUTH_REQUIRED`;未锁 IP 正常;窗口后成功 | I |
+| AC-EDGE-13 | establish 与 revoke/过期/reset/disable/删空 Binding 并发交错注入 → 无超发、无即死 token、拒发路径零配额 | I+P |
 
 ## Correctness Properties
 
@@ -515,9 +577,9 @@ For any `message_limit = N` 与任意邮件到达序列, THE ShareMailService SH
 
 **Validates: AC-MAIL-03, AC-MAIL-04, AC-MAIL-05, AC-EDGE-06**
 
-### P-MASK-01: 掩码封闭性与幂等
+### P-MASK-01: 身份字段掩码封闭性与幂等(R1-A3 收窄)
 
-For any `show_full_address=false` 的分享与任意 Visitor 响应, THE ShareMailService SHALL 不在响应任何字段中出现绑定邮箱完整地址;且 maskAddress SHALL 幂等。
+For any `show_full_address=false` 的分享与任意 Visitor 响应, THE ShareMailService SHALL 使**一切系统生成的绑定邮箱身份字段**(session/status/list/detail 投影中的 mailbox address,含 Binding 标识随附地址)均为掩码形态;且 maskAddress SHALL 幂等。本性质 SHALL NOT 约束用户邮件内容字段(发件人/主题/正文)——发件人默认不掩码,命中绑定地址的主题/正文原样保真(property test 以真实含址正文数据可同时通过,不需规避或删改内容)。
 
 **Validates: AC-MAIL-08**
 
@@ -555,3 +617,16 @@ For any `mail_share` 行与时刻 `now`, effectiveStatus(row, now) SHALL 为确�
 ## Update Log
 
 - 2026-08-24 · executor(规格撰写执行者):Mode 1 CREATE 首次落盘。front-matter 按 spec-deliverable.md §Template 2 schema(先读模板、后读仓内旧 spec,只借领域词汇);Current-State Inventory 30 行锚点来自三份 recon 并抽查亲验;修正 recon-frontend §1 一处记述(session 响应实际已含 `expiresAt`,`share-auth-service.js:266-271`)。tasks.md 依模板铁律待 spec-cross-review 通过后再产。
+- 2026-08-24 · executor(R1 修订执行者)消化第 1 轮异构评审 `review.sub.md`(过筛:全采纳):
+  - R1 · A1 → 采纳(DDL 删 RENAME COLUMN,全程 expand-only:物理列保留 `access_count`,应用层读写旧列名、DTO 映射 `usedSessions`,旧 Worker 兼容可回滚;改 Decision 4、DDL、Corrected Goal、闸门 SQL)
+  - R1 · A2 → 采纳(DDL 删 `share_type` 列;Decision 1 改为 Binding 计数实时派生,`mail_share_binding` 唯一真源;update 端点与迁移段同步)
+  - R1 · A3 → 采纳(P-MASK-01 收窄为系统生成的绑定邮箱身份字段;发件人/主题/正文不承诺、命中内容不改写;Decision 14 同步)
+  - R1 · A4 → 采纳(establishSession/consumeSessionQuota 重写为单一线性化点:条件 UPDATE 同时含 `status='ACTIVE'`+`expires_at>now`+`credentials_version=:cv`+配额;不签发即死 token;矩阵补 AC-EDGE-13)
+  - R1 · A5 → 采纳(新增「AuthKey 状态机」小节:disabled→enable→reset→disable,字段不变量 enabled IFF hash 非空,cv 规则与既有 Session 影响逐迁移定死;resetAuthKey 支持 action 参数)
+  - R1 · A6 → 采纳(锁定改 `(shareId, IP)` 维度,新表 `mail_share_auth_fail`(ip_hash 无 PII),10 次/5 分钟写死、成功清零;删 mail_share 三列;Decision 9 重写)
+  - R1 · A7 → 采纳(新增「Status 游标协议」小节:游标所有权/推进时机/范围规则与 scoped repository 同源/Binding 变更/重连语义;矩阵补 AC-OTP-09)
+  - R1 · A8 → 采纳(权限表补授权矩阵:`share:manage` 本期仅本人分享路由权限,`c.env.admin` 豁免为运维超级账号、资源谓词不变)
+  - R1 · A9 → 采纳(新增「Binding 写入的并发一致性」:单语句条件 INSERT…SELECT 含 account 存活/归属,失败 `SHARE_ACCOUNT_FORBIDDEN`,清理补偿孤儿;D1 约束与 cleanup 库存行同步;矩阵补 AC-BIND-10)
+  - R1 · F1 → 采纳(Decision 8 补 Key 规格:128-bit CSPRNG、base64url、22 字符定长,校验仅 trim)
+  - R1 · F2 → 采纳(list 行补分页契约:size 默认 20/上限 100、排序 `share_id DESC`、无参 deprecated 上限 500)
+  - R1 · F3 → 采纳(Error Handling 后新增「结构化观测」:5 个固定事件名、无 PII 无凭据、无新表)

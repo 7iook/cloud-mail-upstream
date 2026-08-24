@@ -11,7 +11,7 @@ Proposed(stub · 随 `docs/specs/mailbox-share-capability/` charter 落盘,实�
 新需求(用户 2026-08-24 需求书)在**该边界内侧**做三项边界定义级变更:
 
 1. **数据模型 1:1 → 1:N**:一条分享可绑定多个邮箱(`mail_share.account_id` 单列 → `mail_share_binding` 表,per-binding `window_start_email_id` 快照)。
-2. **计数语义:观测 → 执行**:`access_count` 升级为 `used_sessions` 配额(`max_sessions` 累计建立次数上限,原子条件 UPDATE 闸门;触顶为计算态 `ACCESS_LIMIT_REACHED`,不落库)。
+2. **计数语义:观测 → 执行**:`access_count` **语义**升级为 `used_sessions` 配额(`max_sessions` 累计建立次数上限,原子条件 UPDATE 闸门;触顶为计算态 `ACCESS_LIMIT_REACHED`,不落库)。物理列名保留 `access_count`,expand-only 不 RENAME(R1 评审 A1:重命名会使旧版本 Worker/回滚版本失配);领域/API/DTO 称 `used_sessions`/`usedSessions`。`share_type` 同理不落库,由 Binding 计数实时派生(R1 评审 A2)。
 3. **授权通道:capability → capability + 可选 credential**:新增可选 AuthKey 第二因子(只存 `auth_key_hash`,复用 HMAC+PEPPER 设施);重置经 `credentials_version` 使旧 Session 立即失效。
 
 其中 2、3 显式推翻 mail-share R1-R3(2026-08-16/17)「访问密码/次数上限不做」的用户裁决——这是产品方向变更,由用户 2026-08-24 重新拍板;旧 ADR 与旧 charter 原文不改,审计链各自保留。
