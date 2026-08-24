@@ -38,7 +38,7 @@ Accepted(2026-08-24 · 实现验收通过,见下「实施结论」)
 
 ### 代价
 
-- `mail_share.account_id` 在 Expand 阶段是双写目标(鉴权零读取),Contract 后才降为遗留列;双真源风险由「读路径只信 Binding + 双写主 Binding + `SHARE_MULTI_ENABLED` 门控」的分阶段协议封闭(design「迁移/发布协议」),代价是兼容窗口内每次 Binding 变更多一次主表写。
+- `mail_share.account_id` 在 Expand 阶段是双写目标(鉴权零读取),Contract 后才降为遗留列;双真源风险由「读路径只信 Binding + 双写主 Binding + `SHARE_CAPABILITY_V2` 门控」的分阶段协议封闭(design「迁移/发布协议」),代价是兼容窗口内每次 Binding 变更多一次主表写。
 - 级联撤销、清理任务、附件校验等六处单值假设须同步改造,漏改即越权或孤儿行(spec 已列 AC 钉死)。
 - AuthKey 使凭据面从纯 capability URL 扩展为 URL+Key 两件套;因 Key 为服务端生成 128-bit 凭据,不引入锁定机制(R2 评审 A6),请求成本约束完全依赖边缘限流。
 - 配额与授权只在条件 UPDATE 时刻线性化:UPDATE→签发间的极窄 TOCTOU 下 token 即死且名额不退还,属文档化接受的取舍(替代方案是服务端 Grant/Session 台账,被判定过重)。响应丢失导致的重复扣额由 `Idempotency-Key` + KV 短期结果重放消解(R3 评审 A3);代价是签发路径新增对既有 KV 绑定的软依赖(fail-open,KV 故障时退化为无重放保护)。

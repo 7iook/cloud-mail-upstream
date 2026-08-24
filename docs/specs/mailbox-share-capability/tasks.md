@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · T-27/T-28 APPROVED · T-29 实现 |
+| 状态 Status | shipped · T-01→T-29 APPROVED |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -24,7 +24,7 @@
 | `mail-worker/src/api/share-api.js` | W1(T-07/T-08 读头透传)→T-14(status 端点) | 热区表补登记(recon-w1);W1 与 T-14 跨波次串行 |
 | `mail-worker/src/security/security.js` | T-14(excludeExact 一行)、T-17(premKey) | 两处改动跨波次天然串行;同波次内禁止第二写者 |
 | `mail-worker/src/service/mail-share-service.js` | 同波次内单写者(W2:T-12→T-13 串行;W3:T-15→T-16→T-18 串行) | 跨波次串行,波次内不并行 |
-| `mail-vue/src/i18n/zh.js` / `en.js` | T-29.2 统一收口 | W4/W5 各任务只在任务文档记录所需新键,不直接改 i18n 文件 |
+| `mail-vue/src/i18n/zh.js` / `en.js` | T-29.2 已收口 | 其后只读；不删 5 份 PENDING_COPY |
 
 ---
 
@@ -640,10 +640,27 @@
     - commit: none (checkpoint, no code delta)
     - note: 活基线现为 vue 22/250 · worker 18/626 · E2E 19；章程原文 138/95/13 为开工地板，未改写
 
-- [ ] T-29 收尾:文档 / CHANGELOG / ADR / i18n
-  - [ ] T-29.1 `docs/architecture/ADR-mailbox-share-capability-extension.md` 由 Proposed 转 Accepted(补实施结论);design.md front-matter `shipped_commit` 回填;两份 spec `## Update Log` 各追加一行
-  - [ ] T-29.2 `mail-vue/src/i18n/zh.js:340-385` 同前缀段与 `en.js` 对应段统一追加 W4/W5 全部新键(i18n 热区收口,单写者);`README.md` 分享能力段落更新 + CHANGELOG 行;tech-debt 台账登记(死分支 `setting.share` 不修不删、Contract 阶段停双写为后续版本任务)
+- [x] T-29 收尾:文档 / CHANGELOG / ADR / i18n
+  - **Evidence**
+    - verify: 主 AI 独立 `pnpm --dir mail-vue test -- --no-cache` → EXIT=0，22 files / 252 passed；`pnpm --dir mail-worker test -- --no-cache` → EXIT=0，18 files / 626 passed；`SHARE_E2E_REBUILD=1 node tests/e2e/run.mjs` → EXIT=0，19 passed / 0 skipped。审查复跑同口径。i18n 480/480 无差集
+    - files: `docs/architecture/ADR-mailbox-share-capability-extension.md` · `docs/specs/mailbox-share-capability/design.md` · `docs/specs/README.md` · `mail-vue/src/i18n/{zh,en}.js` · `mail-vue/src/views/share/index.vue` · `index.spec.js` · `tests/e2e/specs/visitor-revoke-live.spec.js` · `README.md` · `README-en.md`
+    - AC: AC-ADMIN-08；F-1 不新建 CHANGELOG.md，行写入 Update Log + ADR 实施结论
+    - commit: 7a412e5
+    - decision: F-1/F-3/F-4 CHANGE；T29-PENDING HOLD；T29-E2E/T29-SHIP CHANGE；审查 P2-1/P2-2 CHANGE（ADR 旧开关名、D-3 锚点）
+    - review: `review-t29.md` APPROVED p0=0 p1=0 p2=2
+  - [x] T-29.1 `docs/architecture/ADR-mailbox-share-capability-extension.md` 由 Proposed 转 Accepted(补实施结论);design.md front-matter `shipped_commit` 回填;两份 spec `## Update Log` 各追加一行
+    - **Evidence**
+      - verify: ADR `## Status` = Accepted + `## 实施结论` 写明生产 V2 默认 false；`design.md` `status: shipped` / `shipped_commit: 190f704`（不自引 7a412e5）
+      - files: `docs/architecture/ADR-mailbox-share-capability-extension.md:5,48-55` · `docs/specs/mailbox-share-capability/design.md:6,12,672-680`
+      - AC: 收口文档；F-1
+      - commit: 7a412e5
+  - [x] T-29.2 `mail-vue/src/i18n/zh.js:340-385` 同前缀段与 `en.js` 对应段统一追加 W4/W5 全部新键(i18n 热区收口,单写者);`README.md` 分享能力段落更新 + CHANGELOG 行;tech-debt 台账登记(死分支 `setting.share` 不修不删、Contract 阶段停双写为后续版本任务)
     - _Requirements: AC-ADMIN-08_
+    - **Evidence**
+      - verify: zh/en 各 480 unique、差集空；en.js 四条形状约束全过；5 份 PENDING_COPY 仍在
+      - files: `mail-vue/src/i18n/zh.js` · `en.js` · `README.md:73` · `README-en.md:68` · `design.md` D-1/D-2/D-3
+      - AC: AC-ADMIN-08；F-1 的 CHANGELOG 行写入 tasks.md / design.md Update Log，未新建 CHANGELOG.md
+      - commit: 7a412e5
 
 ## Task Dependency Graph
 
@@ -674,6 +691,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-29 APPROVED p0=0（`review-t29.md`）。勾选 T-29。P2-1/P2-2 CHANGE（ADR Consequences 旧名、D-3 锚点 `:904-910`）。独立复跑 vue 22/252 · worker 18/626 · E2E 19 passed / 0 skipped。未勾选尾：无。
 - 2026-08-24 · executor:T-29 收尾落盘（`exec-t29-note.md`）。**邮箱分享能力交付**：ADR 转 Accepted 并补「实施结论」（写明生产 `SHARE_CAPABILITY_V2` 默认 false）；design.md `status: shipped` + `shipped_commit: 190f704` + 新增「已知限制与技术债」D-1/D-2/D-3；`docs/specs/README.md` 索引同步 shipped；96 个 i18n 键落盘（访客 10 + 管理端 86，zh/en 双语，PENDING_COPY 映射按裁决保留）；两份 README 各加一条分享能力 bullet；F-4 `expiresAt` 残留两处修复（先红后绿 2 条单测 + 1 条 E2E 死壳断言）。三套复跑 vue 22/252 · worker 18/626 · E2E 19 passed / 0 skipped。**未勾选**（等协调者审查后勾）。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-29 侦察已裁 F-1/F-3/F-4（`recon-t29-wrap.md`）。未勾选。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-28 三套全绿。vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。e2e 零 diff。勾选 T-28。未勾选尾：T-29。

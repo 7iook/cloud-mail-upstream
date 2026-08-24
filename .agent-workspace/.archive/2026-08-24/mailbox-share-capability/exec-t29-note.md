@@ -214,3 +214,9 @@ $ git diff --stat -- docs/architecture/ADR-mail-share-capability-boundary.md \
 | E2E | `SHARE_E2E_REBUILD=1 node tests/e2e/run.mjs` | **19 passed / 0 skipped**; `visitor-revoke-live` 11.6s 绿 |
 
 抽查:两处 `expiresAt.value = ''` 在 `index.vue:671` / `:825`;ADR Status=Accepted 且实施结论写明生产 V2 默认 false;`design.md` `status: shipped` / `shipped_commit: 190f704`;无 `CHANGELOG.md`;5 份 `PENDING_COPY` 仍在;`mail-worker/**` / 旧 ADR / `requirements.md` 零 diff;T-29 三个 checkbox 仍为 `[ ]`。
+
+---
+
+## 10. 审查收口(2026-08-24)
+
+`review-t29.md` VERDICT APPROVED，p0=0 p1=0 p2=2。协调者过筛后勾选 T-29。P2-1/P2-2 随勾选提交改文档，不重开审查。

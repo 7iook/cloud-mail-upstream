@@ -85,7 +85,8 @@
 | W6 | T-27 E2E | ✅ 已提交 `190f704` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 |
 | W6 | T-27 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t27.md` · P2-1 HOLD |
 | W6 | T-28 Checkpoint | ✅ 三套全绿（无代码改动） | 主 AI | vue 22/250 · worker 18/626 · E2E 19 |
-| W6 | T-29 收尾 | ⏳ 迷雾已裁，待实现 | explore≈plan-reality-recon | `recon-t29-wrap.md` |
+| W6 | T-29 收尾 | ✅ 已提交 `7a412e5` | generalPurpose≈executor | 主 AI 独立 vue 22/252 · worker 18/626 · E2E 19 |
+| W6 | T-29 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t29.md` · P2-1/P2-2 CHANGE |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -198,6 +199,8 @@
 | T29-PENDING | HOLD:不删 5 份 PENDING_COPY 映射 | 键补齐后自动不可达；删要动 5 个生产文件 |
 | T29-E2E | CHANGE:vue 修完后给 visitor-revoke-live 加一条 `[data-share-expires]` count=0 | 新增覆盖，不是把红改绿；T-28 禁令的反方向 |
 | T29-SHIP | CHANGE:`shipped_commit=190f704`；design status→shipped | T-27 是最后一笔被验收的实现；T-29 不能自引用 |
+| T29-P2-1 | CHANGE:ADR Consequences `:41` 旧名 `SHARE_MULTI_ENABLED` → `SHARE_CAPABILITY_V2` | review-t29；Decision/实施结论本已正确；历史 R2 日志不改 |
+| T29-P2-2 | CHANGE:D-3 生产锚点 `index.vue:902-908` → `:904-910` | review-t29；本轮两行 expiresAt 把 bootstrap 推后 |
 
 ## 冲突热区占用
 
@@ -214,15 +217,16 @@
 | `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
 | `mail-vue/src/views/email/ShareDialog.*` | T-23 已收口 `4f4cc65` | T-29 只落 i18n 键 `shareGoAdmin`，不删 PENDING_COPY |
-| `mail-vue/src/views/share/index.vue` | **T-29 待审查（两行）** | 仅 `clearMailboxView` / `exitShare` 补 `expiresAt.value = ''` |
+| `mail-vue/src/views/share/index.vue` | T-29 已收口 `7a412e5` | 其后只读 |
 | `mail-vue/src/views/share/session.js` | T-26 已收口 `6e8bc10` | 其后只读 |
 | `useSharePolling.js` | T-26 已收口 `6e8bc10` | `toValue(intervalMs)`；禁止 `autoStart`/`listStatus`/`mode` |
 | `mail-vue/src/request/share.js` | T-26 已收口 `6e8bc10` | 其后只读 |
-| `tests/e2e/**` | **T-29 待审查（1 条断言）** | 仅 `visitor-revoke-live.spec.js` 加 `[data-share-expires]` count=0；其余冻结 |
-| i18n | **T-29 待审查** | zh.js / en.js 尾部追加 96 键；不删 PENDING_COPY |
+| `tests/e2e/**` | T-29 已收口 `7a412e5` | 其后只读 |
+| i18n | T-29.2 已收口 `7a412e5` | 其后只读；不删 PENDING_COPY |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-29 APPROVED p0=0（`review-t29.md`）。勾选 T-29。P2-1/P2-2 CHANGE。未勾选尾：无。
 - 2026-08-24 · 主 AI：T-29 实现待审查。独立复跑 vue 22/252 · worker 18/626 · E2E 19 passed / 0 skipped（`SHARE_E2E_REBUILD=1`）。i18n 480/480 无差集。未勾选。未勾选尾：T-29 审查。
 - 2026-08-24 · 主 AI：T-29 侦察已裁 F-1/F-3/F-4（`recon-t29-wrap.md`）。派实现。未勾选尾：T-29。
 - 2026-08-24 · 主 AI：T-28 三套全绿。vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。`tests/e2e/**` 零 diff。勾选 T-28。未勾选尾：T-29。
