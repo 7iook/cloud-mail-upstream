@@ -90,6 +90,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-08/T-12 工件审查均 NEEDS_CHANGES。T08-A1 CHANGE（统一快照）；T08-A2/A3/A4 HOLD。T12-A1/H1 HOLD；T12-E1 CHANGE。代码审查未回。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08 `5a81065` + T-12 `b6f5a28` 入库。主 AI 独立 185/185、全量 worker 17/289、vue 17/95、E2E 13，均为 EXIT=0。ShareContext 已冻结。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T07-R1 CHANGE（KV 在配额判定前）。主 AI 独立复跑 auth 34/34、share-api 7/7，均为 EXIT=0。前端 Idempotency-Key 归 T-26。未勾选尾：T-08 / T-12 → T-29。
 - 2026-08-24 · 主 AI：T-06 审查 APPROVED、p0=0。循环 import 与空 `options` HOLD。未勾选尾：T-07 / T-12 → T-29。

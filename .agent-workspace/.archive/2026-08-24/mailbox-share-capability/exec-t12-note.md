@@ -2,8 +2,8 @@
 
 - 日期:2026-08-24
 - 执行者:executor(sub-task executor)
-- 分支:`cursor/mailbox-share-capability-dcb6` · 起跑 HEAD `6c6f618`,收尾时 HEAD 已被主 AI 推到 `9b98dec`(全是 docs commit,零业务代码)
-- **未提交、未推送**(按派单要求)
+- 分支:`cursor/mailbox-share-capability-dcb6` · 起跑 HEAD `6c6f618`
+- **最终 commit:`b6f5a28`**（已推送；Evidence `695394f`）
 - 白名单外文件零改动:本任务只动 `mail-worker/src/service/mail-share-service.js` + `mail-worker/test/mail-share-service.spec.js`。`test/setup.js` **未动**(现有 `seedShareRow`/`seedBindingRow` 够用,不需要新 seed 助手)
 
 ## 成功态(主 AI 原文照抄,未改写)
@@ -52,12 +52,24 @@ Negative: no share_type column; no leftover binding when insertShare misses; no 
 
 `spec:1058-1081`(并发删除)是绿灯之后补加的,没有进上面那份红日志。为免它变成「看起来在测、其实恒绿」的假护栏,单独做了一次反证:把 `prepareShareInsert` 的归属计数谓词从 `= ?` 改成恒真的 `>= 0 AND ? >= 0`,单跑该用例 → **EXIT=1 · `expected BizError`**(share 被建了出来,只挂上 ACC_A 一条 binding,正是 AC-CAP-03 要禁止的部分写入)。改回后全量复跑 EXIT=0。探针未留在工作树(`git diff` 已确认零残留)。
 
-## 绿
+## 绿（历史 · 执行期脏树，并行 T-07 未入库）
 
 - `pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` → **EXIT=0** · `105 passed (105)`;连跑 3 次全绿,无 flake(并发限额用例 `spec:385-405` 仍是 `Promise.allSettled` 抢名额)
 - `pnpm --dir mail-worker test --no-cache` → **EXIT=0** · `Test Files 17 passed (17)` · `Tests 264 passed (264)`;收尾时不带 `--no-cache` 复跑一次 → **EXIT=0** · `17 files / 265 tests`(+1 是 T-07 在这两次之间又落了一条,不是本任务)
 - 日志:`/opt/cursor/artifacts/t12_green_create_multi.log`
-- **基线只增不减**:起跑基线 17 files / 213 tests(主 AI 与本执行者各自实测一致)。收尾 264~265 = 213 + 本任务 +42 + **并行写者 T-07 的 +9~10**(执行期间 `share-api.js` / `kv-const.js` / `share-auth-service.js` / `share-api.spec.js` / `share-auth-service.spec.js` 出现在同一工作树,不是本任务改的)。本任务零改写不相关用例。
+- **基线只增不减**:起跑基线 17 files / 213 tests。执行期 264~265 = 213 + 本任务 +42 + **并行写者 T-07 的 +9~10**。本任务零改写不相关用例。
+
+## 最终快照（权威 · `b6f5a28`，含已入库 T-08）
+
+主 AI 独立复跑：
+
+| 套件 | 结果 |
+|---|---|
+| `mail-share-service.spec.js`（含在四文件定点内） | **106/106 EXIT=0**（+1 为并发删除探针） |
+| 全量 worker `pnpm --dir mail-worker test --no-cache` | **17/289 EXIT=0** |
+| vue / E2E | **17/95** · **13**，均为 EXIT=0 |
+
+日志:`/opt/cursor/artifacts/t08_t12_full_worker.log`。T-12 scoped 成功态 = owner create 服务写路径 AC-CAP-*；`mail-share-api.js:23-28` `{...body, idempotencyKey}` 已透传，本任务零改 API。HTTP 多邮箱入口用例不在 T-12.1 红灯清单，归后续 owner API 面（T-24 前可补）。
 
 ## 改了什么(file:lines)
 
@@ -179,5 +191,6 @@ Negative: no share_type column; no leftover binding when insertShare misses; no 
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:工件审查 `exec-t12-note.review1.sub.md` NEEDS_CHANGES。A1 HOLD（T-12.1 权威范围是 service spec；API `{...body}` 既有透传，HTTP 多邮箱入口不扩进本任务）；E1 CHANGE（权威快照钉到 `b6f5a28` / 17/289）；H1 HOLD（0-binding replay=`single` 交 T-15 list 投影；v3_2DB 已回填/撤销不合规旧行）。
 - 2026-08-24 · 主 AI:入库 `b6f5a28`。独立复跑 mail-share spec 含在 185/185 内（106/106）+ 全量 17/289 EXIT=0。vue 17/95 EXIT=0。
 - 2026-08-24 · executor:T-12 落地。红 EXIT=1(37 failed / 68 passed / 105)→ 绿 EXIT=0(spec 105/105;全量 17 files / 264→265 tests,尾数随并行写者 T-07 浮动)。改动 2 文件:`mail-share-service.js`(归一化集合化 + 域校验 + 五条 V2 栅栏接线 + 批量归属校验 + 三条写语句扩写/新增 + `syncPrimaryAccountId` 扩 lid 定位与 window 双写 + 响应扩 shareType/bindings/authKey)、`mail-share-service.spec.js`(+42 用例、改写 4 条 W0 双写用例、栅栏冻结断言补第五条 intent)。`test/setup.js` 未动。踩到的坑:vitest transform 缓存导致第一次红跑报出改动前的用例数,须带 `--no-cache`;`mail_share_binding` 会被既有的 `INSERT INTO mail_share` 正则前缀误命中。写入侧归属谓词另做了一次反证探针(改成恒真 → 该用例转红),探针已还原。未 commit、未 push。

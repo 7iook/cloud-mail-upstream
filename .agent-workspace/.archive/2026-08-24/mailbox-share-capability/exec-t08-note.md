@@ -5,8 +5,8 @@
 | 任务 | T-08(T-08.1 红 + T-08.2 绿) |
 | 分支 | `cursor/mailbox-share-capability-dcb6` |
 | 起点 HEAD | `a0f23eb`(含 T-07 `c2087ce`) |
-| commit | `5a81065` |
-| 白名单外改动 | 无。但**白名单外有一条既有断言被本次改动打红**,见 §5 R-T08-1,必须由围栏 owner 收口 |
+| commit | `5a81065`（围栏 4→3 同 commit；Evidence `695394f`） |
+| 白名单外改动 | 围栏 `mail-share.schema.spec.js` 4→3 已随 `5a81065` 收口（R-T08-1 **closed**）。其余白名单外零改动 |
 
 ---
 
@@ -62,7 +62,7 @@ EXIT=0
 
 零删除、零改写既有断言。
 
-### 全量
+### 全量（历史 · 围栏未收口、T-12 未入库）
 
 ```
 $ pnpm --dir mail-worker exec vitest run --no-cache
@@ -71,8 +71,22 @@ $ pnpm --dir mail-worker exec vitest run --no-cache
 EXIT=1
 ```
 
-完整日志:`/opt/cursor/artifacts/t08_full_suite.log`。唯一红点是白名单外的
-`test/mail-share.schema.spec.js` 主表 `account_id` 读取围栏,见 §5 R-T08-1。
+完整日志:`/opt/cursor/artifacts/t08_full_suite.log`。当时唯一红点是白名单外的
+`test/mail-share.schema.spec.js` 主表 `account_id` 读取围栏（R-T08-1）。
+
+### 最终快照（权威 · `5a81065` + T-12 `b6f5a28`）
+
+主 AI 在干净树独立复跑（T-12 已入库，围栏已 4→3）：
+
+| 套件 | 命令 | 结果 |
+|---|---|---|
+| T-08 三 spec | `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js test/share-api.spec.js test/share-attachment-service.spec.js --no-cache` | **79/79 EXIT=0**（auth 56 · api 8 · att 15） |
+| 定点四文件（含 T-12） | 上列 + `test/mail-share-service.spec.js` | **185/185 EXIT=0** |
+| 全量 worker | `pnpm --dir mail-worker test --no-cache` | **17/289 EXIT=0** |
+| vue | `pnpm --dir mail-vue test` | **17/95 EXIT=0** |
+| E2E | `node tests/e2e/run.mjs` | **13 EXIT=0** |
+
+日志:`/opt/cursor/artifacts/t08_t12_full_worker.log`。T-08 scoped 成功态 = 后端 AC-AUTH-* / AC-SESS-09；访客 UI 归 T-26，不在本任务完成判决内。
 
 ---
 
@@ -182,7 +196,7 @@ T07-R1(④ 必须在 KV 之前)与 AC-SESS-10(`max_sessions=1` 重放),所以我
 
 ## 5. 遗留风险
 
-### R-T08-1 · [P0 · 需白名单外一行改动] 主表 `account_id` 读取围栏卡在 4
+### R-T08-1 · [closed · `5a81065`] 主表 `account_id` 读取围栏 4→3
 
 `test/mail-share.schema.spec.js:142-147`:
 
@@ -218,7 +232,7 @@ AC-BIND-01「鉴权/范围代码只信 Binding」想要的方向,围栏注释本
 +		expect(countPrimaryAccountReads(shareAuthSource)).toBe(3);
 ```
 
-T-09 收口前必须由围栏 owner 落这一行,否则 `pnpm --dir mail-worker test` 不可能全绿。
+`5a81065` 已按上列 diff 落地；棘轮现为 `toBe(3)`。全量 17/289 绿。
 
 ### R-T08-2 · [P1] `mail_share_binding` 与主表 `account_id` 双写不一致时以 Binding 为准
 
@@ -264,14 +278,12 @@ AuthKey 输入框、`config.refreshIntervalMs` 消费均归 **T-26**,不是漏�
 
 ---
 
-## 6. 并发状态
+## 6. 并发状态（历史 · 执行期）
 
-`/workspace` 工作树里仍有另一执行者未提交的 T-12 改动
-(`mail-worker/src/service/mail-share-service.js` +372 / `test/mail-share-service.spec.js` +614)。
-本任务全程未 stash、未触碰这两个文件,`git status` 里它们保持 ` M` 原样。
-`share-api.spec.js` 在当前工作树下 8/8 绿(T-07 note §5 记的 create 污染已不复现)。
+执行当时 `/workspace` 另有未提交 T-12 改动；T-08 未 stash、未触碰。T-12 现已入库 `b6f5a28`。
+`share-api.spec.js` 在 T-08 工作树下 8/8 绿(T-07 note §5 记的 create 污染已不复现)。
 
-本任务改动**未提交**(题面要求),`git diff --stat` 中属于 T-08 的只有:
+执行当时 `git diff --stat` 中属于 T-08 的只有:
 
 ```
 mail-worker/src/api/share-api.js                   |   5 +-
@@ -286,6 +298,7 @@ mail-worker/test/share-auth-service.spec.js        | 713 ++++++++++++++++++++-
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:工件审查 `exec-t08-note.review1.sub.md` NEEDS_CHANGES。A1 CHANGE（统一最终快照 vs 历史 288/289）；A2 HOLD（scoped 成功态=后端 AC-AUTH-*，访客 UI 属 T-26，同 T07-A1）；A3 HOLD（W1-ctx：T-10/T-11 才消费 ShareContext，禁止 T-08 假接线）；A4 HOLD（新 key 触顶拒发已由 T-06 AC-SESS-01/11 覆盖）。
 - 2026-08-24 · 主 AI:入库 `5a81065`（含围栏 4→3，R-T08-1 已收口）。独立复跑三 spec 79/79 + 全量 17/289 EXIT=0。vue 17/95 EXIT=0。
 - 2026-08-24 · executor:T-08 落盘未提交。三 spec 红 17/79 → 绿 79/79 EXIT=0。全量 288/289,
   唯一红点为白名单外围栏 `mail-share.schema.spec.js:146`(4 → 3),见 R-T08-1,T-09 前必须收口。

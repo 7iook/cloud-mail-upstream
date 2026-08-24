@@ -194,6 +194,7 @@
     - AC: AC-AUTH-01, AC-AUTH-02, AC-AUTH-03, AC-AUTH-04, AC-AUTH-05, AC-AUTH-06, AC-SESS-08, AC-SESS-09, AC-EDGE-05, AC-EDGE-12, AC-LIFE-03
     - commit: 5a81065
     - decision: ④ AuthKey 在 `loadLiveBindings` 之后、KV 之前；过期/撤销 + 错 Key 先撞 `SHARE_AUTH_REQUIRED`（过了 lid+sec）；围栏 `row.accountId` 读取 4→3
+    - review: `exec-t08-note.review1.sub.md` · 工件 A1 CHANGE / A2–A4 HOLD；代码审查未回
   - [x]* T-08.1 红:`mail-worker/test/share-auth-service.spec.js` —— 启用 Key 后无 Key/错 Key → `SHARE_AUTH_REQUIRED`、零 token、零配额、无锁定副作用(扫 schema 断言无 `mail_share_auth_fail` 表);`lid` 不存在/`sec` 错 + 任意 authKey 组合恒 `SHARE_UNAVAILABLE`(P-AUTH-01 property);reset 后旧 token 回源 → `SHARE_UNAVAILABLE`、新 Key 建会话成功且消耗新配额(P-AUTH-02);cv 严格单调;换 IP 头重放读请求仍 200;429 独立运输层、零配额;session 响应含 `shareType`/`mailboxes`(掩码)/`expiresAt`/`config` 四件、KV 写失败注入仍签发(fail-open,与 T-07.1 合并;配额 UPDATE 失败改走 AC-SESS-11 拒发)
     - **P-AUTH-01: Visitor 失败不可区分性** _Validates: AC-AUTH-01, AC-AUTH-02, AC-EDGE-08_
     - **P-AUTH-02: credentials_version 单调失效** _Validates: AC-AUTH-04, AC-EDGE-05_
@@ -243,6 +244,7 @@
     - AC: AC-CAP-01, AC-CAP-02, AC-CAP-03, AC-CAP-05, AC-CAP-06, AC-CAP-07, AC-CAP-08, AC-CAP-09, AC-CAP-10, AC-CAP-13, AC-CAP-14, AC-OTP-06, AC-LIFE-10, AC-LIFE-11
     - commit: b6f5a28
     - decision: T12-R1 写入侧拒绝 `<3000`；T12-R2 主表 window 双写；T12-R3 V2 另拒 `messageLimit`；T12-R6a/R6b seed 改写 + `accountIds` 优先
+    - review: `exec-t12-note.review1.sub.md` · 工件 A1/H1 HOLD · E1 CHANGE；代码审查未回
   - [x]* T-12.1 红:`mail-worker/test/mail-share-service.spec.js` —— 多 `accountIds` 创建 → share 行 + N 条 binding 行 + URL 形状不变;`shareType` 实时派生(1→single,>1→multi,扫表断言无 share_type 列);混入他人/已删 accountId → `SHARE_ACCOUNT_FORBIDDEN` 零残留;51 个 accountId → `SHARE_BINDING_LIMIT_EXCEEDED` 整单拒;`refreshIntervalMs=2999` → `SHARE_INVALID_CONFIG`;per-binding window 原子快照(true→各邮箱 MAX(email_id),false→0);authKey 启用 → 明文恰一次、库中仅 hash+kid;幂等重放(指纹含新字段+排序 accountIds)→ 同 shareId 无 sec/authKey 明文;旧 ShareDialog 单 accountId 载荷 → 默认值创建成功
     - _Requirements: AC-CAP-01, AC-CAP-02, AC-CAP-03, AC-CAP-05, AC-CAP-06, AC-CAP-07, AC-CAP-08, AC-CAP-09, AC-CAP-13, AC-CAP-14, AC-OTP-06_
     - **Evidence**
@@ -384,6 +386,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-08/T-12 工件审查过筛。T08-A1 CHANGE；T08-A2/A3/A4 HOLD。T12-E1 CHANGE；T12-A1/H1 HOLD。代码审查未回。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08 / T-12 勾选。T-08 `5a81065`（AuthKey+cv+ShareContext，围栏 4→3）；T-12 `b6f5a28`（多邮箱 create+V2 栅栏）。主 AI 独立 185/185 + 全量 17/289 EXIT=0。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-07 勾选。`c2087ce`。T07-R1 CHANGE：KV 在快照配额判定前。主 AI 独立 34/34 + 7/7 EXIT=0。前端 key 归 T-26。未勾选尾：T-08 / T-12 → T-29。
 - 2026-08-24 · 主 AI:T-06 审查 APPROVED p0=0（`review-t06.md`）。循环 import 与空 `options` HOLD。未勾选尾：T-07 / T-12 → T-29。
