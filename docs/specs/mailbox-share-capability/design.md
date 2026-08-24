@@ -506,6 +506,7 @@ auth_key_enabled = 0    ◄─disable──  auth_key_enabled = 1
 | AC-SESS-08 | 更换请求源 IP 头重放读请求 → 仍 200 | I |
 | AC-SESS-09 | session 响应含 shareType/mailboxes/expiresAt/config;统计写失败注入 → 仍签发 | I |
 | AC-SESS-10 | 同 Idempotency-Key 重放 → 同 token、used_sessions 不变;新 key/无 key → 正常消耗;KV 故障注入 → 仍签发 + `share.system.error` 日志;前端同 key 重试 spec;E2E max_sessions=1 响应丢失重试不超发 | I+E |
+| AC-SESS-11 | 配额 UPDATE RETURNING 空或语句抛错 → 拒发、零消耗(取代旧 mail-share AC-LIFE-14 对闸门的适用) | I |
 | AC-AUTH-01 | 启用 Key 后无 Key/错 Key establish → `SHARE_AUTH_REQUIRED`、零 token、used_sessions 不变 | I |
 | AC-AUTH-02 | lid 不存在/sec 错 + 任意 authKey 组合 → 恒 `SHARE_UNAVAILABLE`(P-AUTH-01) | P |
 | AC-AUTH-03 | 库中无明文断言;比较走常量时间工具(代码断言 + 单测) | U |

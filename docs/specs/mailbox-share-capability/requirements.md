@@ -102,6 +102,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 - [AC-SESS-08] WHILE Visitor 的网络出口 IP 发生变化且 sessionToken 有效, THE ShareAuthService SHALL 继续接受该 token(token 自绑定),SHALL NOT 要求新建 Session。
 - [AC-SESS-09] WHEN Session 建立成功, THE ShareAuthService SHALL 在响应中下发 `shareType`、绑定邮箱清单(经掩码策略处理)、`expiresAt` 与展示配置(`autoRefresh`/`refreshIntervalMs`/`otpExtractionEnabled`/`messageLimit`);统计字段(`last_access_at`)写入失败 SHALL NOT 阻断签发(沿用 fire-and-forget 语义)。
 - [AC-SESS-10] WHEN Visitor 在 `POST /share/session` 携带 `Idempotency-Key`(客户端 SHALL 在发请求**前**生成并写入 sessionStorage), THE ShareAuthService SHALL 在成功签发后把 sessionToken 短存于 KV 键 `share:est:<lid>:<key>`,TTL = min(120 秒, token 剩余寿命);WHEN 同一 `Idempotency-Key` 重放命中缓存, THE ShareAuthService SHALL 返回缓存 token 且 SHALL NOT 再消耗配额、SHALL NOT 再执行条件 UPDATE;WHERE 请求无 key、key 未命中或缓存已过期, THE ShareAuthService SHALL 走 AC-SESS-01 正常条件 UPDATE;THE 访客页 SHALL 在超时/响应丢失后以同一 `Idempotency-Key` 重试,SHALL NOT 换 key 盲重试;IF KV 不可用, THEN THE ShareAuthService SHALL 仍正常签发(fail-open,该次无重放保护)并记 `share.system.error` 结构化日志(文档化风险,R3-A3);E2E SHALL 覆盖 `max_sessions=1` 下响应丢失后同 key 重试成功且 `used_sessions` 恒为 1。
+- [AC-SESS-11] WHEN 配额条件 UPDATE 的 RETURNING 为空,或该语句本身抛错, THE ShareAuthService SHALL 拒绝签发 `sessionToken` 且 SHALL NOT 增加 `access_count`。本条取代旧 charter `mail-share` AC-LIFE-14 对配额闸门的适用(统计写失败仍签发);KV 写失败的 fail-open 仍由 AC-SESS-10 管辖。
 - [AC-AUTH-01] WHERE 分享启用了 AuthKey, WHEN Visitor 提交的 `lid`+`sec` 匹配但未携带或携带错误 AuthKey, THE ShareAuthService SHALL 返回 `SHARE_AUTH_REQUIRED` 且 SHALL NOT 签发 token、SHALL NOT 消耗配额。
 - [AC-AUTH-02] THE ShareAuthService SHALL 仅在 `lid`+`sec` 校验通过后才暴露 `SHARE_AUTH_REQUIRED`;`lid` 不存在、`sec` 错误、过期、撤销、配额触顶等一切其余 Visitor 失败 SHALL 统一返回不可区分的 `SHARE_UNAVAILABLE`。
 - [AC-AUTH-03] THE ShareAuthService SHALL 以 `HMAC-SHA256(authKey, PEPPER[auth_key_kid])` 常量时间比较校验 AuthKey,SHALL NOT 存储或记录 AuthKey 明文。
@@ -280,4 +281,4 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
   - R3 · A5 → 采纳(每分享 Binding 上限常量 `SHARE_BINDING_LIMIT`=50,超限整单 `SHARE_BINDING_LIMIT_EXCEEDED`;新增 AC-CAP-13)
   - R3 · A6 → 采纳(create 响应丢失恢复:幂等重放仅返回 shareId/lid 无明文 → UI 引导 Owner revoke/delete 后重新 create,禁止换 `Idempotency-Key` 盲建;新增 AC-CAP-14)
   - R3 · A7 → 采纳(「启用 `SHARE_CAPABILITY_V2` 前关键日志事件必须已有告警消费者」纳入发布门槛一句话,落 AC-LIFE-11 与 design 结构化观测节;完整 Runbook 不在本期)
-  - AC 总数 102 → 107(+AC-LIFE-11、+AC-SESS-10、+AC-BIND-12、+AC-CAP-13、+AC-CAP-14)。
+  - AC 总数 102 → 108(+AC-LIFE-11、+AC-SESS-10、+AC-BIND-12、+AC-CAP-13、+AC-CAP-14、+AC-SESS-11)。

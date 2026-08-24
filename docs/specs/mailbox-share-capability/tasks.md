@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W0 done · W1/T-05 next |
+| 状态 Status | in-progress · W0 done · W1/T-05 landing · T-06 next |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -56,10 +56,18 @@
     - commit: e878760
   - [x]* T-02.1 红:`mail-worker/test/mail-share.schema.spec.js` 与 `mail-worker/test/mail-share-service.spec.js` 加断言 —— 任何写路径后主表 `account_id` 恒等于现存最小 `binding_id` 的 `account_id` 且非 0;grep 级断言鉴权/范围代码(`share-auth-service.js`、`share-scoped-email-repository.js`)零读取 `mail_share.account_id`(双写路径除外)
     - _Requirements: AC-LIFE-10, AC-BIND-01_
-    - **Evidence** verify: grep 围栏冻结 `share-auth-service.js` 既有 4 处 `row.accountId` 至 T-08；`share-scoped-email-repository.js` 读取数 = 0 · files: `mail-worker/test/mail-share.schema.spec.js:142-151` · AC: AC-LIFE-10, AC-BIND-01 · commit: e878760
+    - **Evidence**
+      - verify: `pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js test/mail-share.schema.spec.js` → EXIT=0（54 tests）；grep 围栏冻结 `share-auth-service.js` 既有 4 处 `row.accountId` 至 T-08，`share-scoped-email-repository.js` 读取数 = 0
+      - files: `mail-worker/test/mail-share.schema.spec.js:142-151` · `mail-worker/test/mail-share-service.spec.js:463-529`
+      - AC: AC-LIFE-10, AC-BIND-01
+      - commit: e878760
   - [x] T-02.2 绿:`mail-worker/src/service/mail-share-service.js` 新增 `syncPrimaryAccountId` 助手(单语句条件 UPDATE,供 T-12/T-13/T-18 在同一 `c.env.db.batch()` 内调用);迁移回填行天然满足(T-01 已带 account_id)
     - _Requirements: AC-LIFE-10_
-    - **Evidence** verify: helper 返回未执行 D1 语句；无 Binding 时零变更不写 0 · files: `mail-worker/src/service/mail-share-service.js:275-289` · AC: AC-LIFE-10 · commit: e878760
+    - **Evidence**
+      - verify: `pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js` → EXIT=0；helper 返回未执行 D1 语句；无 Binding 时零变更不写 0
+      - files: `mail-worker/src/service/mail-share-service.js:275-289`
+      - AC: AC-LIFE-10
+      - commit: e878760
 
 - [x] T-03 `SHARE_CAPABILITY_V2` 全能力栅栏基建(默认 false)
   - **Evidence**
@@ -69,10 +77,18 @@
     - commit: e878760
   - [x]* T-03.1 红:`mail-worker/test/mail-share-service.spec.js` 加断言 —— V2=false 时四路策略写入(multi create / bindings 使绑定数 1→N / AuthKey enable / 有限 `maxSessions`)一律 `SHARE_INVALID_CONFIG`;V2=true 放行
     - _Requirements: AC-LIFE-11_
-    - **Evidence** verify: 按 intent 单测门控助手（四写路径尚未存在，接线属 T-12/T-13/T-15/T-16）· files: `mail-worker/test/mail-share-service.spec.js:595-632` · AC: AC-LIFE-11 · commit: e878760
+    - **Evidence**
+      - verify: `pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js` → EXIT=0；按 intent 单测门控助手（四写路径尚未存在，接线属 T-12/T-13/T-15/T-16）
+      - files: `mail-worker/test/mail-share-service.spec.js:595-632`
+      - AC: AC-LIFE-11
+      - commit: e878760
   - [x] T-03.2 绿:`mail-worker/src/service/mail-share-service.js` 新增 `assertCapabilityV2(c, intent)` 门控助手 + `SHARE_BINDING_LIMIT=50` 常量;`mail-worker/wrangler.toml` 声明 `SHARE_CAPABILITY_V2` 变量(默认 false);结构化观测事件名常量落位(`share.session.denied_quota` / `denied_auth` / `denied_cv` / `share.binding.cascade` / `share.migrate.invalid_row` / `share.system.error`,含 requestId/shareId 字段约定);各写入口的实际接线在 T-12/T-13/T-15/T-16 完成
     - _Requirements: AC-LIFE-11_
-    - **Evidence** verify: `wrangler.toml` 仅注释声明（禁止硬写 false 覆盖 dashboard）；`wrangler-vitest.toml` `SHARE_CAPABILITY_V2="false"`；缺省当 false · files: `mail-worker/src/service/mail-share-service.js:16-82` · AC: AC-LIFE-11 · commit: e878760
+    - **Evidence**
+      - verify: `git grep -n "SHARE_CAPABILITY_V2" -- mail-worker/wrangler.toml` → 仅注释声明；`wrangler-vitest.toml` 显式 `"false"`；缺省当 false
+      - files: `mail-worker/src/service/mail-share-service.js:16-82` · `mail-worker/wrangler.toml:58-60` · `mail-worker/wrangler-vitest.toml:40-41`
+      - AC: AC-LIFE-11
+      - commit: e878760
 
 - [x] T-04 测试基建扩展 + 基线守恒快照
   - **Evidence**
@@ -81,27 +97,50 @@
     - AC: AC-CAP-04, AC-CAP-11
     - commit: e878760
   - [x] T-04.1 `mail-worker/test/setup.js` 扩展:binding 表建表/seed 工厂、含新列的 share 行工厂;记录三套基线数字(worker 16 文件/138、vue 17 文件/95、E2E 13)作为回归底线
-    - **Evidence** verify: 仅 seed 工厂，不建表（DDL 仍在 init.js）；历史地板 16/138、17/95、E2E 13 写在注释 · files: `mail-worker/test/setup.js:18-126` · commit: e878760
+    - **Evidence**
+      - verify: `git grep -n "CREATE TABLE" -- mail-worker/test/setup.js` → 无匹配；历史地板 16/138、17/95、E2E 13 写在注释
+      - files: `mail-worker/test/setup.js:17-126`
+      - AC: AC-TEST-01, AC-TEST-02
+      - commit: e878760
   - [x]* T-04.2 红→绿:跑 `pnpm --dir mail-worker test`、`pnpm --dir mail-vue test`、`node tests/e2e/run.mjs` 确认迁移落地后基线全绿(旧凭据规格断言 `lid` 128-bit/`sec` 256-bit/HMAC 存库、`SHARE_ACTIVE_LIMIT`/`SHARE_MAX_DURATION_SECONDS` 上限断言保持)
     - _Requirements: AC-CAP-04, AC-CAP-11_
-    - **Evidence** verify: 三套 EXIT=0；旧凭据/上限断言仍绿（`mail-share-service.spec.js:154-166,244-252,345`）· AC: AC-CAP-04, AC-CAP-11 · commit: e878760
+    - **Evidence**
+      - verify: `pnpm --dir mail-worker test` → EXIT=0（17/180）；`pnpm --dir mail-vue test` → EXIT=0（17/95）；`node tests/e2e/run.mjs` → EXIT=0（13 passed）；旧凭据/上限断言仍绿
+      - files: `mail-worker/test/mail-share-service.spec.js:154-166,244-252,345` · `mail-worker/test/setup.js:17-20`
+      - AC: AC-CAP-04, AC-CAP-11
+      - commit: e878760
 
 ### W1 · 授权链改造(share-auth-service.js 单 owner,T-05→T-08 严格串行)
 
-- [ ] T-05 effectiveStatus 四态 + establish/resolve 差异放行
-  - [ ]* T-05.1 红:`mail-worker/test/share-auth-service.spec.js` 加 `effectiveStatus` 全组合真值表(property,fast-check ≥100 轮):优先级 REVOKED > EXPIRED > ACCESS_LIMIT_REACHED > ACTIVE、纯函数零写库;`establishSession` 拒一切非 ACTIVE,`resolveSession` 对 `ACCESS_LIMIT_REACHED` 放行(唯一差异态);扫表断言持久化 status 值域仅 ACTIVE/REVOKED
+- [x] T-05 effectiveStatus 四态 + establish/resolve 差异放行
+  - **Evidence**
+    - verify: 红 `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js`（仅测试就位、源码回退 HEAD）→ EXIT=1（3 failed / 13 passed，行为缺失非语法）；绿同命令 → EXIT=0（16/16）；主 AI `pnpm --dir mail-worker test` → EXIT=0（17 files / 185 tests）
+    - files: `mail-worker/src/service/share-auth-service.js:25-38,227-239,269,299,306` · `mail-worker/test/share-auth-service.spec.js:355-493` · `mail-worker/package.json:14`
+    - AC: AC-LIFE-01, AC-LIFE-02, AC-LIFE-04, AC-LIFE-05, AC-LIFE-07, AC-SESS-06
+    - commit: c7789e6
+  - [x]* T-05.1 红:`mail-worker/test/share-auth-service.spec.js` 加 `effectiveStatus` 全组合真值表(property,fast-check ≥100 轮):优先级 REVOKED > EXPIRED > ACCESS_LIMIT_REACHED > ACTIVE、纯函数零写库;`establishSession` 拒一切非 ACTIVE,`resolveSession` 对 `ACCESS_LIMIT_REACHED` 放行(唯一差异态);扫表断言持久化 status 值域仅 ACTIVE/REVOKED
     - **P-LIFE-02: 状态判定纯函数性** _Validates: AC-LIFE-01, AC-LIFE-02_
     - **P-SESS-03: 触顶不清场** _Validates: AC-SESS-06, AC-LIFE-04_
     - _Requirements: AC-LIFE-01, AC-LIFE-02, AC-LIFE-04, AC-LIFE-05, AC-LIFE-07, AC-SESS-06_
-  - [ ] T-05.2 绿:改造 `mail-worker/src/service/share-auth-service.js:25-33` `effectiveStatus` 加 `ACCESS_LIMIT_REACHED` 分支(`max_sessions IS NOT NULL AND access_count >= max_sessions`);`assertShareActive` 拆分为按调用方区分;`SHARE_ENABLED` 冻结语义与过期双重封顶断言保持
+    - **Evidence**
+      - verify: 红同上命令 → EXIT=1（真值表拿到 ACTIVE、resolve 硬编码 ACTIVE、触顶行仍被 establish 放行）
+      - files: `mail-worker/test/share-auth-service.spec.js:355-493`
+      - AC: AC-LIFE-01, AC-LIFE-02, AC-LIFE-04, AC-SESS-06
+      - commit: c7789e6
+  - [x] T-05.2 绿:改造 `mail-worker/src/service/share-auth-service.js:25-33` `effectiveStatus` 加 `ACCESS_LIMIT_REACHED` 分支(`max_sessions IS NOT NULL AND access_count >= max_sessions`);`assertShareActive` 拆分为按调用方区分;`SHARE_ENABLED` 冻结语义与过期双重封顶断言保持
     - _Requirements: AC-LIFE-02, AC-LIFE-04_
+    - **Evidence**
+      - verify: 绿 `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js` → EXIT=0（16/16）；主 AI 全量 `pnpm --dir mail-worker test` → EXIT=0（17/185）；`fast-check` 精确钉 `4.9.0`
+      - files: `mail-worker/src/service/share-auth-service.js:25-38,227-239,269,299,306` · `mail-worker/package.json:14`
+      - AC: AC-LIFE-02, AC-LIFE-04
+      - commit: c7789e6
 
 - [ ] T-06 配额闸门:`consumeSessionQuota` 单语句条件 UPDATE(取代 fire-and-forget `recordAccess`)
-  - [ ]* T-06.1 红:`mail-worker/test/share-auth-service.spec.js` —— 成功建会话 `access_count` 恰 +1(RETURNING 含 status/expires/cv/配额四条件);触顶/撤销/过期/cv 变 → 拒发零变更;并发抢最后名额恰 max 次成功(P-SESS-01,复用 `transaction.spec.js` 单语句原子先例);读请求序列(mails/mail/attachment/status)零配额消耗(P-SESS-02);条件 UPDATE 前状态变更注入 → 正确拒发;UPDATE 后 TOCTOU 注入 → token 首次回源失败、名额不退还(文档化行为)
+  - [ ]* T-06.1 红:`mail-worker/test/share-auth-service.spec.js` —— 成功建会话 `access_count` 恰 +1(RETURNING 含 status/expires/cv/配额四条件);触顶/撤销/过期/cv 变 → 拒发零变更;并发抢最后名额恰 max 次成功(P-SESS-01,必须 `Promise.allSettled` 并发,串行 await 是假绿);读请求序列(mails/mail/attachment)零配额消耗(P-SESS-02;status 端点属 T-14,本任务以 resolveSession 源码无写护栏代替);条件 UPDATE 前状态变更注入 → 正确拒发;UPDATE 后 TOCTOU 注入 → token 首次回源失败、名额不退还(文档化行为);配额 UPDATE 失败/RETURNING 空 → 拒发(AC-SESS-11)
     - **P-SESS-01: 配额不超发** _Validates: AC-SESS-01, AC-SESS-07, AC-EDGE-02_
     - **P-SESS-02: 读请求零配额消耗** _Validates: AC-SESS-02, AC-EDGE-01, AC-EDGE-11_
     - _Requirements: AC-SESS-01, AC-SESS-02, AC-SESS-05, AC-SESS-07, AC-EDGE-01, AC-EDGE-02, AC-EDGE-10, AC-EDGE-13_
-  - [ ] T-06.2 绿:`share-auth-service.js` 重写 `establishSession` 流程(读快照取 cv → 校验 → 条件 UPDATE `WHERE status='ACTIVE' AND expires_at > now AND credentials_version = :cv AND (max_sessions IS NULL OR access_count < max_sessions) RETURNING` → 非空才 `issueToken`);`last_access_at` 保持 fire-and-forget;`exp = min(expires_at, iat+TTL)` 不变、无续期路径;拒绝路径打 `share.session.denied_quota` 日志;无先读后写两步(AC-SEC-08 原子写半边)
+  - [ ] T-06.2 绿:`share-auth-service.js` 重写 `establishSession` 流程(读快照取 cv → 校验 → 条件 UPDATE `WHERE status='ACTIVE' AND expires_at > now AND credentials_version = :cv AND (max_sessions IS NULL OR access_count < max_sessions) RETURNING` → 非空才 `issueToken`);`last_access_at` 与 `access_count` 同在闸门成功语句,establish 路径不再保留 fire-and-forget 库写;`exp = min(expires_at, iat+TTL)` 不变、无续期路径;快照已触顶与闸门落空两处均打 `share.session.denied_quota`(reason=`quota_snapshot`/`quota_race`);无先读后写两步状态变更(AC-SEC-08;读快照取 cv 保留)
     - _Requirements: AC-SESS-01, AC-SESS-05, AC-SEC-08_
 
 - [ ] T-07 Session 建立幂等恢复:KV 结果重放(R3-A3)
@@ -111,7 +150,7 @@
     - _Requirements: AC-SESS-10_
 
 - [ ] T-08 AuthKey 第二因子 + `credentials_version` + ShareContext 集合化 + session 响应扩展
-  - [ ]* T-08.1 红:`mail-worker/test/share-auth-service.spec.js` —— 启用 Key 后无 Key/错 Key → `SHARE_AUTH_REQUIRED`、零 token、零配额、无锁定副作用(扫 schema 断言无 `mail_share_auth_fail` 表);`lid` 不存在/`sec` 错 + 任意 authKey 组合恒 `SHARE_UNAVAILABLE`(P-AUTH-01 property);reset 后旧 token 回源 → `SHARE_UNAVAILABLE`、新 Key 建会话成功且消耗新配额(P-AUTH-02);cv 严格单调;换 IP 头重放读请求仍 200;429 独立运输层、零配额;session 响应含 `shareType`/`mailboxes`(掩码)/`expiresAt`/`config` 四件、统计写失败注入仍签发
+  - [ ]* T-08.1 红:`mail-worker/test/share-auth-service.spec.js` —— 启用 Key 后无 Key/错 Key → `SHARE_AUTH_REQUIRED`、零 token、零配额、无锁定副作用(扫 schema 断言无 `mail_share_auth_fail` 表);`lid` 不存在/`sec` 错 + 任意 authKey 组合恒 `SHARE_UNAVAILABLE`(P-AUTH-01 property);reset 后旧 token 回源 → `SHARE_UNAVAILABLE`、新 Key 建会话成功且消耗新配额(P-AUTH-02);cv 严格单调;换 IP 头重放读请求仍 200;429 独立运输层、零配额;session 响应含 `shareType`/`mailboxes`(掩码)/`expiresAt`/`config` 四件、KV 写失败注入仍签发(fail-open,与 T-07.1 合并;配额 UPDATE 失败改走 AC-SESS-11 拒发)
     - **P-AUTH-01: Visitor 失败不可区分性** _Validates: AC-AUTH-01, AC-AUTH-02, AC-EDGE-08_
     - **P-AUTH-02: credentials_version 单调失效** _Validates: AC-AUTH-04, AC-EDGE-05_
     - _Requirements: AC-AUTH-01, AC-AUTH-02, AC-AUTH-03, AC-AUTH-04, AC-AUTH-05, AC-AUTH-06, AC-SESS-08, AC-SESS-09, AC-EDGE-05, AC-EDGE-12, AC-LIFE-03_
