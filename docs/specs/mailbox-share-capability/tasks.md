@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W3 T-18 APPROVED · 下一波 T-19 |
+| 状态 Status | in-progress · W3 T-19 APPROVED · 下一波 T-20 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -448,7 +448,14 @@
       - AC: AC-LIFE-06, AC-LIFE-09
       - commit: 73dc371
 
-- [ ] T-19 Checkpoint · 后端收口:`pnpm --dir mail-worker test` 全绿 + `share-integration.spec.js` 扩展多邮箱/配额/AuthKey 端到端集成用例
+- [x] T-19 Checkpoint · 后端收口:`pnpm --dir mail-worker test` 全绿 + `share-integration.spec.js` 扩展多邮箱/配额/AuthKey 端到端集成用例
+  - **Evidence**
+    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/share-integration.spec.js --no-cache` → 5 failed / 32 passed（37）；绿同命令 37/37；P1-1 后主 AI 独立定点 38/38 + 全量 worker 18/619、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/test/share-integration.spec.js`（生产代码 0 行）
+    - AC: AC-CAP-01/02/03/05/07, AC-BIND-02/03/04/05/08, AC-MAIL-01/02/08, AC-SESS-01/02/06/07/09/10, AC-AUTH-01/02/07/08, AC-ADMIN-03/04/05/07/09, AC-EDGE-01/02/04/05/12/14, AC-LIFE-04/11, AC-SEC-09
+    - commit: 03d987c · P1: db1e511
+    - decision: V2 只经 jsonWorker + try/finally；既有 17 条断言不改；T19-P1-1 CHANGE（leak 守卫改 instr 子串）；不重复 perm
+    - review: `review-t19.md` NEEDS_CHANGES p1=1 → `review-t19-r2.md` APPROVED p0=0
 
 ### W4 · 前端管理模块(layout 域,登录态 axios)
 
@@ -535,6 +542,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-19 `03d987c` / P1 `db1e511` 勾选。R2 APPROVED p0=0。主 AI 独立定点 38/38 + 全量 worker 18/619、vue 17/95、E2E 13。T-20 侦察已落；T20-ASIDE/CARD CHANGE、T20-ACTIONS HOLD。未勾选尾：T-20 → T-29。
 - 2026-08-24 · 主 AI:T-18 `73dc371` 勾选。审查 APPROVED p0=0（P2-1 HOLD）。主 AI 独立定点 27/27 + 全量 worker 18/598、vue 17/95、E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。
 - 2026-08-24 · 主 AI:T-17 审查 APPROVED p0=0。T-18 侦察已落。裁决 T18-DUAL（Binding 为主、无 Binding 回落主表）与 T18-ORPHAN-REVOKE（补偿后剩 0 则撤销）。未勾选尾：T-18 → T-29。
 - 2026-08-24 · 主 AI:T-16 审查 APPROVED p0=0。T-17 `d18f027` 勾选。主 AI 独立定点 148/148 + 全量 worker 18/577、vue 17/95、E2E 13。未勾选尾：T-17 审查 / T-18 → T-29。

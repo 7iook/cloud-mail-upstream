@@ -62,6 +62,9 @@
 | W3 | T-18 级联撤销 + cleanup | ✅ 已提交 `73dc371` | generalPurpose≈executor | 主 AI 独立 27/27 · 全量 18/598 |
 | W3 | T-18 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t18.md` · P2-1 HOLD |
 | W3 | T-19 Checkpoint 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t19-checkpoint.md` |
+| W3 | T-19 集成用例 | ✅ 已提交 `03d987c` · P1 `db1e511` | generalPurpose≈executor | 主 AI 独立 38/38 · 全量 18/619 |
+| W3 | T-19 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t19-r2.md` |
+| W4 | T-20 列表页侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t20-share-admin.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -121,6 +124,11 @@
 | T18-DUAL | CHANGE:级联双臂 — Binding 为主，无 Binding 遗留行回落主表 `account_id` | recon-t18；两臂互斥，不造第二真源 |
 | T18-ORPHAN-REVOKE | CHANGE:cleanup 孤儿补偿后剩 0 活邮箱则 REVOKED | 与成功态「剩 0 则撤销」对齐，避免占活跃名额 |
 | T18-P2-1 | HOLD:cleanup 用例不单独证伪「单 batch / 主表最后」 | review-t18 P2；当前实现已是单 batch，不为本轮扩测 |
+| T19-P1-1 | CHANGE:leak 守卫从整格相等改为 `instr` 子串 | review-t19；`db1e511` |
+| T20-ASIDE | CHANGE:T-20 纳入 aside 个人组入口，复用既有 `shareManage` 键 | recon-t20；不改 i18n 文件 |
+| T20-ACTIONS | HOLD:行内撤销/删除按钮归 T-21 | T-20 只列表+筛选+分页 |
+| T20-CARD | CHANGE:列表走卡片轨，不走 `el-table` | recon-t20；决定 W4 视觉基调 |
+| T20-ROUTE | CHANGE:路由对象落 `perm/perm.js` 的 `routers['share:manage']`，`router/index.js` 0 行 | 任务书字面与 permsToRouter 互斥，取可执行的那个 |
 
 ## 冲突热区占用
 
@@ -137,6 +145,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-19 `03d987c` / P1 `db1e511` 入库。R2 APPROVED。主 AI 独立 38/38 + 全量 18/619 · 17/95 · E2E 13。T-20 侦察已落。未勾选尾：T-20 → T-29。
 - 2026-08-24 · 主 AI：T-18 `73dc371` 入库。审查 APPROVED p0=0。主 AI 独立 27/27 + 全量 18/598 · 17/95 · E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。
 - 2026-08-24 · 主 AI：T-17 审查 APPROVED。T-18 侦察已落。T18-DUAL / T18-ORPHAN-REVOKE 已裁。未勾选尾：T-18 → T-29。
 - 2026-08-24 · 主 AI：T-16 审查 APPROVED。T-17 `d18f027` 入库。主 AI 独立 148/148 + 全量 18/577 · 17/95 · E2E 13。未勾选尾：T-17 审查 / T-18 → T-29。
