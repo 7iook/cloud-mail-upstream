@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W4 T-20 APPROVED · T-21 实现已入库、P1/P2 待 R2 |
+| 状态 Status | in-progress · W4 T-21 APPROVED · 下一波 T-23 入库 / T-22 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -481,9 +481,21 @@
       - AC: AC-ADMIN-01, AC-ADMIN-09
       - commit: 672da73
 
-- [ ] T-21 详情抽屉:Binding 管理 + 配置编辑 + AuthKey 区
-  - [ ]* T-21.1 红→绿:`views/share-admin/` 组件 spec —— Binding 增删调 `PUT /mailShare/bindings`;配置编辑调 `PUT /mailShare/update`(含 `resetUsedSessions` 确认交互);AuthKey 区状态展示 + enable/reset/disable(新 Key 一次性展示,复用 `mail-vue/src/views/email/ShareDialog.vue:161-189` 一次性密钥展示模式);掩码开关文案为「显示完整地址(展示选项)」不得暗示保密效果
+- [x] T-21 详情抽屉:Binding 管理 + 配置编辑 + AuthKey 区
+  - **Evidence**
+    - verify: 主 AI 独立定点 4 files / 64 tests + `T21-P` 4/4；全量 vue 20/161（含工作树未入库 T-23 4 条；T-21 地板 20/157）、worker 18/619、E2E 13，均为 EXIT=0
+    - files: `mail-vue/src/views/share-admin/ShareDetailDrawer.vue` · `ShareDetailDrawer.spec.js` · `ShareRowActions.vue` · `ShareRowActions.spec.js` · `index.vue`(+7) · `index.spec.js` · `status.js`
+    - AC: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-05
+    - commit: 00b0ae1 · 5af8675
+    - decision: T21-INLINE HOLD（不抽 OneShotSecret）；T21-RESET-BOX CHANGE（清零走弹窗）；T21-FLIP CHANGE（翻面 0-button）；T21-P1-1/P2-1 CHANGE（`reqGen` 丢弃迟到响应；disable 清空一次性 Key）
+    - review: `review-t21.md` NEEDS_CHANGES → `review-t21-r2.md` APPROVED p0=0
+  - [x]* T-21.1 红→绿:`views/share-admin/` 组件 spec —— Binding 增删调 `PUT /mailShare/bindings`;配置编辑调 `PUT /mailShare/update`(含 `resetUsedSessions` 确认交互);AuthKey 区状态展示 + enable/reset/disable(新 Key 一次性展示,复用 `mail-vue/src/views/email/ShareDialog.vue:161-189` 一次性密钥展示模式);掩码开关文案为「显示完整地址(展示选项)」不得暗示保密效果
     - _Requirements: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-05_
+    - **Evidence**
+      - verify: 主 AI 独立定点 64/64 + P1/P2 4/4；审查 R2 APPROVED
+      - files: `mail-vue/src/views/share-admin/ShareDetailDrawer.spec.js` · `ShareRowActions.spec.js` · `index.spec.js`
+      - AC: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-05
+      - commit: 00b0ae1 · 5af8675
 
 - [ ] T-22 创建向导:四预设 + 幂等恢复 + V2 降级
   - [ ]* T-22.1 红→绿:向导 spec —— 四预设(单邮箱验证码/临时邮箱/多邮箱验证码池/自定义)仅前端表单预填,请求不含预设标识;提交带 `Idempotency-Key`,结果未知同 key 重试,重放识别 `idempotentReplay` 且无 `sec` 明文 → 引导 revoke/delete 后重建,禁止换 key 盲建;V2=false 时多邮箱/AuthKey/配额表单项以「能力未激活」置灰;成功后一次性展示 `shareUrl`(+`authKey`),复用 `mail-vue/src/views/email/build-share-url.js`
@@ -559,6 +571,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-21 R2 APPROVED p0=0（`review-t21-r2.md`）。P1-1/P2-1 CLOSED。主 AI 独立定点 64/64 + 全量 vue 20/161、worker 18/619、E2E 13。未勾选尾：T-23 入库 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-21 实现 `00b0ae1`。审查 NEEDS_CHANGES p0=0 p1=1 p2=1（`review-t21.md`）。T21-P1-1/P2-1 均 CHANGE：`reqGen` 丢弃迟到响应；disable 清空一次性 Key。定点 4 files / 64 tests。T-21 未勾选（等 R2）。未勾选尾：T-21 R2 / T-23 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-20 审查 APPROVED p0=0（`review-t20.md`）。T-22 侦察已落。裁决 T21-INLINE / T21-RESET-BOX / T21-FLIP / T22-V2-COLLIDE / T22-CREATE-EXPAND；排期 T-21 先于 T-22。未勾选尾：T-21 → T-29。
 - 2026-08-24 · 主 AI:T-20 `672da73` 勾选。主 AI 独立定点 20/20 + 全量 vue 18/113、worker 18/619、E2E 13，均为 EXIT=0。`pnpm --dir mail-vue build` 绿。审查 pending。未勾选尾：T-20 审查 / T-21 → T-29。

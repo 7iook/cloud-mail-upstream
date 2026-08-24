@@ -1,0 +1,71 @@
+T-21 R2 · re-review C1-class drawer stale-response + disable key clear
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Fix commit: 5af8675 fix(vue): isolate stale share-admin drawer responses
+Parent impl: 00b0ae1 feat(vue): add share-admin detail drawer and row actions
+Round-1 review: /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t21.md
+  Verdict was NEEDS_CHANGES; P0=0; P1-1 stale A→B overwrite; P2-1 disable keeps spent AuthKey.
+
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files. Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t21-r2.md
+
+You are a heterogeneous reviewer. Do not trust executor notes or the main AI narrative.
+Read the 5af8675 diff and the current ShareDetailDrawer files yourself. Run the tests yourself.
+
+## Original requirement (from tasks.md)
+
+T-21 详情抽屉: Binding 管理 + 配置编辑 + AuthKey 区
+- Binding 增删调 PUT /mailShare/bindings
+- 配置编辑调 PUT /mailShare/update（含 resetUsedSessions 确认交互）
+- AuthKey 区 enable/reset/disable；新 Key 一次性展示
+- 掩码开关文案为「显示完整地址(展示选项)」不得暗示保密效果
+
+Success state (user view):
+NOT "drawer has generation counters", BUT: an owner who opens share B after share A never sees A's detail, never sees A's one-shot AuthKey, and never has B closed by A's SHARE_NOT_FOUND; after a successful disable the spent key is gone from the page.
+Negative: no "display A, write B"; no leftover plaintext after disable.
+
+## Already decided (do not reopen as defects)
+
+- T21-INLINE HOLD: do not extract OneShotSecret.vue
+- T21-RESET-BOX CHANGE: resetUsedSessions uses ElMessageBox
+- T21-FLIP CHANGE: the old 0-button row assertion was flipped and registered
+- T21-P1-1 CHANGE: reqGen + isCurrent(gen, shareId); bump on shareId watch and close()
+- T21-P2-1 CHANGE: authKeyOnce.value = authKey || ''
+- Pending i18n keys via tf() are T-29, not a defect
+- T-22 / T-23 files in the dirty or later tree are out of scope
+
+## Scope of this R2
+
+Only decide whether P1-1 and P2-1 are closed, and whether 5af8675 introduced a new P0.
+Do not re-litigate the round-1 PASS checklist unless a PASS item is now broken.
+
+## What to verify
+
+1. git show --stat 5af8675 is drawer vue+spec + review-t21.md + ledger/tasks only.
+2. watch(shareId) bumps gen before clearing state and calling load.
+3. close() bumps gen so a late SHARE_NOT_FOUND cannot closeGone after the drawer is shut.
+4. load / runBindingChange / submitSave / submitAuthKey all gate applyDetail / authKeyOnce / closeGone / errors on isCurrent.
+5. disable success clears authKeyOnce even when the response has no authKey property.
+6. New tests exist and are not vacuous:
+   - late detail for A after opening B is dropped
+   - late enable AuthKey for A does not paint onto B
+   - late SHARE_NOT_FOUND for A does not close B
+   - enable then disable clears the one-shot region
+7. Production caller still exists (index.vue mounts the drawer). Not tests-only.
+
+## Required tests (run yourself, --no-cache)
+
+pnpm --dir mail-vue exec vitest run src/views/share-admin/ShareDetailDrawer.spec.js src/views/share-admin/ShareRowActions.spec.js src/views/share-admin/index.spec.js src/request/mail-share.spec.js --no-cache
+
+Also run:
+pnpm --dir mail-vue exec vitest run src/views/share-admin/ShareDetailDrawer.spec.js --no-cache -t 'T21-P'
+
+Report file/test counts. Do not treat executor notes as evidence.
+
+## Output
+
+Write review-t21-r2.md with: Verdict APPROVED | NEEDS_CHANGES; P0/P1/P2; for each of P1-1 / P2-1 write CLOSED or STILL OPEN with file:line; commands you actually ran.
+
+Reply to user in Chinese.
