@@ -42,7 +42,7 @@
 | W2 | T-12 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-w2-t12-create.md` |
 | W2 | T-12 | ✅ 已提交 `b6f5a28` | generalPurpose≈executor | 主 AI 复跑 mail-share 106/106；全量 17/289 |
 | W2 | T-12 代码审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t12-r2.md` |
-| W1 | T-09 Checkpoint | ✅ 冻结公告已落 · Evidence commit 本批 | 主 AI | `share-context-freeze.md` · worker 17/317 |
+| W1 | T-09 Checkpoint | ✅ 已提交 `dd1de15` | 主 AI | `share-context-freeze.md` · worker 17/317 |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -99,6 +99,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-09 Evidence 回写 `dd1de15`。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08/T-12 复审均 APPROVED p0=0（`review-t08-r2.md` / `review-t12-r2.md`）。T-09 冻结公告已落。并行派 T-10 / T-13。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08 CHANGE 入库 `bc2b4e2`，T-12 CHANGE 入库 `6b5d29b`。主 AI 独立 90/90 + 132/132 + 全量 17/317 · 17/95 · E2E 13，均为 EXIT=0。未勾选尾：复审 → T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08/T-12 代码审查均 NEEDS_CHANGES。T08-C1/I1/M1 CHANGE；T12-P0-1/P1-1 CHANGE（哈希 d5c870…≠6ddde5… 已独立复算）。并行派修复，文件不重叠。未勾选尾：T-08/T-12 审查收口 → T-09 / T-10 / T-13 → T-29。

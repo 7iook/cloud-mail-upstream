@@ -218,7 +218,7 @@
     - verify: 主 AI 独立 `pnpm --dir mail-worker test --no-cache` → EXIT=0（17/317）；`pnpm --dir mail-vue test` → EXIT=0（17/95）；`node tests/e2e/run.mjs` → EXIT=0（13）。地板 16/138 只增不减。无旧 spec 语义冲突，未改断言口径。
     - files: `mail-worker/src/service/share-auth-service.js:348-368` · `.agent-workspace/.archive/2026-08-24/mailbox-share-capability/share-context-freeze.md`
     - AC: W1-ctx（bindings 为真源；`accountId`/`windowStartEmailId` 垫片至 T-11）
-    - commit: pending
+    - commit: dd1de15
 
 ### W2 · 读路径与 Binding CRUD(依赖 T-08 冻结的 ShareContext;文件不冲突时 T-10/T-12 可与 W1 后半并行起跑)
 
@@ -391,6 +391,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-09 Evidence `commit` 回写 `dd1de15`。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08/T-12 复审 APPROVED p0=0。T-09 冻结公告已落。并行派 T-10 / T-13。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08 审查 CHANGE 入库 `bc2b4e2`（AuthKey enable 谓词 + KV 绑 cv）；T-12 审查 CHANGE 入库 `6b5d29b`（旧指纹双向兼容 + flag 值域）。主 AI 独立 定点 90/90 + mail-share 132/132 + 全量 worker 17/317、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-08 代码审查 NEEDS_CHANGES（C1/I1/M1 CHANGE）；T-12 代码审查 NEEDS_CHANGES（P0-1/P1-1 CHANGE）。并行派修复。未勾选尾：审查收口 → T-09 / T-10 / T-13 → T-29。
