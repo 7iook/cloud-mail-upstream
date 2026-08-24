@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W3 T-17 R2 APPROVED · 下一波 T-18 |
+| 状态 Status | in-progress · W3 T-18 APPROVED · 下一波 T-19 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -425,11 +425,28 @@
       - AC: AC-ADMIN-10
       - commit: d18f027
 
-- [ ] T-18 级联撤销经 Binding JOIN + cleanup 清理守恒
-  - [ ]* T-18.1 红:`mail-worker/test/account-delete-share.spec.js` 扩展 —— 软删/硬删 account → 对应 Binding 剔除、余箱分享保持 ACTIVE、剩 0 → REVOKED、双写主表同步;`mail-worker/test/mail-share-cleanup.spec.js` 扩展 —— cleanup 跑后到期 share 的 binding 行同批删除零孤儿、注入孤儿 Binding → 补偿剔除
+- [x] T-18 级联撤销经 Binding JOIN + cleanup 清理守恒
+  - **Evidence**
+    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/account-delete-share.spec.js test/mail-share-cleanup.spec.js --no-cache` → 15 failed / 11 passed（26）；绿同命令 → 27/27（含 A12 顺序守卫）；主 AI 独立定点 27/27 + 全量 worker 18/598、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/src/service/mail-share-service.js:768-818,1425-1474` · `mail-worker/src/service/mail-share-cleanup-service.js:1-115` · `mail-worker/test/account-delete-share.spec.js` · `mail-worker/test/mail-share-cleanup.spec.js`
+    - AC: AC-BIND-05, AC-BIND-06, AC-BIND-10, AC-BIND-11, AC-LIFE-06, AC-LIFE-09, AC-LIFE-10
+    - commit: 73dc371
+    - decision: T18-DUAL 双臂（Binding 为主、零 Binding 回落主表）；T18-ORPHAN-REVOKE 补偿后剩 0 则 REVOKED；集合走 `json_each`；`account-service.js` 0 行；T18-P2-1 HOLD（cleanup 用例不单独证伪 batch 顺序）
+    - review: `review-t18.md` APPROVED p0=0
+  - [x]* T-18.1 红:`mail-worker/test/account-delete-share.spec.js` 扩展 —— 软删/硬删 account → 对应 Binding 剔除、余箱分享保持 ACTIVE、剩 0 → REVOKED、双写主表同步;`mail-worker/test/mail-share-cleanup.spec.js` 扩展 —— cleanup 跑后到期 share 的 binding 行同批删除零孤儿、注入孤儿 Binding → 补偿剔除
     - _Requirements: AC-BIND-05, AC-BIND-06, AC-LIFE-06, AC-LIFE-09, AC-BIND-10_
-  - [ ] T-18.2 绿:`mail-share-service.js:394-415` `revokeByAccountIds` 改经 Binding JOIN(打 `share.binding.cascade` 日志);`mail-worker/src/service/mail-share-cleanup-service.js:20-28` 同批删 binding + 孤儿补偿;`mail-worker/src/service/account-service.js` 挂钩点(`:159,184,250`)保持调用不变
+    - **Evidence**
+      - verify: 红（执行者）15 failed；主 AI 独立绿 17+10=27/27
+      - files: `mail-worker/test/account-delete-share.spec.js` · `mail-worker/test/mail-share-cleanup.spec.js`
+      - AC: AC-BIND-05, AC-BIND-06, AC-LIFE-06, AC-LIFE-09, AC-BIND-10
+      - commit: 73dc371
+  - [x] T-18.2 绿:`mail-share-service.js:394-415` `revokeByAccountIds` 改经 Binding JOIN(打 `share.binding.cascade` 日志);`mail-worker/src/service/mail-share-cleanup-service.js:20-28` 同批删 binding + 孤儿补偿;`mail-worker/src/service/account-service.js` 挂钩点(`:159,184,250`)保持调用不变
     - _Requirements: AC-LIFE-06, AC-LIFE-09_
+    - **Evidence**
+      - verify: 绿定点 27/27；主 AI 全量 worker 18/598、vue 17/95、E2E 13，均为 EXIT=0
+      - files: `mail-worker/src/service/mail-share-service.js:768-818,1425-1474` · `mail-worker/src/service/mail-share-cleanup-service.js:34-112`
+      - AC: AC-LIFE-06, AC-LIFE-09
+      - commit: 73dc371
 
 - [ ] T-19 Checkpoint · 后端收口:`pnpm --dir mail-worker test` 全绿 + `share-integration.spec.js` 扩展多邮箱/配额/AuthKey 端到端集成用例
 
@@ -518,6 +535,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-18 `73dc371` 勾选。审查 APPROVED p0=0（P2-1 HOLD）。主 AI 独立定点 27/27 + 全量 worker 18/598、vue 17/95、E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。
 - 2026-08-24 · 主 AI:T-17 审查 APPROVED p0=0。T-18 侦察已落。裁决 T18-DUAL（Binding 为主、无 Binding 回落主表）与 T18-ORPHAN-REVOKE（补偿后剩 0 则撤销）。未勾选尾：T-18 → T-29。
 - 2026-08-24 · 主 AI:T-16 审查 APPROVED p0=0。T-17 `d18f027` 勾选。主 AI 独立定点 148/148 + 全量 worker 18/577、vue 17/95、E2E 13。未勾选尾：T-17 审查 / T-18 → T-29。
 - 2026-08-24 · 主 AI:T-16 `3bb1d55` 勾选。主 AI 独立定点 219/219 + 全量 worker 18/465、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-16 审查 / T-17 → T-29。

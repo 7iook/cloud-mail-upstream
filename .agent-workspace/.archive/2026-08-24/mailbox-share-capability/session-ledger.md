@@ -59,6 +59,9 @@
 | W3 | T-17 perm 8 条 | ✅ 已提交 `d18f027` | generalPurpose≈executor | 主 AI 独立 148/148 · 全量 18/577 |
 | W3 | T-17 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t17.md` |
 | W3 | T-18 级联侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t18-cascade.md` |
+| W3 | T-18 级联撤销 + cleanup | ✅ 已提交 `73dc371` | generalPurpose≈executor | 主 AI 独立 27/27 · 全量 18/598 |
+| W3 | T-18 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t18.md` · P2-1 HOLD |
+| W3 | T-19 Checkpoint 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t19-checkpoint.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -117,6 +120,7 @@
 | T17-ADMIN | HOLD:admin 邮箱绕过 perm 的正向契约用例本轮不补 | 与负向种子禁 admin 贴边；登记债等单独任务 |
 | T18-DUAL | CHANGE:级联双臂 — Binding 为主，无 Binding 遗留行回落主表 `account_id` | recon-t18；两臂互斥，不造第二真源 |
 | T18-ORPHAN-REVOKE | CHANGE:cleanup 孤儿补偿后剩 0 活邮箱则 REVOKED | 与成功态「剩 0 则撤销」对齐，避免占活跃名额 |
+| T18-P2-1 | HOLD:cleanup 用例不单独证伪「单 batch / 主表最后」 | review-t18 P2；当前实现已是单 batch，不为本轮扩测 |
 
 ## 冲突热区占用
 
@@ -126,12 +130,14 @@
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` | T-14 已入库 `d6fa50b` | 其后只加路由须新任务；W3 不写此文件 |
 | `security.js` | T-17 已入库 `d18f027` | 其后只读，除非再加 Owner 路径 |
-| `mail-share-service.js` | T-16 已入库 `3bb1d55` | 下一写者 T-18（级联撤销） |
+| `mail-share-service.js` | T-18 已入库 `73dc371` | 其后只读，除非再开任务 |
+| `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-18 `73dc371` 入库。审查 APPROVED p0=0。主 AI 独立 27/27 + 全量 18/598 · 17/95 · E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。
 - 2026-08-24 · 主 AI：T-17 审查 APPROVED。T-18 侦察已落。T18-DUAL / T18-ORPHAN-REVOKE 已裁。未勾选尾：T-18 → T-29。
 - 2026-08-24 · 主 AI：T-16 审查 APPROVED。T-17 `d18f027` 入库。主 AI 独立 148/148 + 全量 18/577 · 17/95 · E2E 13。未勾选尾：T-17 审查 / T-18 → T-29。
 - 2026-08-24 · 主 AI：T-16 `3bb1d55` 入库。主 AI 独立 219/219 + 全量 18/465 · 17/95 · E2E 13。T-17 侦察已落（premKey 与 requirePermsExact 必须同改）。未勾选尾：T-16 审查 / T-17 → T-29。
