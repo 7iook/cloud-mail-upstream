@@ -959,15 +959,62 @@ function normalizeListStatus(params) {
 
 // 变更入口只认 effectiveStatus=ACTIVE 的本人分享(AC-BIND-02)。他人 / 不存在 / 已撤销 /
 // 已过期共用 revoke 的 `SHARE_NOT_FOUND`,不新增可区分错误码。
+// `auth_key_enabled` 只为 resetAuthKey 选错误码而取:并发下的正确性由写入语句自己的
+// 同款守卫谓词负责,预读不是防线。
 async function loadMutableShare(c, shareId, userId) {
 	const row = isRowId(shareId) ? await c.env.db.prepare(`
-		SELECT share_id, lid, only_messages_after_created FROM mail_share
+		SELECT share_id, lid, only_messages_after_created, auth_key_enabled FROM mail_share
 		WHERE share_id = ? AND user_id = ? AND status = 'ACTIVE' AND expires_at > ?
 	`).bind(shareId, userId, nowText()).first() : null;
 	if (!row) {
 		throw new BizError('SHARE_NOT_FOUND');
 	}
 	return row;
+}
+
+// design.md:311-329 的状态机表:源态 → 目标列值 → cv 增量 → 是否过 V2 栅栏。
+// `fromEnabled` 是迁移守卫,`reset` 的 1 尤其关键 —— AC-LIFE-11 只门控 enable,一旦允许
+// `reset` 落在 `auth_key_enabled=0` 的行上,它就是一次绕过 `AUTH_KEY_ENABLE` 栅栏的 enable。
+// 守卫是栅栏的一部分,不是可选的健壮性装饰。
+// `enable` 的 cvBump 恒为 0(AC-AUTH-07:建立时本无 Key 要求的 Session 不追溯失效);
+// 它留下的在飞 establish 窗口由 `consumeSessionQuota` 的 `auth_key_enabled` 谓词关闭,
+// 不要在这里「求稳」加一。
+const AUTH_KEY_TRANSITIONS = {
+	enable: { fromEnabled: 0, toEnabled: 1, mintsKey: true, cvBump: 0, gated: true },
+	reset: { fromEnabled: 1, toEnabled: 1, mintsKey: true, cvBump: 1, gated: false },
+	disable: { fromEnabled: 1, toEnabled: 0, mintsKey: false, cvBump: 1, gated: false }
+};
+
+// 严格枚举:不 trim、不 toLowerCase、不接受数组包装(`String(['reset'])` 恰是 `'reset'`)、
+// 缺省不折成任何一条迁移。与 `FLAG_TOKENS:141-144` 同款教训 —— 归一化阶段把非法值折成
+// 合法值,「静默打开 AuthKey」就再也认不出来了。
+function toAuthKeyTransition(value) {
+	if (typeof value !== 'string' || !Object.prototype.hasOwnProperty.call(AUTH_KEY_TRANSITIONS, value)) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	return AUTH_KEY_TRANSITIONS[value];
+}
+
+// 三列恒在同一条 UPDATE 的同一个 SET 里赋值,物理上不存在 `enabled=1 / hash=NULL` 的中间态
+// (design.md:327 的不变量)。迁移守卫 `auth_key_enabled = ?` 与活跃谓词同在 WHERE:并发的两条
+// 命令只有一条能命中,输的一方零变更 —— DDL 侧没有 CHECK 兜底(`init.js:48-51` 是纯 ALTER)。
+function prepareAuthKeyUpdate(c, values) {
+	return c.env.db.prepare(`
+		UPDATE mail_share
+		SET auth_key_enabled = ?, auth_key_hash = ?, auth_key_kid = ?,
+			credentials_version = credentials_version + ?
+		WHERE share_id = ? AND user_id = ? AND status = 'ACTIVE' AND expires_at > ?
+			AND auth_key_enabled = ?
+	`).bind(
+		values.move.toEnabled,
+		values.authKeyHash,
+		values.authKeyKid,
+		values.move.cvBump,
+		values.shareId,
+		values.userId,
+		nowText(),
+		values.move.fromEnabled
+	);
 }
 
 // 全部拒绝路径都排在建 batch 之前(AC-BIND-12「零残留」):D1 没有 BEGIN,batch 一旦提交
@@ -1212,6 +1259,53 @@ const mailShareService = {
 			throw new BizError('SHARE_NOT_FOUND');
 		}
 		return { shareId };
+	},
+
+	// AC-AUTH-07 / AC-AUTH-08 / AC-ADMIN-05:AuthKey 的唯一写入口。三条迁移共用一条带守卫的
+	// 条件 UPDATE,`update` 的白名单里没有、也不许有这四列(design.md:328)。
+	// 顺序即语义,与 `assertCreateBody` / `assertUpdatePatch` 同构:
+	// ① action 值域 → ② 归属 + ACTIVE → ③ 迁移合法性 → ④ V2 栅栏。
+	// 前三条是永久领域错误,栅栏只是暂时的发布态;三者共用 `SHARE_INVALID_CONFIG` 一个码,
+	// 语义只能靠语句顺序保住。
+	async resetAuthKey(c, params, userId) {
+		const move = toAuthKeyTransition(params == null ? undefined : params.action);
+		const shareId = toShareId(params && params.shareId);
+		const share = await loadMutableShare(c, shareId, userId);
+		if (share.auth_key_enabled !== move.fromEnabled) {
+			throw new BizError('SHARE_INVALID_CONFIG');
+		}
+		if (move.gated) {
+			assertCapabilityV2(c, SHARE_V2_INTENT.AUTH_KEY_ENABLE);
+		}
+
+		// 与 create 同源:同一个 pepper、同一个 kid、同一个 `digestShareSecret`,否则
+		// `matchAuthKey` 永远验不过。kid 写**当前**值而不是行上原有值 —— 那等于顺手完成
+		// 一次 pepper 前滚;写回旧 kid 会在旧 pepper 退环后 fail-closed。
+		// disable 不需要 pepper,所以不为它做无谓的前置检查。
+		let authKey = '';
+		let authKeyHash = null;
+		let authKeyKid = null;
+		if (move.mintsKey) {
+			const pepper = c.env.SHARE_SEC_PEPPER;
+			if (!pepper) {
+				console.error('share reset auth key pepper missing');
+				throw new Error('share reset auth key pepper missing');
+			}
+			authKey = randomToken(16);
+			authKeyHash = await shareAuthService.digestShareSecret(authKey, pepper);
+			authKeyKid = c.env.SHARE_SEC_PEPPER_KID || 'v1';
+		}
+
+		const applied = await prepareAuthKeyUpdate(c, { move, authKeyHash, authKeyKid, shareId, userId }).run();
+		// 零变更有两个原因(并发 revoke / 过期,或并发迁移让守卫失配),一律按不存在处置 ——
+		// 与 `update` 同码,存在性探针保持封闭。正确的重试姿势本来就是重读再决定。
+		if (!applied.meta.changes) {
+			throw new BizError('SHARE_NOT_FOUND');
+		}
+
+		const detail = await loadOwnerDetail(c, shareId, userId);
+		// 明文恰一次,而且只在 enable / reset 挂键:disable 是「没有这个键」而不是空串。
+		return authKey ? { ...detail, authKey } : detail;
 	},
 
 	async list(c, params, userId) {

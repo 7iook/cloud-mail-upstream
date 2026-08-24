@@ -14,6 +14,7 @@ import mailShareService, {
 } from '../src/service/mail-share-service';
 import shareResult from '../src/model/share-result';
 import initSource from '../src/init/init.js?raw';
+import worker from '../src/index.js';
 import wranglerToml from '../wrangler.toml?raw';
 import { seedBindingRow, seedShareRow } from './setup.js';
 
@@ -2783,5 +2784,518 @@ describe('owner API surface for get / update / delete (T-15)', () => {
 		const dump = await ownerApi('GET', '/mailShare/list', { jwt });
 		expect(dump.json.data.total).toBe(3);
 		expect(dump.json.data.list).toHaveLength(3);
+	});
+});
+
+// ── T-16 · AuthKey 状态机（`POST /mailShare/resetAuthKey` 单入口）─────────────
+// design.md:311-329 的迁移表就是这一节的断言表：源态 → 目标列值 → cv 增量 → 是否过栅栏。
+// 分享行仍一律 seedShareRow 直接造：这里测的是「已存在的行被迁移」，create 的 AuthKey
+// 首发语义（`:952-1003`）是另一个写入口，两处不得互相顶替。
+
+const AUTH_KEY_COLUMNS = ['auth_key_enabled', 'auth_key_hash', 'auth_key_kid', 'credentials_version'];
+
+function authKeyColumns(row) {
+	return Object.fromEntries(AUTH_KEY_COLUMNS.map((column) => [column, row[column]]));
+}
+
+// design.md:327 的字段不变量，写成与实现无关的全表扫描：`enabled=1` IFF hash 与 kid 均非空。
+// DDL 侧没有、也无法追加 CHECK（`init.js:48-51` 是纯 ALTER ADD COLUMN），所以「schema 侧」
+// 只能靠这条断言表达。
+async function countAuthKeyInvariantBreaks() {
+	const row = await env.db.prepare(`
+		SELECT COUNT(*) AS bad FROM mail_share
+		WHERE (auth_key_enabled = 1) <> (auth_key_hash IS NOT NULL AND auth_key_kid IS NOT NULL)
+	`).first();
+	return row.bad;
+}
+
+// 种子 cv 刻意取 3 而不是 0：「enable 不变」与「reset/disable 恰 +1」才有可辨识的期望值。
+async function seedKeyed(overrides = {}) {
+	const share = await seedShareRow({
+		userId: USER_A,
+		accountId: ACC_A,
+		authKeyEnabled: 1,
+		authKeyHash: 't16-old-key-hash',
+		authKeyKid: 'v9',
+		credentialsVersion: 3,
+		...overrides
+	});
+	await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+	return share;
+}
+
+async function seedKeyless(overrides = {}) {
+	const share = await seedShareRow({
+		userId: USER_A,
+		accountId: ACC_A,
+		credentialsVersion: 3,
+		...overrides
+	});
+	await seedBindingRow({ shareId: share.shareId, accountId: ACC_A });
+	return share;
+}
+
+// Visitor 闭环用的上下文：pepper / kid 必须取 Worker env 的那一份，否则 SELF.fetch 侧的
+// matchSec / matchAuthKey 永远验不过。
+function workerCtx(overrides = {}) {
+	return ctx({
+		SHARE_SEC_PEPPER: env.SHARE_SEC_PEPPER,
+		SHARE_SEC_PEPPER_KID: env.SHARE_SEC_PEPPER_KID,
+		...overrides
+	});
+}
+
+async function postSession(body) {
+	const response = await SELF.fetch('http://example.com/api/share/session', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', 'accept-language': 'en' },
+		body: JSON.stringify(body)
+	});
+	return response.json();
+}
+
+// `SELF.fetch` 打的是 workerd 自己那份 env,测试侧改 `env` 它看不见;要在 HTTP 面临时放行
+// 栅栏,就必须像 `share-integration.spec.js:82-89` 那样把同一个 `env` 对象直接喂给 worker。
+async function ownerWorker(method, path, { jwt, body } = {}) {
+	const headers = { Authorization: jwt, 'accept-language': 'en' };
+	if (body !== undefined) {
+		headers['content-type'] = 'application/json';
+	}
+	const response = await worker.fetch(new Request(`http://example.com/api${path}`, {
+		method,
+		headers,
+		body: body === undefined ? undefined : JSON.stringify(body)
+	}), env, {});
+	return { status: response.status, json: await response.json() };
+}
+
+async function getShareMails(sessionToken) {
+	const response = await SELF.fetch('http://example.com/api/share/mails', {
+		headers: { Authorization: `Bearer ${sessionToken}`, 'accept-language': 'en' }
+	});
+	return response.json();
+}
+
+describe('mailShareService.resetAuthKey state machine (T-16)', () => {
+	it('enable mints a 22-char key, stores only hash plus kid and leaves cv untouched (AC-AUTH-07)', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+
+		const result = await mailShareService.resetAuthKey(v2ctx(), {
+			shareId: share.shareId, action: 'enable'
+		}, USER_A);
+
+		expect(result.authKey).toMatch(/^[A-Za-z0-9_-]{22}$/);
+		expect(decodeBase64Url(result.authKey).length).toBe(16);
+
+		const row = await readShareRow(share.shareId);
+		expect(authKeyColumns(row)).toEqual({
+			auth_key_enabled: 1,
+			auth_key_hash: await shareAuthService.digestShareSecret(result.authKey, PEPPER),
+			auth_key_kid: 'v2',
+			credentials_version: 3
+		});
+		expect(Object.values(row)).not.toContain(result.authKey);
+
+		// 出参是 loadOwnerDetail 的形状；cv / hash / kid 一个都不回。
+		expect(result).toMatchObject({
+			shareId: share.shareId, authKeyEnabled: true, effectiveStatus: 'ACTIVE', shareType: 'single'
+		});
+		expect(result.bindings).toHaveLength(1);
+		for (const key of ['credentialsVersion', 'authKeyHash', 'authKeyKid', 'secHmac']) {
+			expect([key, Object.keys(result).includes(key)]).toEqual([key, false]);
+		}
+		expect(await countAuthKeyInvariantBreaks()).toBe(0);
+	});
+
+	it('reset swaps hash and kid and bumps cv by exactly one (AC-ADMIN-05)', async () => {
+		await seedOwners();
+		const share = await seedKeyed();
+
+		// 跑在 V2=false 上：reset 明确不受栅栏门控（design.md:307 只门控 enable），
+		// 这条同时是「没误加门控」的取证。
+		const result = await mailShareService.resetAuthKey(ctx(), {
+			shareId: share.shareId, action: 'reset'
+		}, USER_A);
+
+		expect(result.authKey).toMatch(/^[A-Za-z0-9_-]{22}$/);
+		const row = await readShareRow(share.shareId);
+		expect(authKeyColumns(row)).toEqual({
+			auth_key_enabled: 1,
+			auth_key_hash: await shareAuthService.digestShareSecret(result.authKey, PEPPER),
+			auth_key_kid: 'v2',
+			credentials_version: 4
+		});
+		expect(row.auth_key_hash).not.toBe('t16-old-key-hash');
+		expect(result.authKeyEnabled).toBe(true);
+		expect(await countAuthKeyInvariantBreaks()).toBe(0);
+	});
+
+	it('disable clears the key material, bumps cv and hands back no plaintext (AC-AUTH-08)', async () => {
+		await seedOwners();
+		const share = await seedKeyed();
+
+		const result = await mailShareService.resetAuthKey(ctx(), {
+			shareId: share.shareId, action: 'disable'
+		}, USER_A);
+
+		// 「没有这个键」而不是「空串」：与 firstCreateResponse:539-541 的条件挂载同款。
+		expect('authKey' in result).toBe(false);
+		expect(result.authKeyEnabled).toBe(false);
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual({
+			auth_key_enabled: 0,
+			auth_key_hash: null,
+			auth_key_kid: null,
+			credentials_version: 4
+		});
+		expect(await countAuthKeyInvariantBreaks()).toBe(0);
+	});
+
+	it('mints an independent secret on every migration', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+
+		const minted = [
+			(await mailShareService.resetAuthKey(v2ctx(), { shareId: share.shareId, action: 'enable' }, USER_A)).authKey,
+			(await mailShareService.resetAuthKey(ctx(), { shareId: share.shareId, action: 'reset' }, USER_A)).authKey,
+			(await mailShareService.resetAuthKey(ctx(), { shareId: share.shareId, action: 'reset' }, USER_A)).authKey
+		];
+
+		expect(new Set(minted).size).toBe(3);
+		// enable +0、reset +1、reset +1。
+		expect((await readShareRow(share.shareId)).credentials_version).toBe(5);
+		expect(await countAuthKeyInvariantBreaks()).toBe(0);
+	});
+
+	it('writes the three key columns in one SET of one guarded UPDATE (R2-F1)', async () => {
+		await seedOwners();
+		const share = await seedKeyed();
+		const probe = sqlProbe();
+
+		await mailShareService.resetAuthKey({ env: shareEnv({ db: probe.db }) }, {
+			shareId: share.shareId, action: 'reset'
+		}, USER_A);
+
+		const writes = probe.seen.filter((sql) => /UPDATE\s+mail_share/i.test(sql) && /auth_key_/i.test(sql));
+		expect(writes).toHaveLength(1);
+		const [assignments, predicates] = writes[0].split(/\bWHERE\b/i);
+		for (const column of ['auth_key_enabled', 'auth_key_hash', 'auth_key_kid']) {
+			expect([column, new RegExp(`${column}\\s*=\\s*\\?`).test(assignments)]).toEqual([column, true]);
+		}
+		expect(assignments).toMatch(/credentials_version\s*=\s*credentials_version\s*\+\s*\?/i);
+		// 迁移守卫必须进 WHERE：预读只决定错误码，WHERE 才决定并发下的正确性。
+		expect(predicates).toMatch(/auth_key_enabled\s*=\s*\?/i);
+	});
+
+	// 守卫必须进 WHERE 的取证：两条并发命令的预读都会看到 `enabled=1`，只有写入语句自身的
+	// 谓词能让输的一方零变更。少了它，cv 会被 +2 —— 白白多杀一轮在飞 Session。
+	it('lets exactly one of two concurrent disables win', async () => {
+		await seedOwners();
+		const share = await seedKeyed();
+
+		const settled = await Promise.allSettled([
+			mailShareService.resetAuthKey(ctx(), { shareId: share.shareId, action: 'disable' }, USER_A),
+			mailShareService.resetAuthKey(ctx(), { shareId: share.shareId, action: 'disable' }, USER_A)
+		]);
+
+		expect(settled.filter((item) => item.status === 'fulfilled')).toHaveLength(1);
+		// 输的一方拿到哪个码取决于它是在预读还是在 WHERE 上失配，两者都属「重读再决定」。
+		expect(['SHARE_NOT_FOUND', 'SHARE_INVALID_CONFIG'])
+			.toContain(settled.find((item) => item.status === 'rejected').reason.message);
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual({
+			auth_key_enabled: 0, auth_key_hash: null, auth_key_kid: null, credentials_version: 4
+		});
+	});
+
+	it('brings a row seeded in an illegal combination back to a legal one', async () => {
+		await seedOwners();
+		const share = await seedKeyed({ authKeyHash: null, authKeyKid: null });
+		expect(await countAuthKeyInvariantBreaks()).toBe(1);
+
+		await mailShareService.resetAuthKey(ctx(), { shareId: share.shareId, action: 'disable' }, USER_A);
+
+		expect(await countAuthKeyInvariantBreaks()).toBe(0);
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual({
+			auth_key_enabled: 0, auth_key_hash: null, auth_key_kid: null, credentials_version: 4
+		});
+	});
+
+	it('rejects every action outside the closed enum and touches no column (T14)', async () => {
+		await seedOwners();
+		const share = await seedKeyed();
+		const before = authKeyColumns(await readShareRow(share.shareId));
+
+		// 归一化阶段一旦把非法值折成合法值，「静默打开 AuthKey」就再也认不出来了：
+		// 不 toLowerCase、不 trim、不接受数组包装、不把缺省当 reset。
+		const actions = [
+			undefined, null, '', ' ', 'ENABLE', 'Reset', 'enable ', ' disable', 'rotate',
+			true, 1, 0, {}, ['reset'], 'toString', 'constructor', '__proto__'
+		];
+		for (const action of actions) {
+			const params = action === undefined ? { shareId: share.shareId } : { shareId: share.shareId, action };
+			expect([action, await catchBiz(mailShareService.resetAuthKey(v2ctx(), params, USER_A))])
+				.toEqual([action, 'SHARE_INVALID_CONFIG']);
+		}
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual(before);
+	});
+
+	it('answers SHARE_NOT_FOUND for another owner, a missing row and a malformed id', async () => {
+		await seedOwners();
+		const theirs = await seedShareRow({
+			userId: USER_B, accountId: ACC_B, authKeyEnabled: 1, authKeyHash: 't16-their-hash', authKeyKid: 'v9'
+		});
+		await seedBindingRow({ shareId: theirs.shareId, accountId: ACC_B });
+
+		for (const shareId of [theirs.shareId, 88881111, 0, -1, 'abc', null, undefined, true]) {
+			expect([shareId, await catchBiz(mailShareService.resetAuthKey(v2ctx(), {
+				shareId, action: 'disable'
+			}, USER_A))]).toEqual([shareId, 'SHARE_NOT_FOUND']);
+		}
+		expect(authKeyColumns(await readShareRow(theirs.shareId))).toEqual({
+			auth_key_enabled: 1, auth_key_hash: 't16-their-hash', auth_key_kid: 'v9', credentials_version: 0
+		});
+	});
+
+	it('refuses a revoked or an expired row and leaves its key material alone', async () => {
+		await seedOwners();
+		const revoked = await seedKeyed({ status: 'REVOKED', revokedAt: sqlTime(-60) });
+		const expired = await seedKeyed({ expiresAt: '2001-01-01 00:00:00' });
+
+		for (const share of [revoked, expired]) {
+			expect(await catchBiz(mailShareService.resetAuthKey(ctx(), {
+				shareId: share.shareId, action: 'reset'
+			}, USER_A))).toBe('SHARE_NOT_FOUND');
+			expect(authKeyColumns(await readShareRow(share.shareId))).toEqual({
+				auth_key_enabled: 1, auth_key_hash: 't16-old-key-hash', auth_key_kid: 'v9', credentials_version: 3
+			});
+		}
+	});
+
+	it('gates enable and only enable behind SHARE_CAPABILITY_V2 (AC-LIFE-11)', async () => {
+		await seedOwners();
+		const off = await seedKeyless();
+		const on = await seedKeyed();
+
+		expect(await catchBiz(mailShareService.resetAuthKey(ctx(), {
+			shareId: off.shareId, action: 'enable'
+		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		expect(authKeyColumns(await readShareRow(off.shareId))).toEqual({
+			auth_key_enabled: 0, auth_key_hash: null, auth_key_kid: null, credentials_version: 3
+		});
+
+		// 同一个 V2=false 上下文里 reset / disable 必须放行：AC-LIFE-10 路径③ 要求 Owner 在
+		// 开关回退后仍能关掉自己打开的第二因子，门控它等于把人锁死在关不掉的第二因子上。
+		await mailShareService.resetAuthKey(ctx(), { shareId: on.shareId, action: 'reset' }, USER_A);
+		await mailShareService.resetAuthKey(ctx(), { shareId: on.shareId, action: 'disable' }, USER_A);
+		expect(authKeyColumns(await readShareRow(on.shareId))).toEqual({
+			auth_key_enabled: 0, auth_key_hash: null, auth_key_kid: null, credentials_version: 5
+		});
+	});
+
+	// 本任务的核心红线：AC-LIFE-11 只门控 enable，若 reset 能落在未启用的行上，它就是一次
+	// 绕过 AUTH_KEY_ENABLE 栅栏的 enable —— 随机路由到旧 Worker 的请求会绕过第二因子。
+	it('refuses reset on a disabled row under both flag states, so it cannot back-door an enable', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+
+		for (const context of [['off', ctx()], ['on', v2ctx()]]) {
+			expect([context[0], await catchBiz(mailShareService.resetAuthKey(context[1], {
+				shareId: share.shareId, action: 'reset'
+			}, USER_A))]).toEqual([context[0], 'SHARE_INVALID_CONFIG']);
+		}
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual({
+			auth_key_enabled: 0, auth_key_hash: null, auth_key_kid: null, credentials_version: 3
+		});
+	});
+
+	it('refuses enable on an already-enabled row, so it cannot become a cv-free reset (AC-AUTH-07)', async () => {
+		await seedOwners();
+		const share = await seedKeyed();
+
+		expect(await catchBiz(mailShareService.resetAuthKey(v2ctx(), {
+			shareId: share.shareId, action: 'enable'
+		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual({
+			auth_key_enabled: 1, auth_key_hash: 't16-old-key-hash', auth_key_kid: 'v9', credentials_version: 3
+		});
+	});
+
+	it('refuses disable on an already-disabled row without bumping cv', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+
+		expect(await catchBiz(mailShareService.resetAuthKey(ctx(), {
+			shareId: share.shareId, action: 'disable'
+		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		// cv 白白 +1 就是白白杀掉一批在飞 Session。
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual({
+			auth_key_enabled: 0, auth_key_hash: null, auth_key_kid: null, credentials_version: 3
+		});
+	});
+
+	it('never leaks the plaintext into the row, the owner projections or the logs (AC-LEAK-05)', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+		const lines = [];
+		const log = console.log;
+		const error = console.error;
+		console.log = (...args) => lines.push(args.map(String).join(' '));
+		console.error = (...args) => lines.push(args.map(String).join(' '));
+		let minted;
+		try {
+			minted = (await mailShareService.resetAuthKey(v2ctx(), {
+				shareId: share.shareId, action: 'enable'
+			}, USER_A)).authKey;
+			// 明文恰一次：第二条命令回的是一把新的，旧的再也拿不回来。
+			const again = await mailShareService.resetAuthKey(ctx(), {
+				shareId: share.shareId, action: 'reset'
+			}, USER_A);
+			expect(again.authKey).not.toBe(minted);
+		} finally {
+			console.log = log;
+			console.error = error;
+		}
+
+		expect(lines.join('\n')).not.toContain(minted);
+		expect(JSON.stringify(await mailShareService.get(ctx(), { shareId: share.shareId }, USER_A)))
+			.not.toContain(minted);
+		expect(JSON.stringify(await mailShareService.list(ctx(), {}, USER_A))).not.toContain(minted);
+		expect(Object.values(await readShareRow(share.shareId))).not.toContain(minted);
+	});
+});
+
+describe('resetAuthKey against a live visitor session (T-16)', () => {
+	it('enable leaves an established session readable and only guards the new ones (AC-AUTH-07)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(workerCtx(), createParams(), USER_A);
+
+		const established = await postSession({ lid: created.lid, sec: created.sec });
+		expect(established.code).toBe(200);
+
+		const { authKey } = await mailShareService.resetAuthKey(workerCtx({ SHARE_CAPABILITY_V2: 'true' }), {
+			shareId: created.shareId, action: 'enable'
+		}, USER_A);
+
+		// 建立时本无 Key 要求，enable 不追溯失效：cv 未动，resolveSession 照常放行。
+		expect((await getShareMails(established.data.sessionToken)).code).toBe(200);
+		// 新 Session 从此要 Key，且认的就是刚下发的那一把（证明 hash/kid 与 matchAuthKey 同源）。
+		expect((await postSession({ lid: created.lid, sec: created.sec })).message).toBe('SHARE_AUTH_REQUIRED');
+		expect((await postSession({ lid: created.lid, sec: created.sec, authKey })).code).toBe(200);
+	});
+
+	it('reset kills the live session and the old key on the spot (AC-EDGE-05)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(workerCtx({ SHARE_CAPABILITY_V2: 'true' }), createParams({
+			authKeyEnabled: true
+		}), USER_A);
+		const established = await postSession({ lid: created.lid, sec: created.sec, authKey: created.authKey });
+		expect(established.code).toBe(200);
+
+		const { authKey } = await mailShareService.resetAuthKey(workerCtx(), {
+			shareId: created.shareId, action: 'reset'
+		}, USER_A);
+
+		expect((await getShareMails(established.data.sessionToken)).message).toBe('SHARE_UNAVAILABLE');
+		expect((await postSession({ lid: created.lid, sec: created.sec, authKey: created.authKey })).message)
+			.toBe('SHARE_AUTH_REQUIRED');
+		const reissued = await postSession({ lid: created.lid, sec: created.sec, authKey });
+		expect(reissued.code).toBe(200);
+		expect((await getShareMails(reissued.data.sessionToken)).code).toBe(200);
+	});
+
+	it('disable kills the live session and stops asking for a key (AC-AUTH-08)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(workerCtx({ SHARE_CAPABILITY_V2: 'true' }), createParams({
+			authKeyEnabled: true
+		}), USER_A);
+		const established = await postSession({ lid: created.lid, sec: created.sec, authKey: created.authKey });
+		expect(established.code).toBe(200);
+
+		await mailShareService.resetAuthKey(workerCtx(), { shareId: created.shareId, action: 'disable' }, USER_A);
+
+		expect((await getShareMails(established.data.sessionToken)).message).toBe('SHARE_UNAVAILABLE');
+		expect((await postSession({ lid: created.lid, sec: created.sec })).code).toBe(200);
+		// 多余的旧 Key 被忽略，不得因此报错。
+		expect((await postSession({ lid: created.lid, sec: created.sec, authKey: created.authKey })).code).toBe(200);
+	});
+});
+
+describe('owner API surface for resetAuthKey (T-16)', () => {
+	it('serves reset and disable over HTTP with no-store and a single plaintext', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const share = await seedKeyed();
+
+		const response = await SELF.fetch('http://example.com/api/mailShare/resetAuthKey', {
+			method: 'POST',
+			headers: { Authorization: jwt, 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ shareId: share.shareId, action: 'reset' })
+		});
+		const rotated = await response.json();
+
+		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(rotated.code).toBe(200);
+		expect(rotated.data.authKey).toMatch(/^[A-Za-z0-9_-]{22}$/);
+		expect(rotated.data).toMatchObject({ shareId: share.shareId, authKeyEnabled: true });
+
+		const disabled = await ownerApi('POST', '/mailShare/resetAuthKey', {
+			jwt, body: { shareId: share.shareId, action: 'disable' }
+		});
+		expect(disabled.json.data.authKeyEnabled).toBe(false);
+		expect(disabled.json.data.authKey).toBeUndefined();
+		expect(await countAuthKeyInvariantBreaks()).toBe(0);
+	});
+
+	it('needs the capability flag flipped for enable and refuses it otherwise (AC-LIFE-11)', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const share = await seedKeyless();
+
+		const refused = await ownerApi('POST', '/mailShare/resetAuthKey', {
+			jwt, body: { shareId: share.shareId, action: 'enable' }
+		});
+		expect(refused.json.message).toBe('SHARE_INVALID_CONFIG');
+		expect((await readShareRow(share.shareId)).auth_key_enabled).toBe(0);
+
+		// Worker env 的基线是栅栏关闭态（`wrangler-vitest.toml:41`）；用例自己临时放行再还原，
+		// 不改 toml —— 那会把全仓基线从「栅栏关闭」翻过去。
+		const saved = env.SHARE_CAPABILITY_V2;
+		try {
+			env.SHARE_CAPABILITY_V2 = 'true';
+			const enabled = await ownerWorker('POST', '/mailShare/resetAuthKey', {
+				jwt, body: { shareId: share.shareId, action: 'enable' }
+			});
+			expect(enabled.json.code).toBe(200);
+			expect(enabled.json.data.authKey).toMatch(/^[A-Za-z0-9_-]{22}$/);
+		} finally {
+			env.SHARE_CAPABILITY_V2 = saved;
+		}
+		expect(authKeyColumns(await readShareRow(share.shareId))).toMatchObject({
+			auth_key_enabled: 1, auth_key_kid: env.SHARE_SEC_PEPPER_KID, credentials_version: 3
+		});
+	});
+
+	it('refuses an anonymous caller before any column moves (AC-ADMIN-10)', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const share = await seedKeyed();
+		// 先证明这条路由真的在：否则「匿名被拒」在端点还不存在时也会假绿。
+		const owned = await ownerApi('POST', '/mailShare/resetAuthKey', {
+			jwt, body: { shareId: share.shareId, action: 'reset' }
+		});
+		expect(owned.json.code).toBe(200);
+		const before = authKeyColumns(await readShareRow(share.shareId));
+
+		const response = await SELF.fetch('http://example.com/api/mailShare/resetAuthKey', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ shareId: share.shareId, action: 'disable' })
+		});
+		const body = await response.json();
+
+		// 今天是 JWT 兜底，T-17 收编 `share:manage` 后会变成 SHARE_FORBIDDEN；断言只钉
+		// 「不是成功」，免得 T-17 一落地就把这条打红。
+		expect(body.code).not.toBe(200);
+		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual(before);
 	});
 });
