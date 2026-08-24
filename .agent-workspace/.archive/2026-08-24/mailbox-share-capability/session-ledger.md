@@ -185,6 +185,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-24 实现待审查。未勾选。未勾选尾：T-24 审查 / T-25 → T-29。
 - 2026-08-24 · 主 AI：T-25 侦察已落并裁 Fog-1（接线 listForBinding）/ Fog-2（status 归 T-25）/ Fog-3（composable 零改）。未派 T-25。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI：T-24 侦察已落并裁 Fog-1/2/3 + T24-SENDER/CONFIG。未勾选 T-24。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI：T-22 R2 APPROVED p0=0。P1-1/P2-1 CLOSED。主 AI 独立 58/58 + 全量 vue 21/185 · worker 18/619 · E2E 13。W4 收口。未勾选尾：T-24 → T-29。

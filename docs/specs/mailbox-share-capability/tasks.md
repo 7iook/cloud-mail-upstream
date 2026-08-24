@@ -595,6 +595,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-24 实现待审查（ShareOtpCard 抽取 + applyShareConfig）。未勾选。未勾选尾：T-24 审查 / T-25 → T-29。
 - 2026-08-24 · 主 AI:T-25 侦察已落（`recon-t25-tabs.md`）。Fog-1 否决零后端：接线 `listForBinding`；Fog-2 status 函数划给 T-25；Fog-3 composable 零改。未派 T-25（等 T-24 APPROVED）。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-24 侦察已落（`recon-t24-otp-card.md`）。迷雾已裁：Fog-1/2/3 CHANGE；T24-SENDER/CONFIG CHANGE；T24-NO-SPEC HOLD。未勾选 T-24。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-22 R2 APPROVED p0=0（`review-t22-r2.md`）。P1-1/P2-1 CLOSED。主 AI 独立定点 58/58 + 全量 vue 21/185、worker 18/619、E2E 13。W4 收口。未勾选尾：T-24 → T-29。

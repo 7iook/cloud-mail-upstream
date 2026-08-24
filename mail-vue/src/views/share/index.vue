@@ -28,36 +28,11 @@
     >{{ tx('shareVisitWait', 'Please wait a moment, then try again.') }}</p>
 
     <div v-if="state === 'ready'" data-share-body>
-      <section
-        v-if="featuredMail"
-        class="share-otp"
-        data-share-code
-      >
-        <p class="share-otp-label">{{ tx('shareVisitCode', 'Verification code') }}</p>
-        <div class="share-otp-row">
-          <strong class="share-otp-value">{{ featuredMail.code }}</strong>
-          <button
-            type="button"
-            data-share-copy
-            @click="copyFeaturedCode"
-          >
-            {{ tx('shareVisitCopy', 'Copy') }}
-          </button>
-        </div>
-        <p data-share-code-from>{{ tx('shareVisitFrom', 'From') }} {{ senderLine(featuredMail) }}</p>
-        <input
-          class="share-otp-select"
-          :class="{ 'is-visible': copyResult === 'manual' }"
-          :ref="bindSelectable"
-          readonly
-          :value="featuredMail.code"
-          :aria-label="tx('shareVisitCode', 'Verification code')"
-        >
-        <p
-          v-if="copyResult"
-          :data-share-copy-result="copyResult"
-        >{{ copyResult === 'copied' ? tx('shareVisitCopied', 'Copied') : tx('shareVisitCopyManual', 'Select the code and copy it yourself') }}</p>
-      </section>
+      <ShareOtpCard
+        :mails="mails"
+        :selected="selectedMail"
+        :enabled="otpEnabled"
+      />
 
       <p
         v-if="!mails.length"
@@ -129,7 +104,6 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import SafeMailRenderer from '@/components/safe-mail/index.vue'
-import { useCopyWithFallback } from '@/composables/useCopyWithFallback.js'
 import { useSharePolling } from '@/composables/useSharePolling.js'
 import {
     createShareSession,
@@ -145,6 +119,8 @@ import {
     readShareSession,
     writeShareSession
 } from './session.js'
+import { senderLine } from './mail-fields.js'
+import ShareOtpCard from './ShareOtpCard.vue'
 
 defineOptions({
     name: 'share'
@@ -155,7 +131,6 @@ const MAX_CATCHUP_PAGES = 40
 
 const route = useRoute()
 const { t, te, locale } = useI18n()
-const { copy, selectableRef } = useCopyWithFallback()
 
 const state = ref('loading')
 const mailbox = ref('')
@@ -164,24 +139,11 @@ const pageSecret = ref('')
 const mails = ref([])
 const selectedId = ref('')
 const rateLimited = ref(false)
-const copyResult = ref('')
+const otpEnabled = ref(true)
 let justRecovered = false
-
-function hasShareCode(code) {
-    return code != null && String(code) !== ''
-}
 
 function mailKey(item) {
     return item && item.mailId != null ? String(item.mailId) : ''
-}
-
-function senderLine(item) {
-    const name = item && item.senderName ? String(item.senderName) : ''
-    const addr = item && item.senderAddress ? String(item.senderAddress) : ''
-    if (name && addr) {
-        return `${name} <${addr}>`
-    }
-    return name || addr
 }
 
 function hasHtml(item) {
@@ -252,19 +214,6 @@ const selectedMail = computed(() => {
     return mails.value.find((item) => mailKey(item) === selectedId.value) || null
 })
 
-const featuredMail = computed(() => {
-    const selected = selectedMail.value
-    if (selected && hasShareCode(selected.code)) {
-        return selected
-    }
-    for (let i = mails.value.length - 1; i >= 0; i--) {
-        if (hasShareCode(mails.value[i].code)) {
-            return mails.value[i]
-        }
-    }
-    return null
-})
-
 const showWait = computed(() => rateLimited.value || state.value === 'limited')
 
 function isSelected(item) {
@@ -272,8 +221,8 @@ function isSelected(item) {
     return Boolean(current && mailKey(current) === mailKey(item))
 }
 
-function bindSelectable(el) {
-    selectableRef.value = el
+function applyShareConfig(data) {
+    otpEnabled.value = !(data && data.config && data.config.otpExtractionEnabled === false)
 }
 
 function logShareFailure(err) {
@@ -303,7 +252,6 @@ function clearMailboxView() {
     mails.value = []
     selectedId.value = ''
     rateLimited.value = false
-    copyResult.value = ''
 }
 
 function showDeadShare(err) {
@@ -337,6 +285,7 @@ async function reestablishSession() {
     }
     writeShareSession(lid, token)
     sessionToken.value = token
+    applyShareConfig(data)
     if (data.mailbox) {
         mailbox.value = data.mailbox
     }
@@ -416,7 +365,6 @@ function exitShare() {
     mails.value = []
     selectedId.value = ''
     rateLimited.value = false
-    copyResult.value = ''
     state.value = 'exited'
 }
 
@@ -426,7 +374,6 @@ function resetMailbox() {
     mails.value = []
     selectedId.value = ''
     rateLimited.value = false
-    copyResult.value = ''
 }
 
 function rememberCursor(list) {
@@ -476,20 +423,6 @@ async function beginMailbox() {
     }
 }
 
-async function copyFeaturedCode() {
-    if (!featuredMail.value) {
-        return
-    }
-    const result = await copy(featuredMail.value.code)
-    copyResult.value = result.copied ? 'copied' : 'manual'
-    if (result.copied && typeof ElMessage === 'function') {
-        ElMessage({
-            message: tx('shareVisitCopied', 'Copied'),
-            type: 'success'
-        })
-    }
-}
-
 async function downloadAttachment(item, attachment) {
     try {
         const blob = await getShareAttachment({
@@ -514,6 +447,7 @@ async function downloadAttachment(item, attachment) {
 async function bootstrap() {
     applyShareLocale()
     resetMailbox()
+    otpEnabled.value = true
     const lid = currentLid()
     state.value = 'loading'
     mailbox.value = ''
@@ -537,6 +471,7 @@ async function bootstrap() {
             }
             writeShareSession(lid, token)
             sessionToken.value = token
+            applyShareConfig(data)
             mailbox.value = (data && data.mailbox) || ''
             state.value = 'ready'
             await beginMailbox()
@@ -592,7 +527,6 @@ defineExpose({
 }
 
 .share-top button,
-.share-otp-row button,
 .share-list button,
 .share-atts button {
     font: inherit;
@@ -603,58 +537,6 @@ defineExpose({
 .share-empty,
 .share-remote-hint {
     color: #4b5563;
-}
-
-.share-otp {
-    position: relative;
-    margin: 24px 0;
-    padding: 16px;
-    border: 1px solid #d0d7de;
-    border-radius: 8px;
-    background: #f6f8fa;
-}
-
-.share-otp-label {
-    margin: 0 0 8px;
-    font-size: 13px;
-    color: #4b5563;
-}
-
-.share-otp-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.share-otp-value {
-    font-size: 32px;
-    letter-spacing: 0.12em;
-    font-variant-numeric: tabular-nums;
-}
-
-.share-otp-select {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border: 0;
-}
-
-.share-otp-select.is-visible {
-    position: static;
-    width: 100%;
-    height: auto;
-    margin: 8px 0 0;
-    padding: 8px;
-    clip: auto;
-    overflow: visible;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
-    font: inherit;
-    letter-spacing: 0.12em;
 }
 
 .share-list {

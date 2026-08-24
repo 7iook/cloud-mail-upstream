@@ -501,13 +501,93 @@ describe('share view visitor mailbox', () => {
     })
 
     it('does not import logged-in graph modules or third-party script hosts (AC-VISIT-10)', () => {
+        for (const file of ['index.vue', 'ShareOtpCard.vue', 'mail-fields.js']) {
+            const src = readFileSync(path.join(process.cwd(), 'src/views/share', file), 'utf8')
+            expect(src).not.toMatch(/@\/store\/user/)
+            expect(src).not.toMatch(/@\/db\/db/)
+            expect(src).not.toMatch(/@\/layout/)
+            expect(src).not.toMatch(/@\/axios\/index/)
+            expect(src).not.toMatch(/websiteConfig/)
+            expect(src).not.toMatch(/<script[^>]+src=["']https?:/)
+            expect(src).not.toMatch(/fonts\.googleapis|googletagmanager|gtag\(|sentry\.io|analytics/)
+        }
+    })
+
+    it('hides the OTP zone when the session config turns extraction off, even though the mail still carries a code (T-24 Fog-2a)', async () => {
+        createShareSession.mockResolvedValue({
+            sessionToken: 'sess-a',
+            mailbox: 'otp@example.com',
+            config: { otpExtractionEnabled: false }
+        })
+        listShareMails.mockResolvedValue({
+            list: [mail({ mailId: 31, subject: 'Extraction off', code: '482917' })],
+            nextCursor: null
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(wrapper.find('[data-share-code]').exists()).toBe(false)
+        expect(wrapper.get('[data-share-mail-list]').text()).toContain('Extraction off')
+    })
+
+    it('does not carry a stale copy result into the next ready state (T-24 Fog-1)', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined)
+        vi.stubGlobal('navigator', {
+            ...navigator,
+            language: 'en',
+            clipboard: { writeText }
+        })
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+        listShareMails.mockResolvedValue({
+            list: [mail()],
+            nextCursor: null
+        })
+
+        const first = await mountShare('lid-a', 'sec-a')
+        await first.get('[data-share-copy]').trigger('click')
+        await flushPromises()
+        expect(first.get('[data-share-copy-result]').attributes('data-share-copy-result')).toBe('copied')
+
+        first.vm.exitShare()
+        await flushPromises()
+        expect(first.find('[data-share-copy-result]').exists()).toBe(false)
+
+        const second = await mountShare('lid-a', 'sec-a')
+
+        expect(second.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(second.get('[data-share-code]').text()).toContain('482917')
+        expect(second.find('[data-share-copy-result]').exists()).toBe(false)
+    })
+
+    it('reveals the selectable fallback input when both clipboard paths fail (T-24 Fog-3 runtime)', async () => {
+        const writeText = vi.fn().mockRejectedValue(new Error('NotAllowedError'))
+        vi.stubGlobal('navigator', {
+            ...navigator,
+            language: 'en',
+            clipboard: { writeText }
+        })
+        document.execCommand = () => false
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+        listShareMails.mockResolvedValue({
+            list: [mail()],
+            nextCursor: null
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        await wrapper.get('[data-share-copy]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('.share-otp-select').classes()).toContain('is-visible')
+    })
+
+    it('keeps the OTP typography and fallback styles with the card that owns the markup (T-24 Fog-3 source)', () => {
+        const card = readFileSync(path.join(process.cwd(), 'src/views/share/ShareOtpCard.vue'), 'utf8')
+        expect(card).toMatch(/font-size:\s*32px/)
+        expect(card).toMatch(/letter-spacing:\s*0\.12em/)
+        expect(card).toMatch(/\.share-otp-select\.is-visible/)
+
         const src = readFileSync(path.join(process.cwd(), 'src/views/share/index.vue'), 'utf8')
-        expect(src).not.toMatch(/@\/store\/user/)
-        expect(src).not.toMatch(/@\/db\/db/)
-        expect(src).not.toMatch(/@\/layout/)
-        expect(src).not.toMatch(/@\/axios\/index/)
-        expect(src).not.toMatch(/websiteConfig/)
-        expect(src).not.toMatch(/<script[^>]+src=["']https?:/)
-        expect(src).not.toMatch(/fonts\.googleapis|googletagmanager|gtag\(|sentry\.io|analytics/)
+        expect(src).not.toMatch(/\.share-otp\s*\{/)
     })
 })
