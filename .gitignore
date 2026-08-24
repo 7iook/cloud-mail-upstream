@@ -25,6 +25,14 @@ mail-vue/node_modules
 mail-vue/dist
 .wrangler
 .venv
+.ace-tool/
+
+# wrangler 本地密钥文件:任何 worker 目录下的 .dev.vars / .dev.vars.<env> 都不入库。
+# 前端的 mail-vue/.env.dev|.env.release|.env.remote 是有意纳管的构建配置,不在此列,
+# 所以这里只圈 .dev.vars 家族,不写通配的 .env*(本地私有覆盖已由上面的 *.local 兜住)。
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 
 # agent workspace: keep archived decision/recon docs tracked for handoff
 .agent-workspace/**

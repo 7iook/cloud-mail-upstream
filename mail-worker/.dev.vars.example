@@ -1,0 +1,61 @@
+# 分享功能本地开发密钥模板。
+#
+# 用法:复制成同目录的 .dev.vars 再把占位值换成真串。
+#   Windows PowerShell: Copy-Item .dev.vars.example .dev.vars
+#   macOS / Linux:      cp .dev.vars.example .dev.vars
+#
+# .dev.vars 已被根 .gitignore 忽略,只作用于本地 `wrangler dev`,不会带到线上。
+# 线上等价物是 `wrangler secret put <名字>`(见 README「分享功能部署配置」),
+# 密钥永远不要写进 wrangler.toml 的 [vars]——那一段是明文且会随代码入库。
+#
+# 生成一个随机串(两把密钥各生成一次,不要复用同一个值):
+#   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+
+# ---- 必需:缺任何一个,分享功能都不可用 ----
+
+# 分享凭据的 HMAC 加盐。缺失时创建分享失败,响应体:
+#   {"code":500,"message":"share create pepper missing"}
+# 注意 HTTP 状态码仍然是 200,别只看状态码;Worker 日志另打 `share create sec pepper missing`。
+SHARE_SEC_PEPPER="replace-me-with-32-byte-random"
+
+# 访客会话令牌的签名密钥。缺失时分享仍能建出来,但访客打开链接换会话时失败,响应体:
+#   {"code":501,"message":"SHARE_UNAVAILABLE"}
+SHARE_SESSION_SIGNING_KEY="replace-me-with-another-32-byte-random"
+
+# ---- 可选:不填就是下面写的默认值 ----
+
+# 两把密钥各自的版本号,写进凭据用于轮换时区分新旧。不填默认 "v1"。
+SHARE_SEC_PEPPER_KID="v1"
+SHARE_SESSION_SIGNING_KID="v1"
+
+# 分享有效期上限(秒)。不填即【没有上限】,创建方可以填任意长的有效期。
+# 想约束就填一个正整数,例如 86400 = 1 天。
+#SHARE_MAX_DURATION_SECONDS="86400"
+
+# 分享全能力发布栅栏。不填 = 关闭。
+# 取值只认 "1" / "true" / 1 / true 这四种,大小写敏感:
+# 写成 "TRUE" / "True" 会被静默判为关闭且不报任何错。
+#SHARE_CAPABILITY_V2="true"
+
+# 分享功能总开关。填 "0" / "false" 可整体关停;不填即开启。
+#SHARE_ENABLED="1"
+
+# 分享链接对外使用的域名前缀。不填则从当前请求 URL 推断,
+# 反向代理场景下推断结果可能不是用户实际访问的域名,建议显式配。
+#SHARE_PUBLIC_ORIGIN="https://mail.example.com"
+
+# 访客会话令牌有效期(秒),不填默认 900。
+#SHARE_SESSION_TTL="900"
+
+# 单用户同时存活的分享数上限,不填即实质不限。
+#SHARE_ACTIVE_LIMIT="100"
+
+# 分享过期后数据保留多久再清理(秒),不填默认 604800(7 天)。
+#SHARE_RETENTION_SECONDS="604800"
+
+# ---- 密钥轮换过渡期才需要 ----
+# 换密钥时把旧值挪到 _PREV,新值放上面,等旧凭据自然过期后再删掉这几行。
+#SHARE_SEC_PEPPER_PREV="previous-pepper-value"
+#SHARE_SEC_PEPPER_PREV_KID="v0"
+#SHARE_SESSION_SIGNING_KEY_PREV="previous-signing-key-value"
+#SHARE_SESSION_SIGNING_KID_PREV="v0"

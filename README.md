@@ -141,6 +141,57 @@ cloud-mail
 └── └── env.release				# 项目配置
 ```
 
+## 分享功能部署配置
+
+分享功能依赖两把密钥。**这两把没配好,创建第一条分享就会失败**,所以部署时请先走完这一节。
+
+### 1. 生成两把密钥
+
+两把要各生成一次,不要复用同一个值:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+### 2. 线上:用 `wrangler secret put` 配置
+
+在 `mail-worker` 目录下执行,命令会提示你粘贴上一步生成的值:
+
+```bash
+cd mail-worker
+npx wrangler secret put SHARE_SEC_PEPPER
+npx wrangler secret put SHARE_SESSION_SIGNING_KEY
+```
+
+密钥**不要**写进 `wrangler.toml` 的 `[vars]`——那一段是明文,会随代码一起进仓库。
+
+| 变量名 | 必需 | 不配会怎样 |
+|---|---|---|
+| `SHARE_SEC_PEPPER` | 是 | 创建分享失败,响应体 `{"code":500,"message":"share create pepper missing"}` |
+| `SHARE_SESSION_SIGNING_KEY` | 是 | 分享能建出来,但访客打开链接时签发会话失败,响应体 `{"code":501,"message":"SHARE_UNAVAILABLE"}` |
+| `SHARE_SEC_PEPPER_KID` | 否 | 默认 `v1`,只有轮换密钥时才需要显式指定 |
+| `SHARE_MAX_DURATION_SECONDS` | 否 | **不配即分享有效期无上限**。要约束就填正整数秒数,如 `86400`(1 天) |
+| `SHARE_CAPABILITY_V2` | 否 | 缺失即关闭,见下方取值陷阱 |
+
+> **排查时别只看 HTTP 状态码。** 本项目的接口即使出错,HTTP 状态码也是 `200`,真正的错误在响应体的 `code` 字段里。上面两条都是实测结果。Worker 侧的日志(`npx wrangler tail`)会额外打出 `share create sec pepper missing` / `share-auth session signing key missing`。
+
+其余可选项(总开关 `SHARE_ENABLED`、链接域名 `SHARE_PUBLIC_ORIGIN`、会话时长 `SHARE_SESSION_TTL` 等)连同默认值都列在 `mail-worker/.dev.vars.example` 里。
+
+### 3. 本地开发:用 `.dev.vars`
+
+```bash
+cd mail-worker
+cp .dev.vars.example .dev.vars   # Windows PowerShell: Copy-Item .dev.vars.example .dev.vars
+```
+
+然后把文件里的 `replace-me-...` 占位值换成第 1 步生成的真串。`.dev.vars` 已被 `.gitignore` 忽略,只作用于本地 `wrangler dev`。
+
+### ⚠️ `SHARE_CAPABILITY_V2` 的两个坑
+
+**取值大小写敏感。** 代码只认 `"1"` / `"true"` / `1` / `true` 这四种,写成 `"TRUE"` 或 `"True"` 会被**静默判为关闭,且不报任何错**。
+
+**线上只能在 Cloudflare Dashboard 配。** `wrangler.toml` 里那行 `#SHARE_CAPABILITY_V2` 请保持注释状态:`keep_vars` 拦不住 toml 里显式写出来的值,一旦取消注释,下次部署就会把 Dashboard 上的 `true` 覆盖回 `false`。本地开发不受此限,写 `.dev.vars` 即可。
+
 ## 赞助
 
 <a href="https://doc.skymail.ink/support.html" >

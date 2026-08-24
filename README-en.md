@@ -135,6 +135,57 @@ cloud-mail
 
 ```
 
+## Share Feature Configuration
+
+The share feature depends on two secrets. **If they are not set, creating the very first share will fail**, so walk through this section before deploying.
+
+### 1. Generate the two secrets
+
+Generate each one separately — do not reuse the same value for both:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+### 2. Production: set them with `wrangler secret put`
+
+Run this from the `mail-worker` directory; the command prompts you to paste the value generated above:
+
+```bash
+cd mail-worker
+npx wrangler secret put SHARE_SEC_PEPPER
+npx wrangler secret put SHARE_SESSION_SIGNING_KEY
+```
+
+Do **not** put secrets in the `[vars]` block of `wrangler.toml` — that block is plain text and gets committed with the code.
+
+| Variable | Required | What happens if unset |
+|---|---|---|
+| `SHARE_SEC_PEPPER` | Yes | Creating a share fails with the response body `{"code":500,"message":"share create pepper missing"}` |
+| `SHARE_SESSION_SIGNING_KEY` | Yes | The share is created fine, but issuing a visitor session fails when someone opens the link: `{"code":501,"message":"SHARE_UNAVAILABLE"}` |
+| `SHARE_SEC_PEPPER_KID` | No | Defaults to `v1`; only needs an explicit value during key rotation |
+| `SHARE_MAX_DURATION_SECONDS` | No | **Unset means share lifetime is unbounded.** Set a positive number of seconds to cap it, e.g. `86400` (1 day) |
+| `SHARE_CAPABILITY_V2` | No | Absent means disabled; see the pitfalls below |
+
+> **Do not go by the HTTP status code when troubleshooting.** This project's API returns HTTP `200` even on failure; the real error lives in the `code` field of the response body. Both rows above are measured behaviour. The Worker log (`npx wrangler tail`) additionally prints `share create sec pepper missing` / `share-auth session signing key missing`.
+
+The remaining optional variables (kill switch `SHARE_ENABLED`, link origin `SHARE_PUBLIC_ORIGIN`, session lifetime `SHARE_SESSION_TTL`, and others) are listed with their defaults in `mail-worker/.dev.vars.example`.
+
+### 3. Local development: use `.dev.vars`
+
+```bash
+cd mail-worker
+cp .dev.vars.example .dev.vars   # Windows PowerShell: Copy-Item .dev.vars.example .dev.vars
+```
+
+Then replace the `replace-me-...` placeholders with the real values from step 1. `.dev.vars` is already gitignored and only applies to local `wrangler dev`.
+
+### ⚠️ Two pitfalls with `SHARE_CAPABILITY_V2`
+
+**The value is case-sensitive.** The code only accepts `"1"` / `"true"` / `1` / `true`. Writing `"TRUE"` or `"True"` is **silently treated as disabled, with no error at all**.
+
+**In production it can only be set from the Cloudflare Dashboard.** Keep the `#SHARE_CAPABILITY_V2` line in `wrangler.toml` commented out: `keep_vars` does not protect values written explicitly in the toml, so uncommenting it makes the next deploy overwrite the Dashboard's `true` back to `false`. Local development is not affected — just use `.dev.vars`.
+
 ## Sponsor
 
 <a href="https://doc.skymail.ink/support.html">

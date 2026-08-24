@@ -35,6 +35,7 @@ Mail Share 需要让未登录 Visitor 凭不可猜链接只读授权时间窗内
 具体方案（详见 `docs/specs/mail-share/design.md` Decision 1–2）：
 
 1. **Token 形态**：`/s/<lid>#<sec>`——`lid` 明文唯一索引定位 `mail_share` 行；`sec` 只存 `HMAC-SHA256(sec, PEPPER[kid])`；`sec` 放 URL fragment。
+   > ⚠️ 2026-08-25：本条「`sec` **只**存 HMAC」已被 [ADR-share-credential-recoverability](ADR-share-credential-recoverability.md) **部分取代**——上线后新建的分享会**额外**存一份 AES-GCM 密文以支持 Owner 重复查看链接；HMAC 校验路径本身不变，AuthKey 的不可恢复性完全不变。Token 形态、fragment 方案、per-link 授权边界均不受影响。
 2. **Session 层**：Visitor 用 `POST /share/session` 换取短期 Bearer `sessionToken`；后续读路径只经 `share-auth-service` 验签 + 回源查库。
 3. **读模型隔离**：Visitor 永不进入登录态 `email-service`；范围查询只经 `shareScopedEmailRepository`。
 4. **公开路径**：分享 API 挂在精确枚举的 `/share/*`、`/mailShare/*` 路径集合下（security 中间件须从 `startsWith` 改为精确匹配），**不**扩展 `/public/*`。
