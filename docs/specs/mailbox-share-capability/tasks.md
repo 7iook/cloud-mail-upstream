@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W4 收口 · 下一波 W5 T-24 |
+| 状态 Status | in-progress · W5 T-24 侦察已裁 · 实现中 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -532,7 +532,7 @@
 ### W5 · 访客页多邮箱(匿名 chunk 隔离域;T-24 组件抽取先行)
 
 - [ ] T-24 `ShareOtpCard` 组件抽取(单邮箱页重构,为多邮箱页复用铺路)
-  - [ ]* T-24.1 红→绿:从 `mail-vue/src/views/share/index.vue:255-266,31-60` 抽出 `ShareOtpCard`(featuredMail 选取 + 一键复制走 `mail-vue/src/composables/useCopyWithFallback.js` + 复制降级);`otpExtractionEnabled=false` 整区不渲染;`code=''` 邮件正常渲染不隐藏;`views/share/index.spec.js` 15 态基线保持全绿
+  - [ ]* T-24.1 红→绿:从 `mail-vue/src/views/share/index.vue:255-266,31-60` 抽出 `ShareOtpCard`(featuredMail 选取 + 一键复制走 `mail-vue/src/composables/useCopyWithFallback.js` + 复制降级);`otpExtractionEnabled=false` 整区不渲染;`code=''` 邮件正常渲染不隐藏;`views/share/index.spec.js` **18** 条 `it()` 基线保持全绿(原写 15,HEAD 实测 18;只扩不改,AC-VISIT-10 可扩文件列表)
     - _Requirements: AC-OTP-02, AC-OTP-03, AC-OTP-04_
 
 - [ ] T-25 多邮箱 Tab + 本地水位 map + 单实例轮询 + 隔离守护
@@ -595,6 +595,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-24 侦察已落（`recon-t24-otp-card.md`）。迷雾已裁：Fog-1/2/3 CHANGE；T24-SENDER/CONFIG CHANGE；T24-NO-SPEC HOLD。未勾选 T-24。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-22 R2 APPROVED p0=0（`review-t22-r2.md`）。P1-1/P2-1 CLOSED。主 AI 独立定点 58/58 + 全量 vue 21/185、worker 18/619、E2E 13。W4 收口。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-22 审查 NEEDS_CHANGES p1=1 p2=1（`review-t22.md`）。T22-P1-1/P2-1 均 CHANGE：提交中拒关；刷新间隔必须是安全整数。定点 T22-P 2/2 + 邻接 6/58。未勾选尾：T-22 R2 / T-24 → T-29。
 - 2026-08-24 · 主 AI:T-23 审查过筛：P2-1 HOLD。T-22 实现待审查。主 AI 独立定点 6 files / 56 + 全量 vue 21/183。未勾选尾：T-22 审查 / T-24 → T-29。

@@ -1,0 +1,114 @@
+T-24 implement · ShareOtpCard extraction (W5 first bar)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Do NOT git commit / push / stash / switch branch.
+Do NOT touch files you do not own.
+
+Read first, in this order:
+1. frontend-design / impeccable / ui-ux-pro-max / ponytail(lite) under
+   $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/
+   This is extraction + one new config read. Keep the existing OTP card look.
+   Do not redesign, do not add el-card / el-steps / new colors.
+2. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t24-otp-card.md
+   especially §2 cut lines, §9 fog rulings (already decided — do not reopen)
+3. Current mail-vue/src/views/share/index.vue + index.spec.js + assert-share-chunk.js
+4. mail-vue/src/composables/useCopyWithFallback.js (consume, do not edit)
+
+Success state:
+NOT "a component file exists", BUT: a visitor who opens /s/<lid>#<sec> still sees the featured OTP and copies it the same way; otpExtractionEnabled=false hides the OTP zone even if mail still has code; empty code still lists the mail.
+Negative: no login-graph import in share chunk; no visitor-guard / init.js regex / /s/<lid>#<sec> / session.js / i18n / mail-worker edits.
+
+## Files you may write
+
+MUST:
+- NEW mail-vue/src/views/share/ShareOtpCard.vue
+- NEW mail-vue/src/views/share/mail-fields.js  (export senderLine only)
+- EDIT mail-vue/src/views/share/index.vue
+- EDIT mail-vue/src/views/share/index.spec.js  (extend only)
+
+MAY also write:
+- /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/exec-t24-note.md
+
+MUST NOT exist:
+- ShareOtpCard.spec.js
+
+MUST NOT edit:
+router/index.js, init/init.js, session.js, assert-share-chunk.js,
+useSharePolling.js, request/share.js, i18n/zh.js, i18n/en.js,
+useCopyWithFallback.js, any mail-worker/**, share-admin/**, ShareDialog.*
+
+## TDD order (do not invert)
+
+1. First append the new tests in index.spec.js. Run them and watch the NEW ones fail for missing behavior (false-config still shows OTP), not syntax.
+2. Then extract + wire applyShareConfig.
+3. Re-run until green.
+
+## Required new tests (all in visitor mailbox describe)
+
+1. Fog-2(a): createShareSession resolves
+   { sessionToken, mailbox, config: { otpExtractionEnabled: false } }
+   list has mail() WITH code '482917'
+   → [data-share-code] absent, [data-share-mail-list] still shows the subject
+2. Fog-1: clipboard writeText resolves; copy success; wrapper.vm.exitShare();
+   flush; expect no [data-share-copy-result]; remount same lid with secret again;
+   ready; [data-share-copy-result] still absent
+3. Fog-3 runtime: clipboard rejects + execCommand false; after copy click,
+   .share-otp-select has class is-visible
+   (do NOT rewrite the existing reject test; add a sibling)
+4. Fog-3 source: read ShareOtpCard.vue + index.vue
+   card matches /font-size:\s*32px/ and /letter-spacing:\s*0\.12em/ and /\.share-otp-select\.is-visible/
+   index.vue does NOT match /\.share-otp\s*\{/
+
+Also expand the existing AC-VISIT-10 it() to loop
+['index.vue', 'ShareOtpCard.vue', 'mail-fields.js'] with the same regex set.
+Do not change any other of the old 18 it() bodies.
+
+Do not add a second "missing config still shows OTP" test — AC-OTP-07 already covers Fog-2(b).
+Do not add a second empty-code test — :300 already covers Fog-2(c).
+
+## Implementation contract
+
+ShareOtpCard props:
+  mails    Array
+  selected Object|null
+  enabled  Boolean default true
+emits: none
+No bindingId / mailboxes / shareType / autoRefresh props.
+
+featuredMail algorithm: copy index.vue:255-266 verbatim, using props.selected + props.mails.
+hasShareCode / copyFeaturedCode / bindSelectable / copyResult / useCopyWithFallback live only in the card.
+Keep `typeof ElMessage === 'function'` guard verbatim. Do NOT `import { ElMessage } from 'element-plus'`.
+Child writes its own 3-line tx() via useI18n(); do not share tx with parent.
+
+mail-fields.js: only senderLine. Parent and card both import it. Parent list/detail keep using senderLine.
+
+index.vue:
+- Delete moved OTP template/script/styles (recon §2.1)
+- Delete the three copyResult.value = '' lines (recon §2.2) — do not wire reset back
+- Split `.share-otp-row button,` out of the shared button rule; parent keeps
+  `.share-top button, .share-list button, .share-atts button`
+- Inside ready body, render
+  <ShareOtpCard :mails="mails" :selected="selectedMail" :enabled="otpEnabled" />
+  Pass `mails` NOT `listMails`.
+- Keep data-share-shell, data-share-body, data-share-state, defineExpose exactly.
+
+applyShareConfig(data):
+  otpEnabled.value = !(data && data.config && data.config.otpExtractionEnabled === false)
+Call it from bootstrap success path AND reestablishSession after token write.
+At the start of bootstrap (after resetMailbox) set otpEnabled = true.
+Do not read autoRefresh / refreshIntervalMs / shareType / mailboxes.
+
+## Verify (vitest always --no-cache)
+
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/index.spec.js
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/share-chunk.spec.js
+pnpm --dir mail-vue test -- --no-cache
+
+Write counts (files/tests), not just EXIT=0.
+Old 18 must still pass. New tests must pass.
+If share-chunk goes red, fix the import, do not edit the gate.
+
+Write exec-t24-note.md: files touched, test counts, any leftover risk.
+
+Reply to user in Chinese.

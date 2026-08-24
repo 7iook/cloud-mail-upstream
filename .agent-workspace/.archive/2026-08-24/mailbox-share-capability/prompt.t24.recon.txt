@@ -1,0 +1,23 @@
+T-24 recon · ShareOtpCard extraction (W5 first bar)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD is after W4 close (T-20..T-23 APPROVED). Do not assume recon-t22 line numbers.
+
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files.
+Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t24-otp-card.md
+
+Read first:
+1. frontend-design / impeccable / ui-ux-pro-max / ponytail(lite) under $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/
+2. docs/specs/mailbox-share-capability/tasks.md T-24
+3. Current mail-vue/src/views/share/index.vue, index.spec.js, composables/useCopyWithFallback.js, views/share/assert-share-chunk.js, init/assert-share-entry.js, router/index.js share guard, init/init.js share regex
+
+Success state for later T-24:
+NOT "a component file exists", BUT: the existing single-mailbox visitor page still shows featured mail and copies OTP the same way after the card is extracted; otpExtractionEnabled=false hides the OTP zone; empty code still renders the mail.
+Negative: do not import login-state axios/layout/Dexie/websiteConfig into the share chunk; do not touch the visitor guard or /s/<lid>#<sec> path.
+
+Return: executable file list, extraction cut lines, what must stay in index.vue, fog list ≤3, and what T-25/T-26 must not steal from this task.
+
+Reply to user in Chinese.

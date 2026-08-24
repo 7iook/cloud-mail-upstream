@@ -150,6 +150,12 @@
 | T22-P2-1 | CHANGE:刷新间隔必须是 ≥3000 的安全整数 | review-t22；3000.5 与栅栏共用 SHARE_INVALID_CONFIG |
 | T21-P1-1 | CHANGE:抽屉用 `reqGen` 丢弃迟到响应；切分享/关闭都 bump | review-t21；展示 A 写 B / 错 Key / 错关 |
 | T21-P2-1 | CHANGE:AuthKey 成功后 `authKeyOnce = authKey \|\| ''`，disable 清空明文 | review-t21；失效 Key 不得继续留在 DOM |
+| Fog-1 | CHANGE:`copyResult` 随卸载归零；禁 `defineExpose`/`v-model`；加 exit 后再 ready 测试 | recon-t24 |
+| Fog-2 | CHANGE:false+带 code 不渲染；缺 config 默认 true 由既有 AC-OTP-07 覆盖 | recon-t24 |
+| Fog-3 | CHANGE:manual 路径断言 `is-visible` + 源码样式断言；不建视觉框架 | recon-t24 |
+| T24-SENDER | CHANGE:`senderLine` 抽 `mail-fields.js`，禁止复制 8 行 | recon-t24 |
+| T24-CONFIG | CHANGE:`applyShareConfig` 只读 otp 开关；仅严格 false 隐藏；bootstrap 开头 reset | recon-t24 |
+| T24-NO-SPEC | HOLD:新断言进 `index.spec.js`，不建 `ShareOtpCard.spec.js` | recon-t24 |
 
 ## 冲突热区占用
 
@@ -165,11 +171,14 @@
 | `mail-share-service.js` | T-18 已入库 `73dc371` | 其后只读，除非再开任务 |
 | `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
-| `mail-vue/src/views/email/ShareDialog.*` | T-23 写者 | 其后 T-29 才清 PENDING_COPY；T-22 0 行 |
+| `mail-vue/src/views/email/ShareDialog.*` | T-23 已收口 `4f4cc65` | 其后 T-29 才清 PENDING_COPY |
+| `mail-vue/src/views/share/index.vue` | **T-24 当前写者** | 与 T-25/T-26 同触，串行；T-25/T-26 等 T-24 APPROVED |
+| `mail-vue/src/views/share/session.js` / `useSharePolling.js` / `request/share.js` | T-25/T-26 | T-24 0 行 |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-24 侦察已落并裁 Fog-1/2/3 + T24-SENDER/CONFIG。未勾选 T-24。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI：T-22 R2 APPROVED p0=0。P1-1/P2-1 CLOSED。主 AI 独立 58/58 + 全量 vue 21/185 · worker 18/619 · E2E 13。W4 收口。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI：T-22 审查 NEEDS_CHANGES p1=1 p2=1。T22-P1-1/P2-1 均 CHANGE。定点 T22-P 2/2 + 邻接 6/58。R2 pending。未勾选尾：T-22 R2 / T-24 → T-29。
 - 2026-08-24 · 主 AI：T-23 审查 APPROVED（P2-1 HOLD）。T-22 实现待审查。主 AI 独立定点 6 files / 56 + 全量 vue 21/183。未勾选尾：T-22 审查 / T-24 → T-29。

@@ -1,0 +1,28 @@
+T-25 recon · visitor multi-mailbox tabs (W5 second bar)
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Do NOT git commit / push / stash / switch branch.
+Do NOT edit production or test files.
+Write only:
+  /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t25-tabs.md
+
+T-24 ShareOtpCard extraction may be landing in parallel. Treat current index.vue as the baseline; do not assume ShareOtpCard.vue already exists. T-25 must consume T-24's card props (mails / selected / enabled) and MUST NOT steal featuredMail / copy / those four data-share-* hooks.
+
+Read first:
+1. frontend-design / impeccable / ui-ux-pro-max / ponytail(lite)
+2. docs/specs/mailbox-share-capability/tasks.md T-25
+3. recon-t24-otp-card.md §8 (what T-25 must not steal)
+4. Current mail-vue/src/views/share/index.vue, index.spec.js, useSharePolling.js,
+   request/share.js, session.js, assert-share-chunk.js, init/assert-share-entry.js,
+   router share guard, init.js share regex
+5. Worker session/status payload: share-auth-service.js buildSessionPayload,
+   share status endpoint fields (shareType / mailboxes / latestEmailId)
+
+Success state for later T-25:
+NOT "tabs exist", BUT: a visitor with multiple bindings sees masked addresses as native tabs, a badge only after they have consumed a binding's watermark, and polling stays one status request per tick (no N-way mail fetch).
+Negative: do not touch visitor guard / init.js regex / /s/<lid>#<sec>; do not import login-graph into share chunk; do not let ShareOtpCard filter by bindingId.
+
+Return: executable file list, cut lines, watermark map key/shape, how status+mails compose with useSharePolling, fog list ≤3, what T-26 must not steal.
+
+Reply to user in Chinese.
