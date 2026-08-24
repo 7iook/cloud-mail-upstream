@@ -20,9 +20,10 @@ Proposed(stub · 随 `docs/specs/mailbox-share-capability/` charter 落盘,实�
 
 **就地扩展既有边界,不重建**:
 
-- `mail_share` 表就地加列(v3_2DB)+ 新建 `mail_share_binding` 表;存量单邮箱行迁移回填恰一条 Binding,旧链接继续有效。
-- **累计 Session 配额**用单条原子条件 UPDATE 实现,**不建服务端 Session 表**(维持旧 ADR「无状态 token」裁决;并发上限才需要落库,本裁决为累计上限)。
-- **可选 auth_key** 作为 establishSession 的第二因子;错误暴露面最小化(仅 `lid`+`sec` 通过者可见 `SHARE_AUTH_REQUIRED`,其余保持不可区分 `SHARE_UNAVAILABLE`);暴破防护 = IP 边缘限流 + per-share 原子失败计数短窗锁定,禁止按 lid 永久锁死。
+- `mail_share` 表就地加列(v3_2DB)+ 新建 `mail_share_binding` 表;存量单邮箱行经**迁移门禁**(JOIN account 校验存活/未删/归属,R2 评审 A4)回填恰一条 Binding,不满足门禁的脏旧行直接 REVOKED 不回填,旧有效链接继续可用。
+- **滚动发布走 Expand/Contract 分阶段协议**(R2 评审 A1):Expand 阶段新代码双写 `mail_share.account_id` = 主 Binding 的 `account_id`(禁止写 0),多邮箱能力受 `SHARE_MULTI_ENABLED`(默认 false)门控,全量 Worker 升级并完成回填前不开启;新代码读路径只信 Binding;确认无旧 Worker 后方进入 Contract 停止双写。回滚 = 关 multi 开关,单邮箱因双写在旧 Worker 下仍可用。
+- **累计 Session 配额**用单条原子条件 UPDATE 实现,**不建服务端 Session 表**(维持旧 ADR「无状态 token」裁决;并发上限才需要落库,本裁决为累计上限)。**线性化承诺收敛**(R2 评审 A3):以条件 UPDATE 成功时刻为配额与授权线性化点;UPDATE→签发之间的并发失效属已知极窄 TOCTOU,token 回源失败且名额不退还,不承诺「响应时仍可用」。
+- **可选 auth_key** 作为 establishSession 的第二因子;错误暴露面最小化(仅 `lid`+`sec` 通过者可见 `SHARE_AUTH_REQUIRED`,其余保持不可区分 `SHARE_UNAVAILABLE`);暴破防护**仅**依赖既有 IP 边缘限流(R2 评审 A6:Key 为 128-bit 服务端 CSPRNG 凭据,在线穷举不可行,不建失败计数/锁定状态表)。
 - 旧 ADR 曾拒绝的「通用 ResourceGrant 抽象」维持拒绝:多邮箱 Binding 不构成第二种 grant 类型,不触发重开该裁决。
 
 细节契约见 `docs/specs/mailbox-share-capability/design.md`(Decision 1-19)。
@@ -37,9 +38,10 @@ Proposed(stub · 随 `docs/specs/mailbox-share-capability/` charter 落盘,实�
 
 ### 代价
 
-- `mail_share.account_id`/`window_start_email_id` 降级为迁移遗留只读列,双真源风险须由 schema 测试与读路径一次性切换封死。
+- `mail_share.account_id` 在 Expand 阶段是双写目标(鉴权零读取),Contract 后才降为遗留列;双真源风险由「读路径只信 Binding + 双写主 Binding + `SHARE_MULTI_ENABLED` 门控」的分阶段协议封闭(design「迁移/发布协议」),代价是兼容窗口内每次 Binding 变更多一次主表写。
 - 级联撤销、清理任务、附件校验等六处单值假设须同步改造,漏改即越权或孤儿行(spec 已列 AC 钉死)。
-- AuthKey 引入人可传达的低熵凭据,暴破面大于纯 capability URL;锁定机制成为新的可用性/安全权衡点。
+- AuthKey 使凭据面从纯 capability URL 扩展为 URL+Key 两件套;因 Key 为服务端生成 128-bit 凭据,不引入锁定机制(R2 评审 A6),请求成本约束完全依赖边缘限流。
+- 配额与授权只在条件 UPDATE 时刻线性化:UPDATE→签发间的极窄 TOCTOU 下 token 即死且名额不退还,属文档化接受的取舍(替代方案是服务端 Grant/Session 台账,被判定过重)。
 - 推翻旧裁决产生两份并存 charter(mail-share / mailbox-share-capability),supersede 时点留待发布观察期后由用户裁定。
 
 ## References
