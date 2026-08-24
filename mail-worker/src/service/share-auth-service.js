@@ -29,6 +29,11 @@ function effectiveStatus(row, now) {
 	if (row.expiresAt <= now) {
 		return 'EXPIRED';
 	}
+	// NULL/undefined max_sessions means unlimited; a configured cap is reached
+	// at >=, so a cap of 0 is reached immediately.
+	if (row.maxSessions != null && row.accessCount >= row.maxSessions) {
+		return 'ACCESS_LIMIT_REACHED';
+	}
 	return 'ACTIVE';
 }
 
@@ -219,10 +224,18 @@ async function verifyToken(c, sessionToken) {
 	}
 }
 
-function assertShareActive(row) {
-	if (!(row.accountId > 0) || effectiveStatus(row, nowText()) !== 'ACTIVE') {
+// Establishing a session needs a fully ACTIVE share; an already-issued session
+// keeps reading through ACCESS_LIMIT_REACHED (AC-SESS-06: close the door,
+// don't clear the room).
+const ESTABLISH_ALLOWED = ['ACTIVE'];
+const RESOLVE_ALLOWED = ['ACTIVE', 'ACCESS_LIMIT_REACHED'];
+
+function assertAllowed(row, allowed) {
+	const state = effectiveStatus(row, nowText());
+	if (!(row.accountId > 0) || !allowed.includes(state)) {
 		throwUnavailable();
 	}
+	return state;
 }
 
 async function loadLiveAccount(c, accountId) {
@@ -253,7 +266,7 @@ async function establishSession(c, lid, sec, deps = {}) {
 	if (!row || !matched) {
 		throwUnavailable();
 	}
-	assertShareActive(row);
+	assertAllowed(row, ESTABLISH_ALLOWED);
 	const accountRow = await loadLiveAccount(c, row.accountId);
 	const sessionToken = await issueToken(c, row);
 	try {
@@ -283,14 +296,14 @@ async function resolveSession(c, sessionToken) {
 	if (!row || row.lid !== payload.lid) {
 		throwUnavailable();
 	}
-	assertShareActive(row);
+	const state = assertAllowed(row, RESOLVE_ALLOWED);
 	await loadLiveAccount(c, row.accountId);
 	return {
 		shareId: row.shareId,
 		accountId: row.accountId,
 		windowStartEmailId: row.windowStartEmailId,
 		expiresAt: row.expiresAt,
-		effectiveStatus: 'ACTIVE'
+		effectiveStatus: state
 	};
 }
 

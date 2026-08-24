@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:test';
+import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import shareAuthService from '../src/service/share-auth-service';
 import shareResult from '../src/model/share-result';
@@ -103,19 +104,33 @@ async function insertShare({
 	status = 'ACTIVE',
 	expiresAt = '2099-01-01 00:00:00',
 	accountId = ACCOUNT_ID,
-	windowStartEmailId = 10
+	windowStartEmailId = 10,
+	maxSessions,
+	accessCount
 }) {
 	const secHmac = await hmacHex(pepper, sec);
 	seededLids.push(lid);
-	await env.db.prepare(`
-		INSERT INTO mail_share (
-			lid, sec_hmac, pepper_kid, user_id, account_id, status,
-			window_start_email_id, expires_at, delete_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`).bind(
+	const columns = [
+		'lid', 'sec_hmac', 'pepper_kid', 'user_id', 'account_id', 'status',
+		'window_start_email_id', 'expires_at', 'delete_at'
+	];
+	const values = [
 		lid, secHmac, pepperKid, USER_ID, accountId, status,
 		windowStartEmailId, expiresAt, '2099-12-31 00:00:00'
-	).run();
+	];
+	// Omitted by default so every pre-existing case keeps max_sessions NULL.
+	if (maxSessions !== undefined) {
+		columns.push('max_sessions');
+		values.push(maxSessions);
+	}
+	if (accessCount !== undefined) {
+		columns.push('access_count');
+		values.push(accessCount);
+	}
+	await env.db.prepare(`
+		INSERT INTO mail_share (${columns.join(', ')})
+		VALUES (${columns.map(() => '?').join(', ')})
+	`).bind(...values).run();
 	const row = await env.db.prepare('SELECT share_id FROM mail_share WHERE lid = ?').bind(lid).first();
 	return { shareId: row.share_id, secHmac };
 }
@@ -335,5 +350,145 @@ describe('shareAuthService', () => {
 		} finally {
 			nowSpy.mockRestore();
 		}
+	});
+
+	it('ranks effectiveStatus REVOKED > EXPIRED > ACCESS_LIMIT_REACHED > ACTIVE without touching storage (AC-LIFE-01, AC-LIFE-02, P-LIFE-02)', async () => {
+		const now = '2026-08-24 00:00:00';
+		const before = await env.db.prepare('SELECT COUNT(*) AS n FROM mail_share').first();
+
+		fc.assert(
+			fc.property(
+				fc.record({
+					status: fc.constantFrom('ACTIVE', 'REVOKED'),
+					expiresAt: fc.constantFrom('2001-01-01 00:00:00', now, '2099-01-01 00:00:00'),
+					maxSessions: fc.oneof(fc.constant(null), fc.constant(undefined), fc.integer({ min: 0, max: 4 })),
+					accessCount: fc.integer({ min: 0, max: 4 }),
+					accountId: fc.integer({ min: 1, max: 9 })
+				}),
+				(row) => {
+					const frozen = Object.freeze({ ...row });
+					const state = shareAuthService.effectiveStatus(frozen, now);
+					expect(['REVOKED', 'EXPIRED', 'ACCESS_LIMIT_REACHED', 'ACTIVE']).toContain(state);
+					expect(shareAuthService.effectiveStatus(frozen, now)).toBe(state);
+					const capped = frozen.maxSessions != null && frozen.accessCount >= frozen.maxSessions;
+					if (frozen.status === 'REVOKED') {
+						expect(state).toBe('REVOKED');
+					} else if (frozen.expiresAt <= now) {
+						expect(state).toBe('EXPIRED');
+					} else if (capped) {
+						expect(state).toBe('ACCESS_LIMIT_REACHED');
+					} else {
+						expect(state).toBe('ACTIVE');
+					}
+				}
+			),
+			{ numRuns: 200 }
+		);
+
+		const after = await env.db.prepare('SELECT COUNT(*) AS n FROM mail_share').first();
+		expect(after.n).toBe(before.n);
+
+		const live = { status: 'ACTIVE', expiresAt: '2099-01-01 00:00:00', accountId: 1 };
+		// A configured cap of 0 is reached at zero access; only NULL/undefined means unlimited.
+		expect(shareAuthService.effectiveStatus({ ...live, maxSessions: 0, accessCount: 0 }, now)).toBe('ACCESS_LIMIT_REACHED');
+		expect(shareAuthService.effectiveStatus({ ...live, maxSessions: null, accessCount: 99 }, now)).toBe('ACTIVE');
+		expect(shareAuthService.effectiveStatus({ ...live, accessCount: 99 }, now)).toBe('ACTIVE');
+	});
+
+	it('keeps an issued session readable after the cap is reached while refusing a new session (AC-SESS-06, AC-LIFE-04, P-SESS-03)', async () => {
+		await ensureAccount();
+		const lid = randomLid('cap-hit');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+
+		const established = await shareAuthService.establishSession(c, lid, sec);
+		const seeded = await env.db.prepare(
+			'SELECT access_count, max_sessions, status FROM mail_share WHERE share_id = ?'
+		).bind(shareId).first();
+		expect(seeded.max_sessions).toBe(1);
+		expect(seeded.access_count).toBe(1);
+
+		const resolved = await shareAuthService.resolveSession(c, established.sessionToken);
+		expect(resolved).toMatchObject({
+			shareId,
+			accountId: ACCOUNT_ID,
+			windowStartEmailId: 10,
+			effectiveStatus: 'ACCESS_LIMIT_REACHED'
+		});
+
+		const denied = await catchFail(shareAuthService.establishSession(c, lid, sec));
+		expect(denied).toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+
+		const afterDeny = await env.db.prepare(
+			'SELECT access_count, status FROM mail_share WHERE share_id = ?'
+		).bind(shareId).first();
+		expect(afterDeny.access_count).toBe(1);
+		expect(afterDeny.status).toBe('ACTIVE');
+	});
+
+	it('serves both establish and resolve while access_count is below max_sessions (AC-LIFE-02)', async () => {
+		await ensureAccount();
+		const lid = randomLid('cap-below');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 3, accessCount: 1 });
+		const c = ctx();
+
+		const established = await shareAuthService.establishSession(c, lid, sec);
+		const resolved = await shareAuthService.resolveSession(c, established.sessionToken);
+		expect(resolved).toMatchObject({ shareId, effectiveStatus: 'ACTIVE' });
+		const row = await env.db.prepare('SELECT access_count FROM mail_share WHERE share_id = ?').bind(shareId).first();
+		expect(row.access_count).toBe(2);
+	});
+
+	it('lets expiry and revocation outrank the cap on the resolve path (AC-LIFE-02, AC-LIFE-05)', async () => {
+		await ensureAccount();
+		const c = ctx();
+
+		const expiredLid = randomLid('cap-then-exp');
+		const expiredSec = randomSec();
+		const expired = await insertShare({ lid: expiredLid, sec: expiredSec, maxSessions: 1 });
+		const expiredSession = await shareAuthService.establishSession(c, expiredLid, expiredSec);
+		await env.db.prepare("UPDATE mail_share SET expires_at = '2001-01-01 00:00:00' WHERE share_id = ?")
+			.bind(expired.shareId).run();
+		expect(await catchFail(shareAuthService.resolveSession(c, expiredSession.sessionToken)))
+			.toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+
+		const revokedLid = randomLid('cap-then-rev');
+		const revokedSec = randomSec();
+		const revoked = await insertShare({ lid: revokedLid, sec: revokedSec, maxSessions: 1 });
+		const revokedSession = await shareAuthService.establishSession(c, revokedLid, revokedSec);
+		await env.db.prepare("UPDATE mail_share SET status = 'REVOKED' WHERE share_id = ?")
+			.bind(revoked.shareId).run();
+		expect(await catchFail(shareAuthService.resolveSession(c, revokedSession.sessionToken)))
+			.toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+	});
+
+	it('never persists a computed status on any seeded row (AC-LIFE-01)', async () => {
+		await ensureAccount();
+		const cappedLid = randomLid('persist-cap');
+		const cappedSec = randomSec();
+		await insertShare({ lid: cappedLid, sec: cappedSec, maxSessions: 1, accessCount: 1 });
+		const expiredLid = randomLid('persist-exp');
+		await insertShare({ lid: expiredLid, sec: randomSec(), expiresAt: '2001-01-01 00:00:00' });
+		const revokedLid = randomLid('persist-rev');
+		await insertShare({ lid: revokedLid, sec: randomSec(), status: 'REVOKED' });
+
+		expect(await catchFail(shareAuthService.establishSession(ctx(), cappedLid, cappedSec)))
+			.toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+
+		const placeholders = seededLids.map(() => '?').join(', ');
+		const seeded = await env.db.prepare(
+			`SELECT status FROM mail_share WHERE lid IN (${placeholders})`
+		).bind(...seededLids).all();
+		expect(seeded.results.length).toBe(seededLids.length);
+		for (const row of seeded.results) {
+			expect(['ACTIVE', 'REVOKED']).toContain(row.status);
+		}
+
+		const computed = await env.db.prepare(
+			"SELECT COUNT(*) AS n FROM mail_share WHERE status IN ('ACCESS_LIMIT_REACHED', 'EXPIRED')"
+		).first();
+		expect(computed.n).toBe(0);
 	});
 });
