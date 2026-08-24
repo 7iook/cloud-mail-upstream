@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W0 done · W1/T-05 landing · T-06 next |
+| 状态 Status | in-progress · W0 done · W1/T-06 landing · T-07 next |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -140,13 +140,28 @@
       - AC: AC-LIFE-02, AC-LIFE-04
       - commit: c7789e6
 
-- [ ] T-06 配额闸门:`consumeSessionQuota` 单语句条件 UPDATE(取代 fire-and-forget `recordAccess`)
-  - [ ]* T-06.1 红:`mail-worker/test/share-auth-service.spec.js` —— 成功建会话 `access_count` 恰 +1(RETURNING 含 status/expires/cv/配额四条件);触顶/撤销/过期/cv 变 → 拒发零变更;并发抢最后名额恰 max 次成功(P-SESS-01,必须 `Promise.allSettled` 并发,串行 await 是假绿);读请求序列(mails/mail/attachment)零配额消耗(P-SESS-02;status 端点属 T-14,本任务以 resolveSession 源码无写护栏代替);条件 UPDATE 前状态变更注入 → 正确拒发;UPDATE 后 TOCTOU 注入 → token 首次回源失败、名额不退还(文档化行为);配额 UPDATE 失败/RETURNING 空 → 拒发(AC-SESS-11)
+- [x] T-06 配额闸门:`consumeSessionQuota` 单语句条件 UPDATE(取代 fire-and-forget `recordAccess`)
+  - **Evidence**
+    - verify: 红 `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js`（仅测试就位、源码回退 HEAD）→ EXIT=1（7 failed / 19 passed / 26；6 路并发实测超发 6、8 路并发实测超发 8）；绿同命令 → EXIT=0（26/26）；主 AI `pnpm --dir mail-worker test` → EXIT=0（17/213）；`pnpm --dir mail-vue test` → EXIT=0（17/95）；`node tests/e2e/run.mjs` → EXIT=0（13 passed）
+    - files: `mail-worker/src/service/share-auth-service.js:253-328` · `mail-worker/test/share-auth-service.spec.js:383-405,634-891`
+    - AC: AC-SESS-01, AC-SESS-02, AC-SESS-05, AC-SESS-07, AC-SESS-11, AC-EDGE-01, AC-EDGE-02, AC-EDGE-13
+    - commit: 6209960
+  - [x]* T-06.1 红:`mail-worker/test/share-auth-service.spec.js` —— 成功建会话 `access_count` 恰 +1(RETURNING 含 status/expires/cv/配额四条件);触顶/撤销/过期/cv 变 → 拒发零变更;并发抢最后名额恰 max 次成功(P-SESS-01,必须 `Promise.allSettled` 并发,串行 await 是假绿);读请求序列(mails/mail/attachment)零配额消耗(P-SESS-02;status 端点属 T-14,本任务以 resolveSession 源码无写护栏代替);条件 UPDATE 前状态变更注入 → 正确拒发;UPDATE 后 TOCTOU 注入 → token 首次回源失败、名额不退还(文档化行为);配额 UPDATE 失败/RETURNING 空 → 拒发(AC-SESS-11)
     - **P-SESS-01: 配额不超发** _Validates: AC-SESS-01, AC-SESS-07, AC-EDGE-02_
     - **P-SESS-02: 读请求零配额消耗** _Validates: AC-SESS-02, AC-EDGE-01, AC-EDGE-11_
     - _Requirements: AC-SESS-01, AC-SESS-02, AC-SESS-05, AC-SESS-07, AC-SESS-11, AC-EDGE-01, AC-EDGE-02, AC-EDGE-10, AC-EDGE-13_
-  - [ ] T-06.2 绿:`share-auth-service.js` 重写 `establishSession` 流程(读快照取 cv → 校验 → 条件 UPDATE `WHERE status='ACTIVE' AND expires_at > now AND credentials_version = :cv AND (max_sessions IS NULL OR access_count < max_sessions) RETURNING` → 非空才 `issueToken`);`last_access_at` 与 `access_count` 同在闸门成功语句,establish 路径不再保留 fire-and-forget 库写;`exp = min(expires_at, iat+TTL)` 不变、无续期路径;快照已触顶与闸门落空两处均打 `share.session.denied_quota`(reason=`quota_snapshot`/`quota_race`);无先读后写两步状态变更(AC-SEC-08;读快照取 cv 保留)
+    - **Evidence**
+      - verify: 红同上命令 → EXIT=1（7 条行为缺失：AC-SESS-11 仍签发、6/8 路并发超发、cv/revoke/expire 谓词缺失、denied_quota 未打、consumeSessionQuota 尚不存在）
+      - files: `mail-worker/test/share-auth-service.spec.js:383-405,634-891`
+      - AC: AC-SESS-01, AC-SESS-07, AC-SESS-11, AC-EDGE-02
+      - commit: 6209960
+  - [x] T-06.2 绿:`share-auth-service.js` 重写 `establishSession` 流程(读快照取 cv → 校验 → 条件 UPDATE `WHERE status='ACTIVE' AND expires_at > now AND credentials_version = :cv AND (max_sessions IS NULL OR access_count < max_sessions) RETURNING` → 非空才 `issueToken`);`last_access_at` 与 `access_count` 同在闸门成功语句,establish 路径不再保留 fire-and-forget 库写;`exp = min(expires_at, iat+TTL)` 不变、无续期路径;快照已触顶与闸门落空两处均打 `share.session.denied_quota`(reason=`quota_snapshot`/`quota_race`);无先读后写两步状态变更(AC-SEC-08;读快照取 cv 保留)
     - _Requirements: AC-SESS-01, AC-SESS-05, AC-SESS-11, AC-SEC-08_
+    - **Evidence**
+      - verify: 绿 `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js` → EXIT=0（26/26）；主 AI 全量 worker 17/213、vue 17/95、E2E 13，均为 EXIT=0
+      - files: `mail-worker/src/service/share-auth-service.js:253-328`
+      - AC: AC-SESS-01, AC-SESS-05, AC-SESS-11, AC-SEC-08
+      - commit: 6209960
 
 - [ ] T-07 Session 建立幂等恢复:KV 结果重放(R3-A3)
   - [ ]* T-07.1 红:`mail-worker/test/share-auth-service.spec.js` —— 同 `Idempotency-Key` 重放 → 同 token、`access_count` 不变、零 UPDATE;新 key/无 key → 正常消耗;KV 故障注入 → 仍签发(fail-open)+ `share.system.error` 日志;TTL = min(120s, token 剩余寿命)
@@ -319,6 +334,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-06 勾选。主 AI 独立复跑 worker 17/213、vue 17/95、E2E 13，均为 EXIT=0。`recordAccess` 已删；闸门空/抛错拒发；并发 `Promise.allSettled` 抢最后名额恰 1。未勾选尾：T-07 → T-29。
 - 2026-08-24 · executor(tasks 撰写执行者):Template 3 首次落盘。29 个父任务 / 7 个波次(W0–W6),107 条 AC 全量映射(每任务 `_Requirements` 聚类),9 条 Correctness Properties 挂到核心逻辑任务(T-05/T-06/T-08/T-10/T-11/T-13);冲突热区(`init.js`/`security.js`/`share-auth-service.js`/`mail-share-service.js`/i18n)单 owner 规则成表;全部文件路径已对 2026-08-24 工作树逐一核实(`mail-worker/test/` 17 spec、`kv-const.js`、`tests/e2e/specs/` 等),零虚构路径。依据:design.md(converged,R1–R3)+ requirements.md(107 AC)+ 三份 recon。
 - 2026-08-24 · 主 AI(实现会话):接手直接进入 W0。代码现实 HEAD `e120a04` 无 `v3_2DB`/Binding 实体/`SHARE_CAPABILITY_V2`。分支 `cursor/mailbox-share-capability-dcb6`。T-01 已派 executor；W0 可执行范围与 T-02/T-03/T-04 拆分已派 plan-reality-recon。未勾选任何 `[x]`（尚无 Evidence）。台账:`.agent-workspace/.archive/2026-08-24/mailbox-share-capability/session-ledger.md`。
 - 2026-08-24 · 主 AI:T-01 勾选。主 AI 独立复跑 `pnpm --dir mail-worker test` → 17/153 绿。W0 侦察裁决（不改 charter）:R1 T-02.1 grep 收窄为「不新增读取 + 允许清单固定 share-auth-service 既有 4 处直至 T-08」；R3 回填 SQL 保持原文不加 `status='ACTIVE'`，孤儿 Binding 交 T-18；R5 `wrangler.toml` 仅注释声明 `SHARE_CAPABILITY_V2`（与既有 SHARE_* 一致），缺省/false 由代码与 `wrangler-vitest.toml` 承担，禁止 toml 硬写 false 覆盖 dashboard。W0 剩余 T-02→T-03→T-04 单执行者串行。
