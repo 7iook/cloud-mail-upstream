@@ -83,7 +83,9 @@
 | W5 | T-26 session UX | ✅ 已提交 `6e8bc10` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 13 · worker 零 diff |
 | W5 | T-26 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t26.md` |
 | W6 | T-27 E2E | ✅ 已提交 `190f704` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 |
+| W6 | T-27 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t27.md` · P2-1 HOLD |
 | W6 | T-28 Checkpoint | ✅ 三套全绿（无代码改动） | 主 AI | vue 22/250 · worker 18/626 · E2E 19 |
+| W6 | T-29 收尾 | ⏳ 迷雾已裁，待实现 | explore≈plan-reality-recon | `recon-t29-wrap.md` |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -190,6 +192,12 @@
 | T27-BADGE-GATE | CHANGE: 角标闸门=首帧 `share:status:<lid>` 写盘，不是 `ready` | reconcile 首见 Binding 即播种水位；ready 后立刻投递会被卷进基线 |
 | T27-L1 | P2 登记：浏览中撤销后倒计时残留 | `clearMailboxView` 未清 `expiresAt`；属 mail-vue，T-27 禁改；建议 T-29 |
 | T27-P2-1 | HOLD:审查确认同一残留，不据此 NEEDS_CHANGES | review-t27；修法 `expiresAt.value = ''`，归 T-29 |
+| F-1 T-29 | CHANGE:不新建 CHANGELOG.md；行写入既有 Update Log + ADR 实施结论 | recon-t29；仓内无 changelog，GitHub Releases 才是版本流水 |
+| F-3 T-29 | CHANGE:落盘全部 96 键（访客 10 + 管理 86），不是会话说的「10 个」 | recon-t29 §3；成功态要求管理端不再走 PENDING_COPY |
+| F-4 T-29 | CHANGE:clearMailboxView 与 exitShare 各加一行 `expiresAt.value = ''` | recon-t29 §5；倒计时节点与 state 无关 |
+| T29-PENDING | HOLD:不删 5 份 PENDING_COPY 映射 | 键补齐后自动不可达；删要动 5 个生产文件 |
+| T29-E2E | CHANGE:vue 修完后给 visitor-revoke-live 加一条 `[data-share-expires]` count=0 | 新增覆盖，不是把红改绿；T-28 禁令的反方向 |
+| T29-SHIP | CHANGE:`shipped_commit=190f704`；design status→shipped | T-27 是最后一笔被验收的实现；T-29 不能自引用 |
 
 ## 冲突热区占用
 
@@ -197,7 +205,7 @@
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
 | `mail-vue/src/request/mail-share.js` | T-22 已收口 `5c9651f` | 旧四键 `toEqual` 仍绿；其后只读除非再开任务 |
-| `mail-vue/src/views/share-admin/*` | T-21/`T-22` 已收口 | `status.js` / 抽屉 / 向导其后只读；T-29 清 PENDING_COPY |
+| `mail-vue/src/views/share-admin/*` | T-21/`T-22` 已收口 | T-29 只落 i18n，不删 PENDING_COPY、不改 vue |
 | `mail-vue/src/perm/perm.js` | T-20 已入库 `672da73` | 其后只加路由须新任务 |
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` / `share-mail-service.js` | T-25 已收口 `16f705b` | 其后只读，除非范围模型再变 |
@@ -205,16 +213,17 @@
 | `mail-share-service.js` | T-18 已入库 `73dc371` | 其后只读，除非再开任务 |
 | `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
-| `mail-vue/src/views/email/ShareDialog.*` | T-23 已收口 `4f4cc65` | 其后 T-29 才清 PENDING_COPY |
-| `mail-vue/src/views/share/index.vue` | T-26 已收口 `6e8bc10` | 其后只读；T-27 只消费 `[data-share-*]` 钩子 |
+| `mail-vue/src/views/email/ShareDialog.*` | T-23 已收口 `4f4cc65` | T-29 只落 i18n 键 `shareGoAdmin`，不删 PENDING_COPY |
+| `mail-vue/src/views/share/index.vue` | **T-29 当前写者（两行）** | 仅 `clearMailboxView` / `exitShare` 补 `expiresAt.value = ''` |
 | `mail-vue/src/views/share/session.js` | T-26 已收口 `6e8bc10` | 其后只读 |
 | `useSharePolling.js` | T-26 已收口 `6e8bc10` | `toValue(intervalMs)`；禁止 `autoStart`/`listStatus`/`mode` |
 | `mail-vue/src/request/share.js` | T-26 已收口 `6e8bc10` | 其后只读 |
-| `tests/e2e/**` | T-27 已收口 `190f704` | T-28 禁改 spec 把断言调绿；其后只读除非再开任务 |
-| i18n | 无 | T-29 收口 |
+| `tests/e2e/**` | **T-29 可写 1 行** | 仅 `visitor-revoke-live.spec.js` 加 `[data-share-expires]` count=0；其余冻结 |
+| i18n | **T-29 当前写者** | zh.js / en.js 尾部追加 96 键；不删 PENDING_COPY |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-29 侦察已裁 F-1/F-3/F-4（`recon-t29-wrap.md`）。派实现。未勾选尾：T-29。
 - 2026-08-24 · 主 AI：T-28 三套全绿。vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。`tests/e2e/**` 零 diff。勾选 T-28。未勾选尾：T-29。
 - 2026-08-24 · 主 AI：T-27 APPROVED p0=0（`review-t27.md`）。勾选 T-27。P2-1 HOLD。热区 `tests/e2e/**` 收口只读。未勾选尾：T-28 → T-29。
 - 2026-08-24 · 主 AI：T-27 实现待审查（`190f704`）。主 AI 独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。Fog-1/2/3 按 §13 原样成立；四条实施偏离 CHANGE 接受。L1 倒计时残留登记 P2（T-29）。未勾选。未勾选尾：T-27 审查 / T-28 → T-29。

@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · T-27/T-28 APPROVED · T-29 侦察 |
+| 状态 Status | in-progress · T-27/T-28 APPROVED · T-29 实现 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -637,7 +637,7 @@
     - verify: `pnpm --dir mail-vue test -- --no-cache` → EXIT=0，22 files / 250 passed；`pnpm --dir mail-worker test -- --no-cache` → EXIT=0，18 files / 626 passed；`node tests/e2e/run.mjs` → EXIT=0，19 passed / 0 skipped（8788 先确认空闲）。`tests/e2e/**` 本任务零 diff
     - files: 无生产/测试改动（纯回归）
     - AC: 基线守恒（只增不减）
-    - commit: pending
+    - commit: none (checkpoint, no code delta)
     - note: 活基线现为 vue 22/250 · worker 18/626 · E2E 19；章程原文 138/95/13 为开工地板，未改写
 
 - [ ] T-29 收尾:文档 / CHANGELOG / ADR / i18n
@@ -674,6 +674,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-29 侦察已裁 F-1/F-3/F-4（`recon-t29-wrap.md`）。未勾选。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-28 三套全绿。vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。e2e 零 diff。勾选 T-28。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-27 APPROVED p0=0（`review-t27.md`）。勾选 T-27。独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。P2-1 HOLD（撤销后倒计时残留，T-29）。未勾选尾：T-28 → T-29。
 - 2026-08-24 · 主 AI:T-27 实现待审查（`190f704`）。主 AI 独立 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。生产 vue/worker 零 diff。未勾选（等审查 APPROVED）。未勾选尾：T-27 审查 / T-28 → T-29。
