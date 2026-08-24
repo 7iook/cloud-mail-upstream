@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { getTableColumns, getTableName } from 'drizzle-orm';
 import { mailShare, shareIdempotency } from '../src/entity/mail-share.js';
 import { mailShareBinding } from '../src/entity/mail-share-binding.js';
+import shareAuthSource from '../src/service/share-auth-service.js?raw';
+import shareScopedRepoSource from '../src/service/share-scoped-email-repository.js?raw';
 
 function columnMap(table) {
 	return Object.fromEntries(
@@ -13,6 +15,13 @@ function notNullMap(table) {
 	return Object.fromEntries(
 		Object.entries(getTableColumns(table)).map(([prop, col]) => [prop, col.notNull])
 	);
+}
+
+// 主表 `account_id` 是 Expand 阶段的双写目标，鉴权/范围代码只信 Binding。
+const PRIMARY_ACCOUNT_READ = /\brow\.accountId\b|\bmailShare\.accountId\b|mail_share\.account_id|\bms\.account_id\b/g;
+
+function countPrimaryAccountReads(source) {
+	return (source.match(PRIMARY_ACCOUNT_READ) || []).length;
 }
 
 describe('mail_share drizzle schema (design.md Data Models)', () => {
@@ -127,6 +136,22 @@ describe('mail_share_binding drizzle schema (design.md Data Models)', () => {
 		const cols = getTableColumns(mailShareBinding);
 		expect(cols.bindingId.primary).toBe(true);
 		expect(cols.windowStartEmailId.default).toBe(0);
+	});
+});
+
+describe('primary account_id read fence (AC-BIND-01, AC-LIFE-10)', () => {
+	it('freezes share-auth-service.js at its four pre-existing row.accountId reads', () => {
+		// 这 4 处（assertShareActive / establishSession / resolveSession ×2）是 T-08 集合化之前
+		// 的存量读取，冻结为允许清单：不得出现第 5 处。
+		expect(countPrimaryAccountReads(shareAuthSource)).toBe(4);
+	});
+
+	it('keeps share-scoped-email-repository.js reading zero mail_share.account_id', () => {
+		expect(countPrimaryAccountReads(shareScopedRepoSource)).toBe(0);
+	});
+
+	it('keeps the dual-write column non-nullable so the helper can never leave it unset', () => {
+		expect(getTableColumns(mailShare).accountId.notNull).toBe(true);
 	});
 });
 

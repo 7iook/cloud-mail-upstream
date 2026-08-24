@@ -12,6 +12,27 @@ const DEFAULT_RETENTION_SECONDS = 604800;
 const UNBOUNDED_ACTIVE_LIMIT = 1000000000;
 const encoder = new TextEncoder();
 
+// R3-A5 / AC-CAP-13:每分享 Binding 数量硬上限,create 与 bindings 两个写入口共用。
+export const SHARE_BINDING_LIMIT = 50;
+
+// AC-LIFE-11:滚动发布窗口内旧 Worker 无法执行的四类策略写入。
+export const SHARE_V2_INTENT = {
+	MULTI_CREATE: 'multi_create',
+	BINDING_EXPAND: 'binding_expand',
+	AUTH_KEY_ENABLE: 'auth_key_enable',
+	FINITE_MAX_SESSIONS: 'finite_max_sessions'
+};
+
+// design.md「结构化观测」固定事件名清单,拒绝/异常路径共用。
+export const SHARE_EVENT = {
+	SESSION_DENIED_QUOTA: 'share.session.denied_quota',
+	SESSION_DENIED_AUTH: 'share.session.denied_auth',
+	SESSION_DENIED_CV: 'share.session.denied_cv',
+	BINDING_CASCADE: 'share.binding.cascade',
+	MIGRATE_INVALID_ROW: 'share.migrate.invalid_row',
+	SYSTEM_ERROR: 'share.system.error'
+};
+
 function nowText() {
 	return dayjs().format('YYYY-MM-DD HH:mm:ss');
 }
@@ -28,6 +49,36 @@ function isShareDisabled(c) {
 		}
 	}
 	return false;
+}
+
+function isCapabilityV2Enabled(c) {
+	const flag = c.env && c.env.SHARE_CAPABILITY_V2;
+	return flag === '1' || flag === 1 || flag === true || flag === 'true';
+}
+
+// AC-LIFE-11 全能力发布栅栏。开关缺省即 false:兼容窗口内旧 Worker 不认识 AuthKey /
+// credentials_version / 配额条件,任何这类策略一旦落库,随机路由到旧 Worker 的请求就是
+// 一条策略降级入口,所以拦在写入侧而不是读取侧。
+// `intent` 取 SHARE_V2_INTENT 之一,标记是四条受限写入路径中的哪一条;判定与 intent 无关,
+// 它只为调用点自述与后续排障保留(接线见 T-12/T-13/T-15/T-16)。
+export function assertCapabilityV2(c, intent) {
+	if (isCapabilityV2Enabled(c)) {
+		return;
+	}
+	throw new BizError('SHARE_INVALID_CONFIG');
+}
+
+// 结构化观测的唯一出口:一行 JSON,恒带 requestId 与 shareId(R2-F2 请求关联字段约定)。
+// 调用方只传诊断字段,禁止传 sec / authKey / token / IP / 邮箱地址等 PII 与凭据。
+export function logShareEvent(event, fields = {}) {
+	const { requestId = null, shareId = null, ...rest } = fields;
+	console.log(JSON.stringify({
+		event,
+		requestId,
+		shareId,
+		...rest,
+		ts: new Date().toISOString()
+	}));
 }
 
 function randomToken(byteLength) {
@@ -215,6 +266,26 @@ function prepareShareInsert(c, values) {
 		values.now,
 		values.limit
 	);
+}
+
+// Expand 阶段双写(design.md「迁移/发布协议」步骤 1 / AC-LIFE-10):主表 `account_id` 跟随
+// 主 Binding(binding_id 最小)。返回未执行的语句,供 T-12/T-13/T-18 放进同一个
+// `c.env.db.batch()` 与 Binding 变更一起提交。WHERE 的 EXISTS 使无可用 Binding 时零变更 ——
+// 主表列宁可停在旧值让旧 Worker 读旧语义,也绝不写 0(旧 Worker 见 0 即链接不可用)。
+export function syncPrimaryAccountId(c, shareId) {
+	return c.env.db.prepare(`
+		UPDATE mail_share
+		SET account_id = (
+			SELECT b.account_id FROM mail_share_binding b
+			WHERE b.share_id = mail_share.share_id AND b.account_id > 0
+			ORDER BY b.binding_id ASC LIMIT 1
+		)
+		WHERE share_id = ?
+			AND EXISTS (
+				SELECT 1 FROM mail_share_binding b
+				WHERE b.share_id = mail_share.share_id AND b.account_id > 0
+			)
+	`).bind(shareId);
 }
 
 async function insertShareAndIdempotency(c, values) {

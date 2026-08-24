@@ -2,16 +2,27 @@ import { env } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import { emailConst, isDel } from '../src/const/entity-const';
 import shareAuthService from '../src/service/share-auth-service';
-import mailShareService from '../src/service/mail-share-service';
+import mailShareService, {
+	SHARE_BINDING_LIMIT,
+	SHARE_EVENT,
+	SHARE_V2_INTENT,
+	assertCapabilityV2,
+	logShareEvent,
+	syncPrimaryAccountId
+} from '../src/service/mail-share-service';
 import shareResult from '../src/model/share-result';
+import initSource from '../src/init/init.js?raw';
+import { seedBindingRow, seedShareRow } from './setup.js';
 
 const PEPPER = 't09-pepper-v2-fixed-test-value';
 const USER_A = 909001;
 const USER_B = 909002;
 const ACC_A = 909101;
 const ACC_B = 909102;
+const ACC_C = 909103;
 const MAIL_A = 't09-owner-a@example.com';
 const MAIL_B = 't09-owner-b@example.com';
+const MAIL_C = 't09-owner-c@example.com';
 
 function shareEnv(overrides = {}) {
 	return {
@@ -81,10 +92,15 @@ async function insertEmail(accountId, userId, subject) {
 }
 
 async function cleanup() {
+	await env.db.prepare(`
+		DELETE FROM mail_share_binding
+		WHERE share_id IN (SELECT share_id FROM mail_share WHERE user_id IN (?, ?))
+	`).bind(USER_A, USER_B).run();
 	await env.db.prepare('DELETE FROM share_idempotency WHERE user_id IN (?, ?)').bind(USER_A, USER_B).run();
 	await env.db.prepare('DELETE FROM mail_share WHERE user_id IN (?, ?)').bind(USER_A, USER_B).run();
 	await env.db.prepare('DELETE FROM email WHERE user_id IN (?, ?) OR subject LIKE ?').bind(USER_A, USER_B, 't09-%').run();
-	await env.db.prepare('DELETE FROM account WHERE account_id IN (?, ?) OR email LIKE ?').bind(ACC_A, ACC_B, 't09-%@example.com').run();
+	await env.db.prepare('DELETE FROM account WHERE account_id IN (?, ?, ?) OR email LIKE ?')
+		.bind(ACC_A, ACC_B, ACC_C, 't09-%@example.com').run();
 }
 
 afterEach(async () => {
@@ -94,6 +110,20 @@ afterEach(async () => {
 async function seedOwners() {
 	await ensureAccount({ accountId: ACC_A, email: MAIL_A, userId: USER_A });
 	await ensureAccount({ accountId: ACC_B, email: MAIL_B, userId: USER_B });
+	await ensureAccount({ accountId: ACC_C, email: MAIL_C, userId: USER_A });
+}
+
+async function insertBinding(shareId, accountId, windowStartEmailId = 0) {
+	return seedBindingRow({ shareId, accountId, windowStartEmailId });
+}
+
+async function readPrimaryAccountId(shareId) {
+	const row = await env.db.prepare('SELECT account_id FROM mail_share WHERE share_id = ?').bind(shareId).first();
+	return row.account_id;
+}
+
+async function clearPrimaryAccountId(shareId) {
+	await env.db.prepare('UPDATE mail_share SET account_id = 0 WHERE share_id = ?').bind(shareId).run();
 }
 
 function createParams(overrides = {}) {
@@ -430,6 +460,104 @@ describe('mailShareService owner write path', () => {
 		expect(row.status).toBe('ACTIVE');
 	});
 
+	it('syncs the primary account_id to the smallest binding_id account (AC-LIFE-10)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const primary = await insertBinding(created.shareId, ACC_A);
+		const secondary = await insertBinding(created.shareId, ACC_C);
+		expect(secondary).toBeGreaterThan(primary);
+		await clearPrimaryAccountId(created.shareId);
+
+		await syncPrimaryAccountId(ctx(), created.shareId).run();
+
+		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_A);
+	});
+
+	it('follows the surviving primary binding after the first one is removed (AC-LIFE-10 path 2)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const primary = await insertBinding(created.shareId, ACC_A);
+		await insertBinding(created.shareId, ACC_C);
+		await env.db.prepare('DELETE FROM mail_share_binding WHERE binding_id = ?').bind(primary).run();
+
+		await syncPrimaryAccountId(ctx(), created.shareId).run();
+
+		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_C);
+	});
+
+	it('never writes 0 when the share has no usable binding left (AC-LIFE-10)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_A);
+
+		const applied = await syncPrimaryAccountId(ctx(), created.shareId).run();
+
+		expect(applied.meta.changes).toBe(0);
+		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_A);
+	});
+
+	it('is one conditional UPDATE that composes into a single db.batch (AC-LIFE-10)', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		await insertBinding(created.shareId, ACC_C);
+		await clearPrimaryAccountId(created.shareId);
+
+		const seen = [];
+		const prepare = env.db.prepare.bind(env.db);
+		const db = new Proxy(env.db, {
+			get(target, prop) {
+				if (prop === 'prepare') {
+					return (sql) => {
+						seen.push(String(sql));
+						return prepare(sql);
+					};
+				}
+				const value = target[prop];
+				return typeof value === 'function' ? value.bind(target) : value;
+			}
+		});
+		const statement = syncPrimaryAccountId({ env: shareEnv({ db }) }, created.shareId);
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toMatch(/UPDATE\s+mail_share/i);
+		expect(seen[0].replace(/;\s*$/, '')).not.toContain(';');
+
+		await env.db.batch([statement]);
+
+		expect(await readPrimaryAccountId(created.shareId)).toBe(ACC_C);
+	});
+
+	it('syncs a seeded v3_2DB-shaped row that never went through create (AC-LIFE-10)', async () => {
+		await seedOwners();
+		const share = await seedShareRow({
+			userId: USER_A,
+			accountId: ACC_B,
+			maxSessions: 5,
+			messageLimit: 10,
+			authKeyEnabled: 1,
+			authKeyHash: 't04-hash',
+			authKeyKid: 'v1',
+			credentialsVersion: 2
+		});
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_A, windowStartEmailId: 7 });
+		await seedBindingRow({ shareId: share.shareId, accountId: ACC_C });
+
+		await syncPrimaryAccountId(ctx(), share.shareId).run();
+
+		expect(await readPrimaryAccountId(share.shareId)).toBe(ACC_A);
+		const row = await env.db.prepare(
+			'SELECT max_sessions, auth_key_enabled, credentials_version FROM mail_share WHERE share_id = ?'
+		).bind(share.shareId).first();
+		expect(row).toMatchObject({ max_sessions: 5, auth_key_enabled: 1, credentials_version: 2 });
+	});
+
+	it('refuses to seed a share row with a zero primary account_id (AC-LIFE-10)', async () => {
+		await expect(seedShareRow({ userId: USER_A, accountId: 0 })).rejects.toThrow(/never|forbids|positive/i);
+	});
+
+	it('caps bindings per share at the design constant of 50 (AC-CAP-13)', () => {
+		expect(SHARE_BINDING_LIMIT).toBe(50);
+	});
+
 	it('does not write sec to logs (AC-LEAK-05)', async () => {
 		await seedOwners();
 		const lines = [];
@@ -446,5 +574,105 @@ describe('mailShareService owner write path', () => {
 			console.log = log;
 			console.error = error;
 		}
+	});
+});
+
+function catchBizSync(fn) {
+	try {
+		fn();
+	} catch (err) {
+		if (err && err.name === 'BizError') {
+			return err;
+		}
+		throw err;
+	}
+	throw new Error('expected BizError');
+}
+
+const GATED_INTENTS = ['multi_create', 'binding_expand', 'auth_key_enable', 'finite_max_sessions'];
+
+describe('SHARE_CAPABILITY_V2 capability fence (AC-LIFE-11)', () => {
+	it('names the four gated intents the rolling-release fence has to stop', () => {
+		expect(SHARE_V2_INTENT).toEqual({
+			MULTI_CREATE: 'multi_create',
+			BINDING_EXPAND: 'binding_expand',
+			AUTH_KEY_ENABLE: 'auth_key_enable',
+			FINITE_MAX_SESSIONS: 'finite_max_sessions'
+		});
+		expect(Object.values(SHARE_V2_INTENT).sort()).toEqual([...GATED_INTENTS].sort());
+	});
+
+	it.each(GATED_INTENTS)('rejects %s with SHARE_INVALID_CONFIG when the flag is missing', (intent) => {
+		const err = catchBizSync(() => assertCapabilityV2({ env: {} }, intent));
+		expect(err.message).toBe('SHARE_INVALID_CONFIG');
+		expect(err.code).toBe(501);
+	});
+
+	it.each(GATED_INTENTS)('rejects %s when the flag is explicitly off', (intent) => {
+		for (const flag of ['false', '0', 0, false, '']) {
+			const err = catchBizSync(() => assertCapabilityV2(ctx({ SHARE_CAPABILITY_V2: flag }), intent));
+			expect(err.message).toBe('SHARE_INVALID_CONFIG');
+		}
+	});
+
+	it.each(GATED_INTENTS)('lets %s through once the flag is on', (intent) => {
+		for (const flag of ['true', '1', 1, true]) {
+			expect(assertCapabilityV2(ctx({ SHARE_CAPABILITY_V2: flag }), intent)).toBeUndefined();
+		}
+	});
+
+	it('does not read the flag off the setting row the way SHARE_ENABLED does', () => {
+		// SHARE_ENABLED 有 setting 死分支；V2 栅栏是发布协议开关，只认环境变量。
+		const c = ctx({ SHARE_CAPABILITY_V2: 'false' });
+		c.get = () => ({ share: 0, shareCapabilityV2: 1 });
+		const err = catchBizSync(() => assertCapabilityV2(c, SHARE_V2_INTENT.MULTI_CREATE));
+		expect(err.message).toBe('SHARE_INVALID_CONFIG');
+	});
+});
+
+describe('structured share observability events (R2-F2 / R3-A7)', () => {
+	it('pins the fixed event-name list from design.md', () => {
+		expect(SHARE_EVENT).toEqual({
+			SESSION_DENIED_QUOTA: 'share.session.denied_quota',
+			SESSION_DENIED_AUTH: 'share.session.denied_auth',
+			SESSION_DENIED_CV: 'share.session.denied_cv',
+			BINDING_CASCADE: 'share.binding.cascade',
+			MIGRATE_INVALID_ROW: 'share.migrate.invalid_row',
+			SYSTEM_ERROR: 'share.system.error'
+		});
+	});
+
+	it('emits one JSON line carrying requestId and shareId even when unset', () => {
+		const lines = [];
+		const log = console.log;
+		console.log = (...args) => lines.push(args.map(String).join(' '));
+		try {
+			logShareEvent(SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId: 42, reason: 'quota_exhausted' });
+			logShareEvent(SHARE_EVENT.SYSTEM_ERROR, {});
+		} finally {
+			console.log = log;
+		}
+		expect(lines).toHaveLength(2);
+		for (const line of lines) {
+			expect(line).not.toContain('\n');
+		}
+		const denied = JSON.parse(lines[0]);
+		expect(denied).toMatchObject({
+			event: 'share.session.denied_quota',
+			requestId: null,
+			shareId: 42,
+			reason: 'quota_exhausted'
+		});
+		expect(denied.ts).toEqual(expect.any(String));
+		expect(JSON.parse(lines[1])).toMatchObject({
+			event: 'share.system.error',
+			requestId: null,
+			shareId: null
+		});
+	});
+
+	it('keeps init.js on its own literal instead of importing service constants', () => {
+		expect(initSource).toContain("event: 'share.migrate.invalid_row'");
+		expect(initSource).not.toMatch(/from\s+['"].*mail-share-service/);
 	});
 });
