@@ -88,6 +88,8 @@
 | T12-P1-1 | CHANGE:toFlag/toNullableCount 封闭值域 | `invalid`/`true` 不得静默变 1 |
 | T10-DESC | CHANGE:访客列表 ASC 黄金断言随 T-10 改为 DESC | design `listForBinding` + GET /share/mails；`share-api.js` nextCursor 仍取本页最后一行 |
 | T13-DUP | HOLD:同一 account 同时出现在 add+remove → `SHARE_BINDING_DUPLICATE` | 同批 INSERT 在 DELETE 前；想重绑分两次 |
+| T13-P0-1 | CHANGE:batch 写入侧钉死预检 Binding 集合；并发双替换不得变成 1→N | 审查 P0-1；D1 0-row DELETE 不回滚 |
+| T13-P1-1 | CHANGE:`prepareBindingInsert` 绑定预算压到 ≤100；N=48/50 真实 owned 回归 | 官方 D1 Maximum bound parameters per query = 100 |
 
 ## 冲突热区占用
 
@@ -103,6 +105,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-10 审查 APPROVED p0=0。T-13 审查 NEEDS_CHANGES：P0-1/P1-1 均 CHANGE。未勾选尾：T-13 审查修复 → T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-10 `bca7bc2` + T-13 `ee2db41` 入库。主 AI 独立定点 189/189 + 全量 worker 17/349、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-11 / T-14 → T-29。
 - 2026-08-24 · 主 AI：T-09 Evidence 回写 `dd1de15`。未勾选尾：T-10 / T-11 / T-13 → T-29。
 - 2026-08-24 · 主 AI：T-08/T-12 复审均 APPROVED p0=0（`review-t08-r2.md` / `review-t12-r2.md`）。T-09 冻结公告已落。并行派 T-10 / T-13。未勾选尾：T-10 / T-11 / T-13 → T-29。
