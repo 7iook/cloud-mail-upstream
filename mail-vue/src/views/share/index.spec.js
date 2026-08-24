@@ -666,8 +666,9 @@ describe('share view multi-mailbox tabs', () => {
         expect(multi.get('[data-share-tab="8002"]').text()).toContain('s***@example.com')
         expect(multi.get('[data-share-tab="0"]').attributes('aria-selected')).toBe('true')
         expect(multi.get('[data-share-tab="8002"]').attributes('aria-selected')).toBe('false')
-        // Tab 只呈现 mailboxes[] 的掩码地址,不复读 session 的 mailbox 字段。
+        // Tab 与整页都不得复读 session 遗留的明文 mailbox（AC-MAIL-08）。
         expect(multi.get('[data-share-tabs]').text()).not.toContain('first@example.com')
+        expect(multi.text()).not.toContain('first@example.com')
         expect(multi.get('[data-share-tab="0"]').attributes('tabindex')).toBe('0')
         expect(multi.get('[data-share-tab="8002"]').attributes('tabindex')).toBe('-1')
 
@@ -929,5 +930,69 @@ describe('share view multi-mailbox tabs', () => {
 
         expect(listShareMails).toHaveBeenCalledWith(expect.objectContaining({ bindingId: 0 }))
         expect(sessionStorage.getItem('share:status:lid-a')).toBeNull()
+    })
+
+    it('advances a tab watermark on the fetch that consumed it, so leaving before the next tick stays quiet (AC-OTP-09)', async () => {
+        vi.useFakeTimers()
+        createShareSession.mockResolvedValue(multiSession())
+        getShareMailboxesStatus.mockResolvedValue(statusFrame([
+            { bindingId: 0, latestEmailId: 11 },
+            { bindingId: 8002, latestEmailId: 52 }
+        ]))
+        listShareMails.mockResolvedValue({
+            list: [mail({ mailId: 11, bindingId: 0, subject: 'First box mail', code: '' })],
+            nextCursor: null
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        getShareMailboxesStatus.mockResolvedValue(statusFrame([
+            { bindingId: 0, latestEmailId: 11 },
+            { bindingId: 8002, latestEmailId: 53 }
+        ]))
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+        expect(badgedTabs(wrapper)).toEqual(['8002'])
+
+        listShareMails.mockResolvedValue({
+            list: [mail({ mailId: 53, bindingId: 8002, subject: 'Sibling fresh', code: '' })],
+            nextCursor: null
+        })
+        await wrapper.get('[data-share-tab="8002"]').trigger('click')
+        await flushPromises()
+        await wrapper.get('[data-share-tab="0"]').trigger('click')
+        await flushPromises()
+
+        expect(JSON.parse(sessionStorage.getItem('share:status:lid-a'))[8002]).toBe(53)
+        expect(badgedTabs(wrapper)).toEqual([])
+    })
+
+    it('hydrates tabs from the first status tick after a stored-token refresh', async () => {
+        vi.useFakeTimers()
+        writeShareSession('lid-a', 'sess-refresh')
+        getShareMailboxesStatus.mockResolvedValue(statusFrame([
+            { bindingId: 0, latestEmailId: 11 },
+            { bindingId: 8002, latestEmailId: 52 }
+        ]))
+        listShareMails.mockImplementation(async ({ bindingId }) => ({
+            list: bindingId === 8002
+                ? [mail({ mailId: 52, bindingId: 8002, subject: 'Second box mail', code: '' })]
+                : [mail({ mailId: 11, bindingId: 0, subject: 'First box mail', code: '' })],
+            nextCursor: null
+        }))
+
+        const wrapper = await mountShare('lid-a')
+        expect(createShareSession).not.toHaveBeenCalled()
+        expect(wrapper.find('[data-share-tabs]').exists()).toBe(false)
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        expect(tabKeys(wrapper)).toEqual(['0', '8002'])
+        expect(wrapper.get('[data-share-mail-list]').text()).toContain('First box mail')
+        expect(wrapper.get('[data-share-mail-list]').text()).not.toContain('Second box mail')
+        expect(wrapper.text()).not.toContain('first@example.com')
     })
 })

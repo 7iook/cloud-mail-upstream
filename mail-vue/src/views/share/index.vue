@@ -6,7 +6,7 @@
   >
     <header class="share-top">
       <p v-if="state === 'loading'">{{ tx('shareVisitLoading', 'Opening shared mailbox...') }}</p>
-      <p v-else-if="state === 'ready'">{{ tx('shareVisitReady', 'Shared mailbox') }}{{ mailbox ? `: ${mailbox}` : '' }}</p>
+      <p v-else-if="state === 'ready'">{{ tx('shareVisitReady', 'Shared mailbox') }}{{ readyMailboxLabel }}</p>
       <p v-else-if="state === 'unavailable'">{{ tx('shareVisitUnavailable', 'This link is no longer available.') }}</p>
       <p v-else-if="state === 'timedout'">{{ tx('shareVisitTimedOut', 'Your session timed out. Open your original link again.') }}</p>
       <p v-else-if="state === 'limited'">{{ tx('shareVisitLimited', 'Too many attempts. Please wait a moment and try again.') }}</p>
@@ -272,10 +272,26 @@ function saveWatermarks(next) {
 // page actually carried — not to the status head, which may already be ahead of the page
 // (design.md:348). An empty page advances nothing and the next tick retries.
 function advanceFromPage(bindingId, list) {
+    if (bindingId == null) {
+        const groups = new Map()
+        for (const item of list || []) {
+            if (!item || item.bindingId == null) {
+                continue
+            }
+            const rows = groups.get(item.bindingId) || []
+            rows.push(item)
+            groups.set(item.bindingId, rows)
+        }
+        for (const [id, rows] of groups) {
+            advanceFromPage(id, rows)
+        }
+        return
+    }
     const ids = (list || [])
-        .map((item) => Number(item && item.mailId))
+        .filter((item) => item && item.bindingId === bindingId)
+        .map((item) => Number(item.mailId))
         .filter((id) => Number.isFinite(id))
-    if (bindingId == null || !ids.length) {
+    if (!ids.length) {
         return
     }
     saveWatermarks(advance(watermarks.value, bindingId, Math.max(...ids)))
@@ -312,9 +328,16 @@ const polling = useSharePolling({
 })
 polling.stop()
 
-// Two conditions, not one: shareType is the server's verdict and mailboxes.length is the
-// rendering precondition, so dirty data cannot produce an empty tablist.
-const isMulti = computed(() => shareType.value === 'multi' && mailboxes.value.length > 1)
+// Binding count is the shareType SSOT (AC-CAP-02). A stored-token refresh never sees
+// session.shareType, so tabs must appear once status hydrates two or more boxes.
+const isMulti = computed(() => mailboxes.value.length > 1)
+
+const readyMailboxLabel = computed(() => {
+    if (isMulti.value || !mailbox.value) {
+        return ''
+    }
+    return `: ${mailbox.value}`
+})
 
 // A row whose bindingId the projection could not resolve belongs to no Tab, but it is
 // still the whole list on a single-mailbox page.
@@ -366,6 +389,7 @@ function pickActiveBinding() {
 
 function setMailboxes(list) {
     mailboxes.value = (Array.isArray(list) ? list : []).filter((box) => box && box.bindingId != null)
+    shareType.value = mailboxes.value.length > 1 ? 'multi' : 'single'
     pickActiveBinding()
 }
 
@@ -386,6 +410,7 @@ function syncMailboxesFromStatus(list) {
     }))
     const live = rows.map((item) => item.bindingId)
     mails.value = mails.value.filter((item) => item.bindingId == null || live.includes(item.bindingId))
+    shareType.value = mailboxes.value.length > 1 ? 'multi' : 'single'
     pickActiveBinding()
 }
 
@@ -394,7 +419,9 @@ async function selectTab(bindingId) {
         return
     }
     setActiveBinding(bindingId)
-    if (mails.value.some((item) => item.bindingId === bindingId)) {
+    const cached = mails.value.filter((item) => item.bindingId === bindingId)
+    if (cached.length) {
+        advanceFromPage(bindingId, cached)
         return
     }
     try {
@@ -403,7 +430,9 @@ async function selectTab(bindingId) {
             bindingId,
             limit: PAGE_LIMIT
         })
-        mergeMails(page && Array.isArray(page.list) ? page.list : [])
+        const list = page && Array.isArray(page.list) ? page.list : []
+        mergeMails(list)
+        advanceFromPage(bindingId, list)
     } catch (err) {
         await noteShareFailure(err)
     }
@@ -606,6 +635,7 @@ async function beginMailbox() {
             })
             const list = result && Array.isArray(result.list) ? result.list : []
             mergeMails(list)
+            advanceFromPage(activeBinding.value, list)
             const next = result && result.nextCursor
             if (!next || !list.length || list.length < PAGE_LIMIT) {
                 break
