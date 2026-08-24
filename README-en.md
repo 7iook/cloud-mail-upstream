@@ -65,6 +65,8 @@ With only one domain, you can create multiple different email addresses, similar
 
 - **🤖 CAPTCHA**: Integrated with Turnstile CAPTCHA to prevent automated registration.
 
+- **🔗 Mailbox Sharing**: Hand one or more mailboxes to a signed-out visitor read-only for a limited time through a single unguessable link, with a session count limit, an optional access key and verification code extraction (multi-mailbox and access keys require the platform to enable them).
+
 - **📜 More Features**: Under development...
 
 ## Tech Stack

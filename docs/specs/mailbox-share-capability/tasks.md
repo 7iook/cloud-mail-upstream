@@ -24,7 +24,7 @@
 | `mail-worker/src/api/share-api.js` | W1(T-07/T-08 读头透传)→T-14(status 端点) | 热区表补登记(recon-w1);W1 与 T-14 跨波次串行 |
 | `mail-worker/src/security/security.js` | T-14(excludeExact 一行)、T-17(premKey) | 两处改动跨波次天然串行;同波次内禁止第二写者 |
 | `mail-worker/src/service/mail-share-service.js` | 同波次内单写者(W2:T-12→T-13 串行;W3:T-15→T-16→T-18 串行) | 跨波次串行,波次内不并行 |
-| `mail-vue/src/i18n/zh.js` / `en.js` | T-28 统一收口 | W4/W5 各任务只在任务文档记录所需新键,不直接改 i18n 文件 |
+| `mail-vue/src/i18n/zh.js` / `en.js` | T-29.2 统一收口 | W4/W5 各任务只在任务文档记录所需新键,不直接改 i18n 文件 |
 
 ---
 
@@ -674,6 +674,7 @@
 
 ## Update Log
 
+- 2026-08-24 · executor:T-29 收尾落盘（`exec-t29-note.md`）。**邮箱分享能力交付**：ADR 转 Accepted 并补「实施结论」（写明生产 `SHARE_CAPABILITY_V2` 默认 false）；design.md `status: shipped` + `shipped_commit: 190f704` + 新增「已知限制与技术债」D-1/D-2/D-3；`docs/specs/README.md` 索引同步 shipped；96 个 i18n 键落盘（访客 10 + 管理端 86，zh/en 双语，PENDING_COPY 映射按裁决保留）；两份 README 各加一条分享能力 bullet；F-4 `expiresAt` 残留两处修复（先红后绿 2 条单测 + 1 条 E2E 死壳断言）。三套复跑 vue 22/252 · worker 18/626 · E2E 19 passed / 0 skipped。**未勾选**（等协调者审查后勾）。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-29 侦察已裁 F-1/F-3/F-4（`recon-t29-wrap.md`）。未勾选。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-28 三套全绿。vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。e2e 零 diff。勾选 T-28。未勾选尾：T-29。
 - 2026-08-24 · 主 AI:T-27 APPROVED p0=0（`review-t27.md`）。勾选 T-27。独立复跑 vue 22/250 · worker 18/626 · E2E 19 passed / 0 skipped。P2-1 HOLD（撤销后倒计时残留，T-29）。未勾选尾：T-28 → T-29。

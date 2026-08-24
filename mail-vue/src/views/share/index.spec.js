@@ -1477,6 +1477,46 @@ describe('share view expiry countdown and cleanup', () => {
         expect(wrapper.text()).not.toContain('--')
     })
 
+    // 倒计时节点挂在 header 上、只看 expiresLabel 不看 state,所以死壳态必须把 expiresAt 一起清掉,
+    // 否则访客会盯着一个"还有 30 分钟"的链接读"此链接已不可用"。
+    it('drops the countdown when the share turns out to be gone', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-08-24T12:00:00Z'))
+        createShareSession.mockResolvedValue({
+            sessionToken: 'sess-a',
+            mailbox: 'otp@example.com',
+            expiresAt: '2026-08-24 12:30:00'
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        expect(wrapper.get('[data-share-expires]').text()).toMatch(/30m/)
+
+        await wrapper.vm.noteShareFailure({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' }, true)
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
+        expect(wrapper.find('[data-share-expires]').exists()).toBe(false)
+    })
+
+    it('drops the countdown when the visitor leaves the share', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-08-24T12:00:00Z'))
+        createShareSession.mockResolvedValue({
+            sessionToken: 'sess-a',
+            mailbox: 'otp@example.com',
+            expiresAt: '2026-08-24 12:30:00'
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        expect(wrapper.get('[data-share-expires]').text()).toMatch(/30m/)
+
+        await wrapper.get('[data-share-exit]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('exited')
+        expect(wrapper.find('[data-share-expires]').exists()).toBe(false)
+    })
+
     it('drops the session and the establish key on unmount but keeps the read watermark (AC-SEC-07)', async () => {
         createShareSession.mockRejectedValue(AUTH_REQUIRED)
         writeShareSession('lid-a', 'stale-token')

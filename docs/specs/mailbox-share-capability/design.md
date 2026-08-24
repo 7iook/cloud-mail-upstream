@@ -3,13 +3,13 @@
 slug: mailbox-share-capability
 title: 邮箱能力分享 —— 单/多邮箱统一授权、Session 配额与可选认证
 # ═══ LIFECYCLE(必填 · 状态机由主 AI 判定;spec-cross-review 只回写 last_review_* / review_rounds_done / last_updated)═══
-status: converged
+status: shipped
 review_rounds_done: 3
 last_review_status: NEEDS_CHANGES
 last_review_p0: 0
 created: 2026-08-24
 last_updated: 2026-08-24
-shipped_commit: null
+shipped_commit: 190f704
 # ═══ RELATIONSHIPS(可空 · 建知识图)═══
 related_adrs: [docs/architecture/ADR-mail-share-capability-boundary.md, docs/architecture/ADR-mailbox-share-capability-extension.md]
 related_specs: [docs/specs/mail-share]
@@ -669,6 +669,16 @@ For any `mail_share` 行与时刻 `now`, effectiveStatus(row, now) SHALL 为确�
 
 每条 `to-build` 均对应后续 tasks.md 条目;`existing` 节点锚点已于 2026-08-24 工作树复核。
 
+## 已知限制与技术债
+
+交付时已知、且**本期明确不修**的三条。写在这里而不是留在过程产物里,是为了让接手者只读 spec 就能看到。
+
+| ID | 债目 | 锚点 | 处置 |
+|---|---|---|---|
+| **D-1** | 死分支 `setting.share`。`isShareDisabled()` 两处各判一次 `setting.share === 1 \|\| setting.share === '1'` 作为「站点级关分享」开关,但仓内没有任何地方写入过 `setting.share`,该分支恒为 false —— 实际生效的只有环境变量 `SHARE_ENABLED`。 | `mail-worker/src/service/mail-share-service.js:60`<br>`mail-worker/src/service/share-auth-service.js:69` | 不修、不删。它是为将来的站点设置项预留的读点,删它要动两个已收口的服务文件并重跑其定点 spec,收益为零。 |
+| **D-2** | Expand 阶段双写未停。`syncPrimaryAccountId()` 在每次 Binding 变更时把 `mail_share.account_id` 与 `window_start_email_id` 同步为主 Binding 的值,保证兼容窗口内旧 Worker 仍能按主表列服务单邮箱语义。 | 定义 `mail-worker/src/service/mail-share-service.js:730-760`<br>调用点 `:863`(create)`:1228`(binding 变更)<br>ADR `## Consequences` | 不修。Contract(停双写、`account_id` 降为遗留列)的前置是部署侧事实(确认无旧 Worker 在途),不是代码判断,属后续版本任务。 |
+| **D-3** | 存 token 复活时的配置降级。刷新页面后若 sessionStorage 仍有有效 token,前端不重建会话(省一个配额名额),因而拿不到 `config`/`expiresAt`:倒计时消失、刷新间隔回落到 `POLL_INTERVAL_MS`、`autoRefresh` 回落到 true,直到会话重新建立。 | `mail-vue/src/views/share/index.vue:902-908`<br>钉住的断言 `mail-vue/src/views/share/index.spec.js:1396-1411` | 已知限制,不修。AC-SESS-03(复活不多耗配额)优先于 AC-OTP-05。 |
+
 ## Update Log
 
 - 2026-08-24 · executor(规格撰写执行者):Mode 1 CREATE 首次落盘。front-matter 按 spec-deliverable.md §Template 2 schema(先读模板、后读仓内旧 spec,只借领域词汇);Current-State Inventory 30 行锚点来自三份 recon 并抽查亲验;修正 recon-frontend §1 一处记述(session 响应实际已含 `expiresAt`,`share-auth-service.js:266-271`)。tasks.md 依模板铁律待 spec-cross-review 通过后再产。
@@ -703,3 +713,4 @@ For any `mail_share` 行与时刻 `now`, effectiveStatus(row, now) SHALL 为确�
   - R3 · A5 → 采纳(常量 `SHARE_BINDING_LIMIT`=50 落 create/bindings 两写入口,超限 `SHARE_BINDING_LIMIT_EXCEEDED` 整单拒绝;Error Handling 增新码;矩阵补 AC-CAP-13)
   - R3 · A6 → 采纳(管理模块创建向导补「结果未知恢复」:重放无明文 → 引导 revoke/delete 后重建,禁止换 key 盲建;create API 行标注恢复流程;矩阵补 AC-CAP-14)
   - R3 · A7 → 采纳(结构化观测节补发布门槛一句话:启用 V2 前关键事件必须已有告警消费者(阈值+接收人),否则不得置 true;「日志检索即消费端」改为「采集端 + 门槛」;完整 Runbook 不在本期)
+- 2026-08-24 · executor(T-29 收尾执行者):**邮箱分享能力交付。** 单/多邮箱统一 Binding 模型、累计 Session 配额闸门、可选 AuthKey 第二因子、访客页多邮箱 Tab 与 OTP 提取全部落地;`SHARE_CAPABILITY_V2` 生产默认仍为 false,多邮箱/AuthKey/有限 `max_sessions` 三项能力代码就位但整体冻结,激活是部署动作。三套测试基线:worker 18 files / 626、vue 22 files / 252、E2E 19 passed / 0 skipped。front-matter `status: converged → shipped`、`shipped_commit: 190f704`;ADR 转 Accepted 并补「实施结论」。本轮同时修掉 `expiresAt` 残留(`clearMailboxView` 与 `exitShare` 各补一行清零,先红后绿两条单测 + 一条 E2E 死壳断言),补齐 96 个 i18n 键(访客 10 + 管理端 86,zh/en 双语),新增本节「已知限制与技术债」D-1/D-2/D-3。

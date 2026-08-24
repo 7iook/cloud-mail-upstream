@@ -668,6 +668,7 @@ function clearMailboxView() {
     mails.value = []
     selectedId.value = ''
     rateLimited.value = false
+    expiresAt.value = ''
 }
 
 function showDeadShare(err) {
@@ -821,6 +822,7 @@ function exitShare() {
     mails.value = []
     selectedId.value = ''
     rateLimited.value = false
+    expiresAt.value = ''
     state.value = 'exited'
 }
 

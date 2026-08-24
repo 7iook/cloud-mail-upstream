@@ -23,6 +23,9 @@ test('revoking mid-visit stops the polling, drops the credentials and shows the 
 
 	await world.api.revokeShare(world.seed, share.shareId)
 	await waitShareState(page, 'unavailable')
+	// T-29 fixed the countdown residue: showDeadShare now clears expiresAt in the same
+	// synchronous body that sets the state, so the dead shell carries no countdown either.
+	await expect(page.locator('[data-share-expires]')).toHaveCount(0)
 
 	// Counted only from here. Reaching unavailable costs one extra POST /share/session —
 	// recoverFromUnavailable retries once while pageSecret is still in memory. That is
@@ -38,12 +41,9 @@ test('revoking mid-visit stops the polling, drops the credentials and shows the 
 	expect(keys).toContain(`share:status:${share.lid}`)
 
 	// Shell against shell, never against a literal: a revoked link must be
-	// indistinguishable from a lid that never existed, and T-29 may still change the copy.
-	// The countdown is read separately rather than folded into the message: showDeadShare
-	// clears the mailbox view but not expiresAt, so a share revoked mid-visit keeps
-	// rendering [data-share-expires] while a random lid never had one. That residue is a
-	// mail-vue defect, and mail-vue is outside this task's file whitelist — it is recorded
-	// in exec-t27-note.md rather than pinned here, so the fix will not turn this red.
+	// indistinguishable from a lid that never existed, and the copy may still change.
+	// The countdown is pinned by the count assertion above rather than folded in here,
+	// so this comparison stays about the live parts of the shell.
 	const deadShell = async () => ({
 		message: await page.locator('[data-share-shell] header p').innerText(),
 		body: await page.locator('[data-share-body]').innerText(),
