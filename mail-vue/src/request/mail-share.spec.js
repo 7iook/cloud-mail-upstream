@@ -57,6 +57,59 @@ describe('owner mail-share request (logged-in axios)', () => {
         expect(config.headers['Idempotency-Key']).toBe('owner-create-key-1')
     })
 
+    // The four-key toEqual above is the contract ShareDialog still ships; this case is the
+    // other half of it, proving the wizard's extra keys ride the same function rather than a
+    // second createMailShareV2 with its own header logic.
+    it('forwards the wizard create fields verbatim and swaps accountId out for accountIds', async () => {
+        await createMailShare({
+            accountIds: [11, 12],
+            durationSeconds: 21600,
+            name: 'pool',
+            remark: '',
+            maxSessions: 5,
+            messageLimit: 20,
+            onlyMessagesAfterCreated: true,
+            otpExtractionEnabled: true,
+            autoRefresh: false,
+            refreshIntervalMs: 3000,
+            showFullAddress: true,
+            authKeyEnabled: true
+        }, 'owner-create-key-2')
+
+        expect(http.post).toHaveBeenCalledTimes(1)
+        const [url, body, config] = http.post.mock.calls[0]
+        expect(url).toBe('/mailShare/create')
+        expect(body).toEqual({
+            accountIds: [11, 12],
+            durationSeconds: 21600,
+            name: 'pool',
+            remark: '',
+            maxSessions: 5,
+            messageLimit: 20,
+            onlyMessagesAfterCreated: true,
+            otpExtractionEnabled: true,
+            autoRefresh: false,
+            refreshIntervalMs: 3000,
+            showFullAddress: true,
+            authKeyEnabled: true
+        })
+        // toAccountIdSet reads accountIds and ignores accountId, so shipping both would leave
+        // a dead field in the body and fork the fingerprint away from ShareDialog's shape.
+        expect(body).not.toHaveProperty('accountId')
+        // No clamping and no false->0 here: normalizeCreateBody owns defaults and ranges.
+        expect(config.headers['Idempotency-Key']).toBe('owner-create-key-2')
+
+        // The same function must stay silent about fields the caller never mentioned, or the
+        // single-mailbox preset would stop matching legacyCompatibleBody.
+        await createMailShare({ accountIds: [11], durationSeconds: 3600 }, 'owner-create-key-3')
+        expect(http.post.mock.calls[1][1]).toEqual({
+            accountIds: [11],
+            durationSeconds: 3600,
+            name: '',
+            remark: ''
+        })
+    })
+
     it('lists and revokes through the logged-in client, not the anonymous share client', async () => {
         await listMailShares()
         await revokeMailShare(9)

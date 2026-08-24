@@ -15,6 +15,7 @@
               @click="refresh">
         <Icon icon="ion:reload" width="18" height="18"/>
       </button>
+      <ShareCreateWizard @created="refresh"/>
     </div>
 
     <el-scrollbar class="scrollbar">
@@ -103,6 +104,7 @@ import {useI18n} from "vue-i18n"
 import loading from "@/components/loading/index.vue"
 import {isShareForbidden, listMailShares} from "@/request/mail-share.js"
 import {SHARE_STATUSES, bindingSummary, quotaText, shareTypeLabelKey, statusMeta} from "./status.js"
+import ShareCreateWizard from "./ShareCreateWizard.vue"
 import ShareRowActions from "./ShareRowActions.vue"
 import ShareDetailDrawer from "./ShareDetailDrawer.vue"
 
