@@ -36,7 +36,7 @@
 | W1 | T-06-P0 文档门 | ✅ 已关 | 主 AI | last_access_at 进闸门 · AC-SESS-11 · status 收窄 |
 | W1 | T-06 | ✅ 已提交 `6209960` | generalPurpose≈executor | 主 AI 复跑 26/26 · 17/213 · 17/95 · E2E 13 |
 | W1 | T-06 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t06.md` |
-| W1 | T-07 | 实现已绿,待提交 | generalPurpose≈executor | 主 AI 复跑 34/34 · 7/7;T07-R1 CHANGE |
+| W1 | T-07 | ✅ 已提交 `c2087ce` | generalPurpose≈executor | 主 AI 复跑 34/34 · 7/7;T07-R1 CHANGE |
 | W2 | T-12 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-w2-t12-create.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -76,8 +76,8 @@
 | 文件 | 当前写者 | 备注 |
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
-| `share-auth-service.js` | T-07 收口中 | T-08 待独占 |
-| `share-api.js` | T-07 收口中 | T-08 读头透传 authKey |
+| `share-auth-service.js` | T-07 已收口 | T-08 独占 |
+| `share-api.js` | T-07 已收口 | T-08 读头透传 authKey |
 | `security.js` | 无 | T-14 / T-17 |
 | `mail-share-service.js` | W0 P0 已收口 | T-12 可写 |
 | i18n | 无 | T-29 收口 |

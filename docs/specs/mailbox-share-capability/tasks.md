@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W0 done · W1/T-06 landing · T-07 next |
+| 状态 Status | in-progress · W0 done · W1/T-07 landed · T-08 next |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -164,11 +164,27 @@
       - AC: AC-SESS-01, AC-SESS-05, AC-SESS-11, AC-SEC-08
       - commit: 6209960
 
-- [ ] T-07 Session 建立幂等恢复:KV 结果重放(R3-A3)
-  - [ ]* T-07.1 红:`mail-worker/test/share-auth-service.spec.js` —— 同 `Idempotency-Key` 重放 → 同 token、`access_count` 不变、零 UPDATE;新 key/无 key → 正常消耗;KV 故障注入 → 仍签发(fail-open)+ `share.system.error` 日志;TTL = min(120s, token 剩余寿命)
+- [x] T-07 Session 建立幂等恢复:KV 结果重放(R3-A3)
+  - **Evidence**
+    - verify: 红 `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js test/share-api.spec.js`（仅测试就位、源码回退 HEAD）→ EXIT=1（7 failed / 33 passed / 40）；绿同命令 → EXIT=0（40/40）；主 AI 独立复跑 `share-auth-service.spec.js` → EXIT=0（34/34，含 `max_sessions=1` AC-SESS-10 重放）· `share-api.spec.js` → EXIT=0（7/7）；全量 worker 套件 `unverified: T-12 工作树未提交`
+    - files: `mail-worker/src/const/kv-const.js:7` · `mail-worker/src/api/share-api.js:56-57` · `mail-worker/src/service/share-auth-service.js:21-23,196,287-329,346-358,385-395` · `mail-worker/test/share-auth-service.spec.js:940-1148` · `mail-worker/test/share-api.spec.js:315-346`
+    - AC: AC-SESS-10
+    - commit: c2087ce
+    - decision: T07-R1 CHANGE（KV 查询在 `loadLiveAccount` 之后、快照配额/`assertAllowed` 之前）
+  - [x]* T-07.1 红:`mail-worker/test/share-auth-service.spec.js` —— 同 `Idempotency-Key` 重放 → 同 token、`access_count` 不变、零 UPDATE;新 key/无 key → 正常消耗;KV 故障注入 → 仍签发(fail-open)+ `share.system.error` 日志;TTL = min(120s, token 剩余寿命)
     - _Requirements: AC-SESS-10_
-  - [ ] T-07.2 绿:`mail-worker/src/const/kv-const.js` 新增 `share:est:` 前缀;`share-auth-service.js` establishSession 在 ①③④ 校验通过后查 KV `share:est:<lid>:<key>`,命中直接返回缓存 token,未命中走 T-06 条件 UPDATE、成功后写 KV(既有 `c.env.kv` 绑定,同 `security.js:117` 设施)
+    - **Evidence**
+      - verify: 红同上命令 → EXIT=1（7 条行为缺失：同 key 重放仍走配额、HTTP 重放未接线、KV 故障未 fail-open；`remaining < 60` 不写在红期空过）
+      - files: `mail-worker/test/share-auth-service.spec.js:940-1148` · `mail-worker/test/share-api.spec.js:315-346`
+      - AC: AC-SESS-10
+      - commit: c2087ce
+  - [x] T-07.2 绿:`mail-worker/src/const/kv-const.js` 新增 `share:est:` 前缀;`share-auth-service.js` establishSession 在 ①③④ 校验通过后查 KV `share:est:<lid>:<key>`,命中直接返回缓存 token,未命中走 T-06 条件 UPDATE、成功后写 KV(既有 `c.env.kv` 绑定,同 `security.js:117` 设施)
     - _Requirements: AC-SESS-10_
+    - **Evidence**
+      - verify: 绿同上命令 → EXIT=0（40/40）；主 AI 独立 34/34 + 7/7，均为 EXIT=0。T07-R1 把 KV 查询挪到快照配额判定之前，补 `max_sessions=1` 重放用例
+      - files: `mail-worker/src/const/kv-const.js:7` · `mail-worker/src/api/share-api.js:56-57` · `mail-worker/src/service/share-auth-service.js:346-358`
+      - AC: AC-SESS-10
+      - commit: c2087ce
 
 - [ ] T-08 AuthKey 第二因子 + `credentials_version` + ShareContext 集合化 + session 响应扩展
   - [ ]* T-08.1 红:`mail-worker/test/share-auth-service.spec.js` —— 启用 Key 后无 Key/错 Key → `SHARE_AUTH_REQUIRED`、零 token、零配额、无锁定副作用(扫 schema 断言无 `mail_share_auth_fail` 表);`lid` 不存在/`sec` 错 + 任意 authKey 组合恒 `SHARE_UNAVAILABLE`(P-AUTH-01 property);reset 后旧 token 回源 → `SHARE_UNAVAILABLE`、新 Key 建会话成功且消耗新配额(P-AUTH-02);cv 严格单调;换 IP 头重放读请求仍 200;429 独立运输层、零配额;session 响应含 `shareType`/`mailboxes`(掩码)/`expiresAt`/`config` 四件、KV 写失败注入仍签发(fail-open,与 T-07.1 合并;配额 UPDATE 失败改走 AC-SESS-11 拒发)
@@ -335,6 +351,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-07 勾选。`c2087ce`。T07-R1 CHANGE：KV 在快照配额判定前。主 AI 独立 34/34 + 7/7 EXIT=0。前端 key 归 T-26。未勾选尾：T-08 / T-12 → T-29。
 - 2026-08-24 · 主 AI:T-06 审查 APPROVED p0=0（`review-t06.md`）。循环 import 与空 `options` HOLD。未勾选尾：T-07 / T-12 → T-29。
 - 2026-08-24 · 主 AI:T-06 勾选。主 AI 独立复跑 worker 17/213、vue 17/95、E2E 13，均为 EXIT=0。`recordAccess` 已删；闸门空/抛错拒发；并发 `Promise.allSettled` 抢最后名额恰 1。未勾选尾：T-07 → T-29。
 - 2026-08-24 · executor(tasks 撰写执行者):Template 3 首次落盘。29 个父任务 / 7 个波次(W0–W6),107 条 AC 全量映射(每任务 `_Requirements` 聚类),9 条 Correctness Properties 挂到核心逻辑任务(T-05/T-06/T-08/T-10/T-11/T-13);冲突热区(`init.js`/`security.js`/`share-auth-service.js`/`mail-share-service.js`/i18n)单 owner 规则成表;全部文件路径已对 2026-08-24 工作树逐一核实(`mail-worker/test/` 17 spec、`kv-const.js`、`tests/e2e/specs/` 等),零虚构路径。依据:design.md(converged,R1–R3)+ requirements.md(107 AC)+ 三份 recon。
