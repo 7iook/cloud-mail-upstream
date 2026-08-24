@@ -72,7 +72,12 @@ const requirePerms = [
 const requirePermsExact = [
 	{ method: 'POST', path: '/mailShare/create' },
 	{ method: 'GET', path: '/mailShare/list' },
-	{ method: 'DELETE', path: '/mailShare/revoke' }
+	{ method: 'GET', path: '/mailShare/get' },
+	{ method: 'PUT', path: '/mailShare/update' },
+	{ method: 'DELETE', path: '/mailShare/delete' },
+	{ method: 'PUT', path: '/mailShare/bindings' },
+	{ method: 'DELETE', path: '/mailShare/revoke' },
+	{ method: 'POST', path: '/mailShare/resetAuthKey' }
 ];
 
 const premKey = {
@@ -101,7 +106,19 @@ const premKey = {
 	'reg-key:add': ['/regKey/add'],
 	'reg-key:query': ['/regKey/list','/regKey/history'],
 	'reg-key:delete': ['/regKey/delete','/regKey/clearNotUse'],
-	'share:manage': ['/mailShare/create', '/mailShare/list', '/mailShare/revoke']
+	// Must stay in lockstep with requirePermsExact: that table decides which paths enter
+	// the exact-perm branch, this one decides which paths a holder can match. Adding to
+	// only one side either leaves the route ungated or locks out every non-admin owner.
+	'share:manage': [
+		'/mailShare/create',
+		'/mailShare/list',
+		'/mailShare/get',
+		'/mailShare/update',
+		'/mailShare/delete',
+		'/mailShare/bindings',
+		'/mailShare/revoke',
+		'/mailShare/resetAuthKey'
+	]
 };
 
 app.use('*', async (c, next) => {
