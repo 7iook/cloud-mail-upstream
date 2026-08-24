@@ -258,11 +258,11 @@ async function assertSecAbsentFromDatabase(sec) {
 		if (!textCols.length) {
 			continue;
 		}
-		const where = textCols.map((col) => `"${col.name}" = ?`).join(' OR ');
+		const where = textCols.map((col) => `instr(CAST("${col.name}" AS TEXT), ?) > 0`).join(' OR ');
 		const hit = await env.db.prepare(
 			`SELECT 1 AS hit FROM "${table.name}" WHERE ${where} LIMIT 1`
 		).bind(...textCols.map(() => sec)).first();
-		expect(hit, `plaintext sec stored in ${table.name}`).toBeFalsy();
+		expect(hit, `plaintext secret stored in ${table.name}`).toBeFalsy();
 	}
 }
 
@@ -1471,6 +1471,16 @@ describe('AuthKey over HTTP (T-19)', () => {
 		expect(session.json?.code).toBe(200);
 		expect(session.text).not.toContain(authKey);
 		await assertSecAbsentFromDatabase(authKey);
+	});
+
+	it('fails the leak guard when AuthKey plaintext is embedded in a JSON text column (AC-SEC-09)', async () => {
+		const planted = 'abcdefghijklmnopqrstuv';
+		await env.db.prepare(`
+			INSERT INTO share_idempotency (
+				user_id, idempotency_key, operation, request_fingerprint
+			) VALUES (?, ?, 'create', ?)
+		`).bind(ownerUser.userId, 't24-p1-leak', JSON.stringify({ authKey: planted })).run();
+		await expect(assertSecAbsentFromDatabase(planted)).rejects.toThrow(/plaintext secret stored/);
 	});
 
 	it('refuses enable but allows disable while the capability flag is off (AC-LIFE-11)', async () => {
