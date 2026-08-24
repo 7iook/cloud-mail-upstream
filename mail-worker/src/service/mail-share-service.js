@@ -757,6 +757,67 @@ export function syncPrimaryAccountId(c, target) {
 	`).bind(byLid ? target.lid : target);
 }
 
+// T-18 级联的「受影响且无幸存者」谓词。两条臂互斥,不可能重复撤销:
+// ① Binding 臂(主):本分享有一条 Binding 指向将死账号;
+// ② 回落臂:本分享一条 Binding 都没有(R3-A2 迁移窗口晚写的合法遗留形状,
+//    `share-auth-service.loadLiveBindings` 为它留了影子 Binding 读路径),此时主表
+//    `account_id` 就是它唯一的绑定事实。少了这条臂,这类行的账号被删后永久停在 ACTIVE。
+// 末尾的「无幸存者」半句同样不可省:少了它,删任意一个邮箱都会顺手撤掉还有存活邮箱的分享。
+// 集合恒走 `json_each(?)`:它在这条谓词里出现 3 次,展开 `IN (?,?,…)` 就是 3N 个绑定参数,
+// N=26 即越过 D1 单语句 100 个参数的硬顶,而 `physicsDeleteByUserIds` 的集合无上限。
+const CASCADE_REVOKE_WHERE = `(
+			EXISTS (
+				SELECT 1 FROM mail_share_binding b
+				WHERE b.share_id = mail_share.share_id
+					AND b.account_id IN (SELECT value FROM json_each(?))
+			)
+			OR (
+				NOT EXISTS (SELECT 1 FROM mail_share_binding b WHERE b.share_id = mail_share.share_id)
+				AND mail_share.account_id IN (SELECT value FROM json_each(?))
+			)
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM mail_share_binding b
+			WHERE b.share_id = mail_share.share_id
+				AND b.account_id NOT IN (SELECT value FROM json_each(?))
+		)`;
+
+// `syncPrimaryAccountId` 的「排除将死集合」变体。不能复用后者:它按 binding_id 最小挑主
+// Binding,而此刻将死的 Binding 行还在表里(级联恒在删 Binding 之前重指),挑出来的会是
+// 一个马上就要消失的 account。两条守卫逐字保留:`account_id > 0` 与 `EXISTS(幸存者)` ——
+// 无幸存者时零变更,主表两列宁可停在旧值,也绝不写 0/NULL(旧 Worker 见 0 即判链接不可用)。
+function prepareCascadeResync(c, idsJson) {
+	return c.env.db.prepare(`
+		UPDATE mail_share
+		SET account_id = (
+			SELECT b.account_id FROM mail_share_binding b
+			WHERE b.share_id = mail_share.share_id AND b.account_id > 0
+				AND b.account_id NOT IN (SELECT value FROM json_each(?))
+			ORDER BY b.binding_id ASC LIMIT 1
+		),
+		window_start_email_id = (
+			SELECT b.window_start_email_id FROM mail_share_binding b
+			WHERE b.share_id = mail_share.share_id AND b.account_id > 0
+				AND b.account_id NOT IN (SELECT value FROM json_each(?))
+			ORDER BY b.binding_id ASC LIMIT 1
+		)
+		WHERE mail_share.account_id IN (SELECT value FROM json_each(?))
+			AND EXISTS (
+				SELECT 1 FROM mail_share_binding b
+				WHERE b.share_id = mail_share.share_id AND b.account_id > 0
+					AND b.account_id NOT IN (SELECT value FROM json_each(?))
+			)
+	`).bind(idsJson, idsJson, idsJson, idsJson);
+}
+
+function prepareCascadeBindingDelete(c, idsJson) {
+	return c.env.db.prepare(`
+		DELETE FROM mail_share_binding
+		WHERE account_id IN (SELECT value FROM json_each(?))
+		RETURNING share_id, account_id
+	`).bind(idsJson);
+}
+
 function prepareStaleIdempotencyDelete(c, values) {
 	return c.env.db.prepare(`
 		DELETE FROM share_idempotency
@@ -1373,11 +1434,44 @@ const mailShareService = {
 			ids.push(id);
 		}
 		if (!ids.length) {
+			// 空集合早退不可省:空 `json_each` 让 `IN` 恒假而 `NOT IN` 恒真,
+			// 「删 0 个邮箱」会走成「撤销全库所有零 Binding 的 ACTIVE 行」。
 			return { revoked: 0 };
 		}
-		const placeholders = ids.map(() => '?').join(', ');
-		const applied = await applyRevoke(c, `account_id IN (${placeholders})`, ids);
-		return { revoked: applied.meta.changes || 0 };
+		const idsJson = JSON.stringify(ids);
+		// 顺序即语义:①撤销 与 ②重指 都要读「将死 Binding 还在」这个事实,③销毁它。
+		// D1 的 batch 是一个事务,三条要么全成要么全不成。
+		// 判据只有「accountId ∈ 本次传入集合」—— 三个挂钩点(account-service :159/:184/:250)
+		// 全在 account 行仍存活、仍 NORMAL 时调用,拿「account 已删」当判据会恒零命中,
+		// 静默退化成空操作。也不加 try/catch:级联抛错必须让整个账号删除失败(fail-closed),
+		// 吞掉就变成「账号删了、分享还活着」。
+		const results = await c.env.db.batch([
+			prepareRevoke(c, CASCADE_REVOKE_WHERE, [idsJson, idsJson, idsJson]),
+			prepareCascadeResync(c, idsJson),
+			prepareCascadeBindingDelete(c, idsJson)
+		]);
+
+		const revokedIds = new Set((results[0].results || []).map((row) => row.share_id));
+		// 每个受影响 share 一行,不是每个 binding 一行:`physicsDeleteByUserIds` 一次可能
+		// 剔除上百条 Binding。字段只放行号与计数,绝不放邮箱地址 / sec / authKey。
+		const removed = new Map();
+		for (const shareId of revokedIds) {
+			removed.set(shareId, 0);
+		}
+		for (const row of results[2].results || []) {
+			removed.set(row.share_id, (removed.get(row.share_id) || 0) + 1);
+		}
+		for (const [shareId, removedBindings] of removed) {
+			logShareEvent(SHARE_EVENT.BINDING_CASCADE, {
+				shareId,
+				reason: 'account_deleted',
+				removedBindings,
+				revoked: revokedIds.has(shareId)
+			});
+		}
+
+		// `revoked` 的语义不变,仍是「被置 REVOKED 的分享数」(①的 changes),不是「受影响分享数」。
+		return { revoked: results[0].meta.changes || 0, unbound: results[2].meta.changes || 0 };
 	}
 };
 
