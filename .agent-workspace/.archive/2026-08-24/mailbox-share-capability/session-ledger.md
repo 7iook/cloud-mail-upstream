@@ -82,7 +82,7 @@
 | W5 | T-25 审查 | ✅ R3 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t25-r3.md` · P1-4 HOLD |
 | W5 | T-26 session UX | ✅ 已提交 `6e8bc10` | generalPurpose≈executor | 主 AI 独立 vue 22/250 · worker 18/626 · E2E 13 · worker 零 diff |
 | W5 | T-26 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t26.md` |
-| W6 | T-27 E2E | ⏳ 侦察中 | explore≈plan-reality-recon | 等 `recon-t27-e2e.md` |
+| W6 | T-27 E2E | ⏳ 迷雾已裁，待实现 | explore≈plan-reality-recon | `recon-t27-e2e.md` §13 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -180,6 +180,9 @@
 | T26-POLL | CHANGE:useSharePolling toValue(intervalMs);不加 autoStart | recon-t26 §5 |
 | T26-KEYGEN | CHANGE:est-key 在 session.js 用 getRandomValues | recon-t26 §4;禁 import mail-share.js |
 | T26-STATUS | HOLD:清理不清 share:status | recon-t25 §10 + recon-t26 §7.3 |
+| Fog-1 T-27 | CHANGE A: harness capabilityV2Override，toml 零改 | recon-t27 §13；否 --var / 双 worker |
+| Fog-2 T-27 | CHANGE: page.route fetch 后 abort；零 harness 端点 | recon-t27 §13；禁止改 isLostResponse |
+| Fog-3 T-27 | CHANGE: LIFE-10 路径④非 e2e；薄四路栅栏 spec | recon-t27 §13 |
 
 ## 冲突热区占用
 
@@ -205,6 +208,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-27 侦察已裁 Fog-1/2/3（`recon-t27-e2e.md` §13）。派实现。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 APPROVED p0=0（`review-t26.md`）。勾选 T-26。热区 `index.vue` / `session.js` / `request/share.js` / `useSharePolling.js` 收口只读。未勾选尾：T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 实现待审查（worker 零 diff）。主 AI 独立复跑 vue 定点 5/88 · 全量 22/250；worker 18/626；E2E 13。三处偏离 CHANGE 接受。未勾选。未勾选尾：T-26 审查 / T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 侦察已裁 Fog-1/2/3。派实现。未勾选尾：T-26 → T-29。
