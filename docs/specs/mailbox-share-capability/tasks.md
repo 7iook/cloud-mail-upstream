@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W3 T-15 R2 APPROVED · 下一波 T-16 |
+| 状态 Status | in-progress · W3 T-16 `3bb1d55` 待审查 · 下一波 T-17 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -379,11 +379,28 @@
       - AC: AC-ADMIN-02, AC-ADMIN-03, AC-ADMIN-07, AC-LIFE-11
       - commit: 1d49bb4
 
-- [ ] T-16 AuthKey 状态机:`POST /mailShare/resetAuthKey`(enable/reset/disable 单入口)
-  - [ ]* T-16.1 红:`mail-worker/test/mail-share-service.spec.js` —— 状态机全迁移断言:enable(生成 128-bit CSPRNG/base64url/22 字符 Key,明文恰一次,cv 不变)/reset(换 hash+kid,cv+1)/disable(清 hash+kid+enabled=0,cv+1,无明文);不变量 `auth_key_enabled=1` IFF hash 与 kid 均非空(schema/service 双侧);enable 需 V2=true
+- [x] T-16 AuthKey 状态机:`POST /mailShare/resetAuthKey`(enable/reset/disable 单入口)
+  - **Evidence**
+    - verify: 红（执行者）`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` → 20 failed / 198 passed（218）；绿同命令 → 219/219（含并发 disable 守卫）；主 AI 独立定点 219/219 + 全量 worker 18/465、vue 17/95、E2E 13，均为 EXIT=0
+    - files: `mail-worker/src/service/mail-share-service.js:964-968,982-1018,1270-1309` · `mail-worker/src/api/mail-share-api.js:53-57` · `mail-worker/test/mail-share-service.spec.js`
+    - AC: AC-AUTH-07, AC-AUTH-08, AC-ADMIN-05, AC-LIFE-11
+    - commit: 3bb1d55
+    - decision: 迁移守卫进 WHERE；仅 enable 过 V2；reset 落在未启用行 = SHARE_INVALID_CONFIG；不新增 SHARE_EVENT；HTTP enable 用 ownerWorker 喂 env，不改 toml；security.js 留给 T-17（缺口 5 条）
+    - review: pending
+  - [x]* T-16.1 红:`mail-worker/test/mail-share-service.spec.js` —— 状态机全迁移断言:enable(生成 128-bit CSPRNG/base64url/22 字符 Key,明文恰一次,cv 不变)/reset(换 hash+kid,cv+1)/disable(清 hash+kid+enabled=0,cv+1,无明文);不变量 `auth_key_enabled=1` IFF hash 与 kid 均非空(schema/service 双侧);enable 需 V2=true
     - _Requirements: AC-AUTH-07, AC-AUTH-08, AC-ADMIN-05_
-  - [ ] T-16.2 绿:`mail-share-service.js` 实现 resetAuthKey(复用 `digestShareSecret` 设施);`mail-worker/src/api/mail-share-api.js` 新增端点
+    - **Evidence**
+      - verify: 红（执行者）20 failed（resetAuthKey 不存在 / HTTP 404）
+      - files: `mail-worker/test/mail-share-service.spec.js`
+      - AC: AC-AUTH-07, AC-AUTH-08, AC-ADMIN-05
+      - commit: 3bb1d55
+  - [x] T-16.2 绿:`mail-share-service.js` 实现 resetAuthKey(复用 `digestShareSecret` 设施);`mail-worker/src/api/mail-share-api.js` 新增端点
     - _Requirements: AC-AUTH-07, AC-ADMIN-05, AC-LIFE-11_
+    - **Evidence**
+      - verify: 绿定点 219/219；主 AI 全量 worker 18/465、vue 17/95、E2E 13，均为 EXIT=0
+      - files: `mail-worker/src/service/mail-share-service.js:982-1018,1270-1309` · `mail-worker/src/api/mail-share-api.js:53-57`
+      - AC: AC-AUTH-07, AC-ADMIN-05, AC-LIFE-11
+      - commit: 3bb1d55
 
 - [ ] T-17 perm 路径:`premKey['share:manage']` 扩展 8 条 + security-share 门控回归(security.js 热区第二写点)
   - [ ]* T-17.1 红:`mail-worker/test/security-share.spec.js` —— 移除 `share:manage` → 8 条 `/mailShare/*` 全 `SHARE_FORBIDDEN`;Visitor 端点带 JWT 无 share token → 拒,share token 访问 Owner 端点 → 拒;Visitor 面路由枚举零写端点;`/share-evil` 前缀封闭性基线保持
@@ -484,6 +501,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-16 `3bb1d55` 勾选。主 AI 独立定点 219/219 + 全量 worker 18/465、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-16 审查 / T-17 → T-29。
 - 2026-08-24 · 主 AI:T-15 R2 APPROVED p0=0。未勾选尾：T-16 → T-29。
 - 2026-08-24 · 主 AI:T-15 审查 NEEDS_CHANGES p0=0 p1=2。T15-P1-1/P1-2 均 CHANGE。红 3/3 → 绿定点 198/198 + 全量 worker 18/444、vue 17/95、E2E 13。未勾选尾：T-15 复审 / T-16 → T-29。
 - 2026-08-24 · 主 AI:T-15 `1d49bb4` 勾选。T-11 R2 APPROVED p0=0。主 AI 独立定点 195/195 + 全量 worker 18/441、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-15 审查 / T-16 → T-29。
