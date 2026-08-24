@@ -166,6 +166,7 @@
 | T25-P1-2 | CHANGE:`isMulti` 由 `mailboxes.length > 1` 派生 | review-t25；复活靠 status 水合 |
 | T25-P1-3 | CHANGE:multi 页不渲染遗留明文 `mailbox` | review-t25；单页原样 |
 | T25-P1-4 | HOLD:越界 bindingId 保持同形空页，不映射 SHARE_UNAVAILABLE | review-t25；防 AC-EDGE-04 误杀 |
+| T25-R2-P1 | CHANGE:有缓存且 hasNew 的 Tab 仍拉一页 | review-t25-r2；无新邮件缓存点击仍零请求 |
 
 ## 冲突热区占用
 
@@ -190,6 +191,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-25 R2 P1 CHANGE（缓存 Tab + hasNew 再拉）。独立 5/68 · 22/221 · 18/626 · E2E 13。未勾选（等 R3）。未勾选尾：T-25 R3 / T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 P1-1/2/3 已修，P1-4 HOLD。独立 5/67 · 22/220 · 18/626 · E2E 13。未勾选（等 R2）。未勾选尾：T-25 R2 / T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 审查 NEEDS_CHANGES p1=4。P1-1/2/3 CHANGE，P1-4 HOLD。未勾选。未勾选尾：T-25 R2 / T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 入库 `2e6754d`。独立复跑 vue 定点 5/65 · 全量 22/218；worker 定点 2/38 · 全量 18/626；E2E 13。`useSharePolling.js` 空 diff。未勾选（等审查）。未勾选尾：T-25 → T-29。

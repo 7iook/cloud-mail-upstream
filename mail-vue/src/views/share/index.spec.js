@@ -726,7 +726,7 @@ describe('share view multi-mailbox tabs', () => {
         }))
         expect(wrapper.get('[data-share-mail-list]').text()).toContain('Fetched on select')
 
-        // 已缓存的 Tab 再切回来不该重复取数。
+        // 无新邮件时，已缓存 Tab 再点不取数。
         listShareMails.mockClear()
         await wrapper.get('[data-share-tab="8002"]').trigger('click')
         await flushPromises()
@@ -965,6 +965,57 @@ describe('share view multi-mailbox tabs', () => {
         await wrapper.get('[data-share-tab="0"]').trigger('click')
         await flushPromises()
 
+        expect(JSON.parse(sessionStorage.getItem('share:status:lid-a'))[8002]).toBe(53)
+        expect(badgedTabs(wrapper)).toEqual([])
+    })
+
+    it('refetches a cached tab when status has already reported newer mail (AC-OTP-09)', async () => {
+        vi.useFakeTimers()
+        createShareSession.mockResolvedValue(multiSession())
+        getShareMailboxesStatus.mockResolvedValue(statusFrame([
+            { bindingId: 0, latestEmailId: 11 },
+            { bindingId: 8002, latestEmailId: 52 }
+        ]))
+        listShareMails.mockImplementation(async ({ bindingId }) => ({
+            list: bindingId === 8002
+                ? [mail({ mailId: 52, bindingId: 8002, subject: 'Cached sibling', code: '' })]
+                : [mail({ mailId: 11, bindingId: 0, subject: 'First box mail', code: '' })],
+            nextCursor: null
+        }))
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        await wrapper.get('[data-share-tab="8002"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.get('[data-share-mail-list]').text()).toContain('Cached sibling')
+
+        await wrapper.get('[data-share-tab="0"]').trigger('click')
+        await flushPromises()
+
+        getShareMailboxesStatus.mockResolvedValue(statusFrame([
+            { bindingId: 0, latestEmailId: 11 },
+            { bindingId: 8002, latestEmailId: 53 }
+        ]))
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+        expect(badgedTabs(wrapper)).toEqual(['8002'])
+
+        listShareMails.mockClear()
+        listShareMails.mockResolvedValue({
+            list: [mail({ mailId: 53, bindingId: 8002, subject: 'Sibling fresh', code: '' })],
+            nextCursor: null
+        })
+        await wrapper.get('[data-share-tab="8002"]').trigger('click')
+        await flushPromises()
+
+        expect(listShareMails).toHaveBeenCalledTimes(1)
+        expect(listShareMails).toHaveBeenCalledWith(expect.objectContaining({ bindingId: 8002 }))
+        expect(wrapper.get('[data-share-mail-list]').text()).toContain('Sibling fresh')
+
+        await wrapper.get('[data-share-tab="0"]').trigger('click')
+        await flushPromises()
         expect(JSON.parse(sessionStorage.getItem('share:status:lid-a'))[8002]).toBe(53)
         expect(badgedTabs(wrapper)).toEqual([])
     })

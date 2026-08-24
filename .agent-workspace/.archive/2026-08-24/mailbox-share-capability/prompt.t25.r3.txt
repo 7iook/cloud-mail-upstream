@@ -1,0 +1,24 @@
+T-25 R3 review · cached-tab hasNew refetch after review-t25-r2.md
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Do NOT git commit / push / stash / switch branch / edit production code.
+
+Prior verdicts:
+- review-t25.md: P1-1/2/3 CHANGE, P1-4 HOLD
+- review-t25-r2.md: one leftover P1 (cached tab with hasNew did not refetch) — main AI CHANGE
+
+Inspect:
+- mail-vue/src/views/share/index.vue selectTab: unread = hasNew(status head) captured before setActiveBinding; cached && !unread reuses cache; otherwise fetch and advanceFromPage
+- mail-vue/src/views/share/index.spec.js: "refetches a cached tab when status has already reported newer mail"
+- T25-TAB-LOAD still asserts no refetch when there is no newer mail
+
+Do not reopen P1-4. Do not demand useSharePolling.js edits. SHARE_CAPABILITY_V2 stays default false.
+
+You MAY run:
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/index.spec.js src/views/share/status-watermark.spec.js src/composables/useSharePolling.spec.js src/request/share.spec.js src/views/share/share-chunk.spec.js
+
+Write `/workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t25-r3.md`
+Format: VERDICT APPROVED | NEEDS_CHANGES; P0/P1/P2; file:line anchors; test evidence if run.
+
+Reply to user in Chinese.

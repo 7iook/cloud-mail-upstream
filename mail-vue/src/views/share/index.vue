@@ -418,9 +418,11 @@ async function selectTab(bindingId) {
     if (bindingId == null) {
         return
     }
+    const box = mailboxes.value.find((item) => item.bindingId === bindingId)
+    const unread = Boolean(box && hasNew(watermarks.value, box.bindingId, box.latestEmailId))
     setActiveBinding(bindingId)
     const cached = mails.value.filter((item) => item.bindingId === bindingId)
-    if (cached.length) {
+    if (cached.length && !unread) {
         advanceFromPage(bindingId, cached)
         return
     }
