@@ -1,13 +1,12 @@
 import { env } from 'cloudflare:test';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import dayjs from 'dayjs';
 import worker from '../src/index.js';
 import { isDel } from '../src/const/entity-const.js';
 import verifyRecordService from '../src/service/verify-record-service.js';
 import userService from '../src/service/user-service.js';
 import emailService from '../src/service/email-service.js';
 import oauthService from '../src/service/oauth-service.js';
-import { seedBindingRow } from './setup.js';
+import { seedBindingRow, withLocalTimezoneShift } from './setup.js';
 
 // 🔴 种子陷阱:默认 user_id=1 / account_id=1 在测试库里**没有对应 account 行**,
 // 挂在这套种子上的任何 Binding 天生满足孤儿补偿臂的「非法」判据,会被顺手删掉 ——
@@ -20,8 +19,16 @@ const T18_ACC_2 = 918102;
 const T18_OTHER_ACC = 918201;
 const T18_MISSING_SHARE = 918999;
 
+const STAMP_UNIT_MS = { hour: 3600 * 1000, day: 24 * 3600 * 1000 };
+
+// delete_at / created_at 都是 UTC 裸串，清理服务按 UTC 比较，夹具必须同口径。
+// 本地时区构造会让「1 小时前就该删」的种子在 UTC+8 的宿主上变成 7 小时后才到期。
 function stamp(offset, unit) {
-	return dayjs().add(offset, unit).format('YYYY-MM-DD HH:mm:ss');
+	const step = STAMP_UNIT_MS[unit];
+	if (!step) {
+		throw new Error(`stamp: unsupported unit ${unit}`);
+	}
+	return new Date(Date.now() + offset * step).toISOString().replace('T', ' ').slice(0, 19);
 }
 
 async function insertShare({ lid, expiresAt, deleteAt, userId = 1, accountId = 1 }) {
@@ -139,6 +146,22 @@ describe('AC-LIFE-07 scheduled share cleanup', () => {
 			.bind(T18_ACC_1, T18_ACC_2, T18_OTHER_ACC).run();
 		await env.db.prepare('DELETE FROM user WHERE user_id IN (?, ?)').bind(T18_USER, T18_OTHER_USER).run();
 		vi.restoreAllMocks();
+	});
+
+	// 清理任务的 `now` 与库里的裸串必须同为 UTC。若 `now` 取进程本地时间，UTC+8 的进程会把
+	// 「未来 4 小时才到期」的行当成已到期删掉，而 24h 幂等游标同时前移 8 小时。
+	it('keeps rows that are not due yet when the process renders local time as UTC+8 (WA-TZ)', async () => {
+		await insertShare({
+			lid: 't12-tz-not-due',
+			expiresAt: stamp(2, 'hour'),
+			deleteAt: stamp(4, 'hour')
+		});
+		await insertIdempotency({ key: 't12-tz-fresh', createdAt: stamp(-20, 'hour'), shareId: 900003 });
+
+		await withLocalTimezoneShift(8, () => runCron());
+
+		expect(await lids()).toContain('t12-tz-not-due');
+		expect(await idempotencyKeys()).toContain('t12-tz-fresh');
 	});
 
 	it('deletes only past delete_at shares and 24h-stale idempotency via the daily cron', async () => {

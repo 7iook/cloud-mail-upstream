@@ -3,6 +3,7 @@ import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { expectSameInstant } from '@/test/utc-instant.js'
 import en from '@/i18n/en.js'
 
 const {
@@ -52,6 +53,12 @@ vi.mock('element-plus', async (importOriginal) => {
         ElMessageBox: { confirm }
     }
 })
+
+// day.js 在模块作用域就 `const settingStore = useSettingStore()`，import 期即需要活跃的 Pinia。
+// 本抽屉自己不碰 settingStore，只有 day.js 读 lang，桩到 lang 即可，不动共享的 day.js。
+vi.mock('@/store/setting.js', () => ({
+    useSettingStore: () => ({ lang: 'zh' })
+}))
 
 vi.mock('@/composables/useCopyWithFallback.js', () => ({
     useCopyWithFallback: () => ({
@@ -222,6 +229,15 @@ describe('share detail drawer · read side (AC-ADMIN-02 / AC-ADMIN-09 / AC-CAP-0
         expect(rows[1].text()).toContain('ops@example.com')
         expect(wrapper.get('[data-test="detail-quota"]').text()).toContain('2')
         expect(wrapper.get('[data-test="detail-quota"]').text()).toContain('5')
+    })
+
+    // 详情页与列表页读同一批裸串，转换口径必须一致，否则同一条分享在两处显示不同时刻。
+    it('renders created / expiry / last access in the browser timezone (WA-TZ)', async () => {
+        const wrapper = await openDrawer()
+
+        expectSameInstant(wrapper.get('[data-test="detail-created"]').text(), '2026-08-17 01:00:00')
+        expectSameInstant(wrapper.get('[data-test="detail-expires"]').text(), '2026-08-18 01:00:00')
+        expectSameInstant(wrapper.get('[data-test="detail-last-access"]').text(), '2026-08-17 02:00:00')
     })
 
     it('falls back to #accountId for a binding whose account was hard deleted', async () => {

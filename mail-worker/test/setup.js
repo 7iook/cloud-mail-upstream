@@ -55,6 +55,46 @@ const MAIL_SHARE_COLUMNS = [
 	['credentials_version', 'credentialsVersion']
 ];
 
+// workerd 恒 UTC，所以「写入方用了进程本地时区」这个缺陷在这里是黑盒不可见的：
+// local === UTC 时 `dayjs().format()` 与 `dayjs.utc().format()` 逐字相同。
+// 这个夹具只改 Date 暴露的本地时间 getter —— 正是 `dayjs().format()` 读的那一组 ——
+// 从而在运行时内部模拟一个 UTC+N 进程。`getUTC*` / `Date.now()` / SQLite 的
+// CURRENT_TIMESTAMP 一概不动，它们仍是真 UTC，可当作对照锚点。
+// （Windows 上 `TZ` 环境变量对 Node 有效，但 vitest-pool-workers 跑的是 workerd，
+// 拿不到进程时区这个旋钮，所以只能在 Date 这一层做对照实验。）
+const LOCAL_TIME_GETTERS = [
+	'getFullYear', 'getMonth', 'getDate', 'getDay',
+	'getHours', 'getMinutes', 'getSeconds', 'getMilliseconds'
+];
+
+export async function withLocalTimezoneShift(offsetHours, fn) {
+	const shiftMs = offsetHours * 3600 * 1000;
+	const saved = LOCAL_TIME_GETTERS.map((name) => [name, Date.prototype[name]]);
+	const savedOffset = Date.prototype.getTimezoneOffset;
+	for (const [name] of saved) {
+		const utcName = name.replace('get', 'getUTC');
+		Date.prototype[name] = function shiftedLocalGetter() {
+			return new Date(this.getTime() + shiftMs)[utcName]();
+		};
+	}
+	Date.prototype.getTimezoneOffset = function shiftedOffset() {
+		return -offsetHours * 60;
+	};
+	try {
+		return await fn();
+	} finally {
+		for (const [name, impl] of saved) {
+			Date.prototype[name] = impl;
+		}
+		Date.prototype.getTimezoneOffset = savedOffset;
+	}
+}
+
+// 裸串 'YYYY-MM-DD HH:mm:ss' 不带时区标记，「按 UTC 读」就是它的全部契约。
+export function utcTextToMs(text) {
+	return Date.parse(`${String(text).replace(' ', 'T')}Z`);
+}
+
 let seedSeq = 0;
 
 // 行 ID 只接受安全整数正数。`value > 0` 单独用会放行 '1e3' / '1.5' / true / Infinity ——

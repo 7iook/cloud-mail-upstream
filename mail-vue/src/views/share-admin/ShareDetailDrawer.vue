@@ -42,15 +42,15 @@
         </div>
         <div class="field">
           <dt class="field-label">{{ $t('shareCreatedAt') }}</dt>
-          <dd class="field-value" data-test="detail-created">{{ detail.createTime || '-' }}</dd>
+          <dd class="field-value" data-test="detail-created">{{ tzText(detail.createTime) }}</dd>
         </div>
         <div class="field">
           <dt class="field-label">{{ $t('shareExpiresAt') }}</dt>
-          <dd class="field-value" data-test="detail-expires">{{ detail.expiresAt || '-' }}</dd>
+          <dd class="field-value" data-test="detail-expires">{{ tzText(detail.expiresAt) }}</dd>
         </div>
         <div class="field">
           <dt class="field-label">{{ $t('shareLastAccess') }}</dt>
-          <dd class="field-value" data-test="detail-last-access">{{ detail.lastAccessAt || '-' }}</dd>
+          <dd class="field-value" data-test="detail-last-access">{{ tzText(detail.lastAccessAt) }}</dd>
         </div>
       </dl>
 
@@ -333,6 +333,7 @@ import {
   updateMailShareBindings
 } from "@/request/mail-share.js"
 import {bindingLabels, isMutableStatus, quotaText, shareTypeLabelKey, statusMeta} from "./status.js"
+import {tzText} from "@/utils/day.js"
 
 defineOptions({
   name: 'share-detail-drawer'

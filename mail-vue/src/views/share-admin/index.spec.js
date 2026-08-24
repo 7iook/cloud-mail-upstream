@@ -5,6 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { useUserStore } from '@/store/user.js'
+import { expectSameInstant } from '@/test/utc-instant.js'
 import en from '@/i18n/en.js'
 
 const { listMailShares, getMailShare, accountList, routerReplace } = vi.hoisted(() => ({
@@ -41,6 +42,13 @@ vi.mock('@/router', () => ({
         push: vi.fn(),
         addRoute: vi.fn()
     }
+}))
+
+// day.js 在模块作用域就 `const settingStore = useSettingStore()`，而 setActivePinia 要等到
+// beforeEach —— 直接 import 会在模块求值期抛 "no active Pinia"。本页自己不碰 settingStore，
+// 只有 day.js 读 lang，桩到 lang 即可，不动共享的 day.js。
+vi.mock('@/store/setting.js', () => ({
+    useSettingStore: () => ({ lang: 'zh' })
 }))
 
 import { permsToRouter } from '@/perm/perm.js'
@@ -165,8 +173,20 @@ describe('share-admin list page (AC-ADMIN-01 / AC-ADMIN-09 / AC-ADMIN-10)', () =
         expect(row.get('[data-test="share-status"]').text()).toBe('Active')
         expect(row.get('[data-test="share-quota"]').text()).toContain('2')
         expect(row.get('[data-test="share-quota"]').text()).toContain('5')
-        expect(row.get('[data-test="share-expires"]').text()).toContain('2026-08-18 01:00:00')
-        expect(row.get('[data-test="share-last-access"]').text()).toContain('2026-08-17 02:00:00')
+        expectSameInstant(row.get('[data-test="share-expires"]').text(), '2026-08-18 01:00:00')
+        expectSameInstant(row.get('[data-test="share-last-access"]').text(), '2026-08-17 02:00:00')
+    })
+
+    // 后端裸串恒 UTC(SQLite CURRENT_TIMESTAMP 与 dayjs.utc 同源),管理台照抄就会给东八区
+    // 管理员少显示 8 小时。访客页 share/index.vue:560 已经按 UTC 解析,管理台必须同口径。
+    it('renders expiry in the browser timezone, not the raw UTC string (WA-TZ)', async () => {
+        listMailShares.mockResolvedValue({ list: [sampleShare()], total: 1 })
+        const wrapper = mountPage()
+        await flushPromises()
+
+        const row = wrapper.get('[data-test="share-row"]')
+        expectSameInstant(row.get('[data-test="share-expires"]').text(), '2026-08-18 01:00:00')
+        expectSameInstant(row.get('[data-test="share-last-access"]').text(), '2026-08-17 02:00:00')
     })
 
     it('tells the four effective statuses apart by data-status and by text (AC-ADMIN-09)', async () => {

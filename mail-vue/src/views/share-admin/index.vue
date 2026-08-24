@@ -70,11 +70,11 @@
             </div>
             <div class="field">
               <dt class="field-label">{{ $t('shareExpiresAt') }}</dt>
-              <dd class="field-value" data-test="share-expires">{{ row.expiresAt || '-' }}</dd>
+              <dd class="field-value" data-test="share-expires">{{ tzText(row.expiresAt) }}</dd>
             </div>
             <div class="field">
               <dt class="field-label">{{ $t('shareLastAccess') }}</dt>
-              <dd class="field-value" data-test="share-last-access">{{ row.lastAccessAt || '-' }}</dd>
+              <dd class="field-value" data-test="share-last-access">{{ tzText(row.lastAccessAt) }}</dd>
             </div>
           </dl>
 
@@ -104,6 +104,7 @@ import {useI18n} from "vue-i18n"
 import loading from "@/components/loading/index.vue"
 import {isShareForbidden, listMailShares} from "@/request/mail-share.js"
 import {SHARE_STATUSES, bindingSummary, quotaText, shareTypeLabelKey, statusMeta} from "./status.js"
+import {tzText} from "@/utils/day.js"
 import ShareCreateWizard from "./ShareCreateWizard.vue"
 import ShareRowActions from "./ShareRowActions.vue"
 import ShareDetailDrawer from "./ShareDetailDrawer.vue"

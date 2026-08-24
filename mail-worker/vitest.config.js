@@ -8,9 +8,15 @@ import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config';
 // singleWorker keeps per-test stacked storage on one runtime per vitest process.
 const cacheDir = join(tmpdir(), `mail-worker-vitest-${process.pid}`);
 
+// singleWorker means every spec file shares one workerd isolate, so file-level
+// parallelism buys nothing here (measured: 81.8s serial vs 85.4s parallel) while
+// exposing globals to cross-file races. Fixtures that patch shared runtime state
+// -- withLocalTimezoneShift swaps Date.prototype's local getters -- leak into
+// whatever else happens to be mid-assertion. Serial keeps that state private.
 export default defineWorkersConfig({
 	cacheDir,
 	test: {
+		fileParallelism: false,
 		setupFiles: ['./test/setup.js'],
 		poolOptions: {
 			workers: {

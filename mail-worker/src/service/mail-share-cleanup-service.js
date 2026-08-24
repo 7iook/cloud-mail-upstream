@@ -1,5 +1,5 @@
-import dayjs from 'dayjs';
 import { isDel } from '../const/entity-const';
+import { toUtc } from '../utils/date-uitil';
 import { SHARE_EVENT, logShareEvent } from './mail-share-service';
 
 const IDEMPOTENCY_TTL_HOURS = 24;
@@ -32,8 +32,10 @@ const mailShareCleanupService = {
 	// 「剩下的都是活的」。写反的现象是「零孤儿断言过、但撤销/重指静默失效」。
 	// 不加 try/catch:清理失败必须让 cron 报错,而不是静默少清一批。
 	async cleanupExpired(c) {
-		const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-		const idempotencyCutoff = dayjs().subtract(IDEMPOTENCY_TTL_HOURS, 'hour').format('YYYY-MM-DD HH:mm:ss');
+		// 恒 UTC：库里的 delete_at / created_at 都是 UTC 裸串，比较基准必须同口径，
+		// 否则非 UTC 进程(本地开发)会按偏移量提前或延后清理。
+		const now = toUtc().format('YYYY-MM-DD HH:mm:ss');
+		const idempotencyCutoff = toUtc().subtract(IDEMPOTENCY_TTL_HOURS, 'hour').format('YYYY-MM-DD HH:mm:ss');
 
 		const results = await c.env.db.batch([
 			// ① AC-LIFE-06:到期分享的 Binding 与主表行同批删。

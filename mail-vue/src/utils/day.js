@@ -84,6 +84,11 @@ export function tzDayjs(time) {
     return dayjs.utc(time).tz(timeZone)
 }
 
+// 后端落库的是不带时区标记的 UTC 裸串。直出字符串等于把 UTC 当本地时间读，东八区会少 8 小时。
+export function tzText(time, fallback = '-') {
+    return time ? tzDayjs(time).format('YYYY-MM-DD HH:mm:ss') : fallback
+}
+
 export function toUtc(time) {
     return dayjs(time).utc()
 }

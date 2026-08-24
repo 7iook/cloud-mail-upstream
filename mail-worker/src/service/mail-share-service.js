@@ -1,6 +1,6 @@
-import dayjs from 'dayjs';
 import { isDel } from '../const/entity-const';
 import BizError from '../error/biz-error';
+import dayjs from 'dayjs';
 import shareAuthService from './share-auth-service';
 
 const CREATE_OP = 'create';
@@ -46,6 +46,9 @@ export const SHARE_EVENT = {
 	SYSTEM_ERROR: 'share.system.error'
 };
 
+// 恒 UTC。落库的 create_time / expires_at / delete_at 都是不带时区标记的裸串，
+// 前端(访客页倒计时、管理台失效时间)一律按 UTC 解析，所以写入方不能跟随进程时区 ——
+// 否则同一份代码在 Cloudflare(恒 UTC)与本地开发(UTC+8)会写出相差 8 小时的行。
 function nowText() {
 	return dayjs().format('YYYY-MM-DD HH:mm:ss');
 }
@@ -283,7 +286,7 @@ function retentionSeconds(c) {
 }
 
 function idempotencyCutoff() {
-	return dayjs().subtract(IDEMPOTENCY_TTL_HOURS, 'hour').format('YYYY-MM-DD HH:mm:ss');
+	return toUtc().subtract(IDEMPOTENCY_TTL_HOURS, 'hour').format('YYYY-MM-DD HH:mm:ss');
 }
 
 function isUniqueConflict(err) {
@@ -1136,7 +1139,7 @@ const mailShareService = {
 			}
 		}
 
-		const now = dayjs();
+		const now = toUtc();
 		const createdAt = now.format('YYYY-MM-DD HH:mm:ss');
 		const expiresAt = now.clone().add(body.durationSeconds, 'second').format('YYYY-MM-DD HH:mm:ss');
 		const deleteAt = now.clone().add(body.durationSeconds + retentionSeconds(c), 'second').format('YYYY-MM-DD HH:mm:ss');

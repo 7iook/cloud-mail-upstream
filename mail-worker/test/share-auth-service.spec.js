@@ -7,6 +7,7 @@ import shareAuthService from '../src/service/share-auth-service';
 import shareAuthSource from '../src/service/share-auth-service.js?raw';
 import shareResult from '../src/model/share-result';
 import { isDel } from '../src/const/entity-const';
+import { withLocalTimezoneShift } from './setup.js';
 
 const PEPPER_V1 = 't08-pepper-v1-fixed-test-value';
 const PEPPER_V2 = 't08-pepper-v2-fixed-test-value';
@@ -501,6 +502,22 @@ describe('shareAuthService', () => {
 		expect(row.access_count).toBe(2);
 		expect(row.last_access_at).toEqual(expect.any(String));
 	});
+
+	// `nowText()` 同时是配额闸门的 `expires_at > ?` 比较基准和 `last_access_at` 的写入值。
+	// 取进程本地时间时，UTC+8 的进程会写出比真实时刻晚 8 小时的裸串，管理台照抄即错。
+	it('writes last_access_at as UTC even from a UTC+8 process (WA-TZ)', async () => {
+		await ensureAccount();
+		const lid = randomLid('tz-utc');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec });
+		const before = Date.now();
+		await withLocalTimezoneShift(8, () => shareAuthService.establishSession(ctx(), lid, sec));
+		const after = Date.now();
+		const row = await quotaRow(shareId);
+		const writtenMs = Date.parse(`${row.last_access_at.replace(' ', 'T')}Z`);
+		expect(writtenMs).toBeGreaterThanOrEqual(before - 1000);
+		expect(writtenMs).toBeLessThanOrEqual(after + 1000);
+	});
 	it('does not write sec or session token to logs (AC-LEAK-05)', async () => {
 		await ensureAccount();
 		const lid = randomLid('nolog');
@@ -700,19 +717,26 @@ describe('shareAuthService', () => {
 	});
 });
 
+// expires_at 是 UTC 裸串，夹具必须同口径构造。本地时区 getter 会在 UTC+8 的宿主上
+// 把「60 秒后到期」写成「8 小时后到期」，让 issueToken 的绝对上界断言失去判别力。
+// 写法与 setup.js 的 sqlTime / mail-share-service.spec.js 的同名夹具一致。
 function futureText(secondsFromNow) {
-	const at = new Date(Date.now() + secondsFromNow * 1000);
-	const pad = (n) => String(n).padStart(2, '0');
-	return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} `
-		+ `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+	return new Date(Date.now() + secondsFromNow * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
-function functionSource(source, name) {
-	const start = source.indexOf(`async function ${name}(`);
+function functionSource(rawSource, name) {
+	// `?raw` hands back the bytes on disk. With core.autocrlf=true (git's Windows
+	// default, and this repo ships no .gitattributes) the checkout is CRLF, so the
+	// '\n}\n' terminator below never matches and every caller reads end === -1.
+	const source = rawSource.replace(/\r\n/g, '\n');
+	// core.autocrlf=true 的 Windows 检出让 ?raw 拿到 CRLF，'\n}\n' 永不匹配，
+	// 这条结构断言在本地会恒为红（与时区改动无关的既有缺陷）。先归一化再定位。
+	const text = source.replace(/\r\n/g, '\n');
+	const start = text.indexOf(`async function ${name}(`);
 	expect(start).toBeGreaterThan(-1);
-	const end = source.indexOf('\n}\n', start);
+	const end = text.indexOf('\n}\n', start);
 	expect(end).toBeGreaterThan(start);
-	return source.slice(start, end);
+	return text.slice(start, end);
 }
 
 describe('shareAuthService session quota gate', () => {

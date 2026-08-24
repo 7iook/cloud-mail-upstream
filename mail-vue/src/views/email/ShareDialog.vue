@@ -53,13 +53,13 @@
           <div class="share-row-meta">
             <span>{{ t('shareMailbox') }}: {{ row.mailbox }}</span>
             <span data-test="share-status">{{ statusLabel(row.effectiveStatus) }}</span>
-            <span>{{ t('shareCreatedAt') }}: {{ row.createTime }}</span>
-            <span>{{ t('shareExpiresAt') }}: {{ row.expiresAt }}</span>
+            <span>{{ t('shareCreatedAt') }}: {{ tzText(row.createTime) }}</span>
+            <span>{{ t('shareExpiresAt') }}: {{ tzText(row.expiresAt) }}</span>
           </div>
           <div class="share-row-access">
             <span data-test="access-label">{{ t('shareAccessCount') }}</span>
             <span>{{ row.accessCount }}</span>
-            <span>{{ t('shareLastAccess') }}: {{ row.lastAccessAt || '-' }}</span>
+            <span>{{ t('shareLastAccess') }}: {{ tzText(row.lastAccessAt) }}</span>
             <span class="share-access-hint">{{ t('shareAccessHint') }}</span>
           </div>
         </div>
@@ -89,6 +89,7 @@ import { hasPerm } from '@/perm/perm.js'
 import { useUserStore } from '@/store/user.js'
 import { useCopyWithFallback } from '@/composables/useCopyWithFallback.js'
 import { createMailShare, listMailShares, newIdempotencyKey, revokeMailShare } from '@/request/mail-share.js'
+import { tzText } from '@/utils/day.js'
 import { buildShareUrl } from './build-share-url.js'
 
 const props = defineProps({

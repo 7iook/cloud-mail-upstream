@@ -16,7 +16,7 @@ import shareResult from '../src/model/share-result';
 import initSource from '../src/init/init.js?raw';
 import worker from '../src/index.js';
 import wranglerToml from '../wrangler.toml?raw';
-import { seedBindingRow, seedShareRow } from './setup.js';
+import { seedBindingRow, seedShareRow, utcTextToMs, withLocalTimezoneShift } from './setup.js';
 
 const PEPPER = 't09-pepper-v2-fixed-test-value';
 const USER_A = 909001;
@@ -322,6 +322,32 @@ describe('mailShareService owner write path', () => {
 		expect(expiresMs - createdMs).toBe(120000);
 		expect(deleteMs).toBeGreaterThan(expiresMs);
 		expect(created.expiresAt).toBe(row.expires_at);
+	});
+
+	// 上一条只比相对差值，写入方用哪个时区都成立，所以抓不到「裸串是本地时间」。
+	// 这条钉的是绝对时刻：分享模块是全仓唯一一个「裸串是否 UTC 取决于运行环境」的写入方，
+	// 部署到 Cloudflare(恒 UTC)与本地开发(UTC+8)必须产出同一个物理时刻。
+	it('writes create_time / expires_at as UTC even from a UTC+8 process (WA-TZ)', async () => {
+		await seedOwners();
+		const before = Date.now();
+		const created = await withLocalTimezoneShift(8, () => mailShareService.create(ctx({
+			SHARE_RETENTION_SECONDS: '3600'
+		}), createParams({ durationSeconds: 120 }), USER_A));
+		const after = Date.now();
+		const row = await env.db.prepare(
+			'SELECT create_time, expires_at, delete_at FROM mail_share WHERE share_id = ?'
+		).bind(created.shareId).first();
+		const createdMs = utcTextToMs(row.create_time);
+		// 秒级截断，所以下界放宽 1s。
+		expect(createdMs).toBeGreaterThanOrEqual(before - 1000);
+		expect(createdMs).toBeLessThanOrEqual(after + 1000);
+		expect(utcTextToMs(row.expires_at) - createdMs).toBe(120000);
+		expect(utcTextToMs(row.delete_at) - createdMs).toBe(3720000);
+		// 独立锚点：binding 的 create_time 走 SQLite CURRENT_TIMESTAMP，恒 UTC，同一个 batch 落库。
+		const binding = await env.db.prepare(
+			'SELECT create_time FROM mail_share_binding WHERE share_id = ? ORDER BY binding_id ASC LIMIT 1'
+		).bind(created.shareId).first();
+		expect(Math.abs(createdMs - utcTextToMs(binding.create_time))).toBeLessThanOrEqual(2000);
 	});
 
 	it('stores name and remark for the owner list only (AC-SHARE-09, AC-MGMT-02)', async () => {

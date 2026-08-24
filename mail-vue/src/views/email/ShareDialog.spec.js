@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { useUserStore } from '@/store/user.js'
+import { expectSameInstant } from '@/test/utc-instant.js'
 import en from '@/i18n/en.js'
 
 const { createMailShare, listMailShares, revokeMailShare, confirm, routerPush } = vi.hoisted(() => ({
@@ -30,6 +31,12 @@ vi.mock('@/request/mail-share.js', async (importOriginal) => {
         revokeMailShare
     }
 })
+
+// day.js 在模块作用域就 `const settingStore = useSettingStore()`，import 期即需要活跃的 Pinia。
+// 本弹窗自己不碰 settingStore，只有 day.js 读 lang，桩到 lang 即可，不动共享的 day.js。
+vi.mock('@/store/setting.js', () => ({
+    useSettingStore: () => ({ lang: 'zh' })
+}))
 
 vi.mock('@/composables/useCopyWithFallback.js', () => ({
     useCopyWithFallback: () => ({
@@ -141,6 +148,21 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         })
         revokeMailShare.mockResolvedValue({ shareId: 7 })
         confirm.mockResolvedValue()
+    })
+
+    // 邮件页的分享列表读的是同一批后端裸串，和管理台必须同口径，否则同一条分享两处不一致。
+    it('renders created / expiry / last access in the browser timezone (WA-TZ)', async () => {
+        listMailShares.mockResolvedValue({ list: [sampleShare()], total: 1 })
+        const wrapper = mountDialog()
+        await flushPromises()
+
+        const meta = wrapper.get('[data-test="share-row"]').text()
+        const stamps = meta.match(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/g) || []
+        expect(stamps).toHaveLength(3)
+        const [created, expires, lastAccess] = stamps
+        expectSameInstant(created, '2026-08-17 01:00:00')
+        expectSameInstant(expires, '2026-08-18 01:00:00')
+        expectSameInstant(lastAccess, '2026-08-17 02:00:00')
     })
 
     it('shows the access-risk warning before create is available (AC-MGMT-06)', async () => {

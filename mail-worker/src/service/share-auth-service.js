@@ -1,5 +1,4 @@
 import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
-import dayjs from 'dayjs';
 import { isDel } from '../const/entity-const';
 import KvConst from '../const/kv-const';
 import account from '../entity/account';
@@ -7,6 +6,7 @@ import { mailShare } from '../entity/mail-share';
 import { mailShareBinding } from '../entity/mail-share-binding';
 import orm from '../entity/orm';
 import BizError from '../error/biz-error';
+import { toUtc } from '../utils/date-uitil';
 // Known cycle with mail-share-service: it imports this module too. Both directions
 // are dereferenced inside function bodies only, so neither module evaluation hits a
 // TDZ. The event names stay in one place until W2 extracts them.
@@ -40,8 +40,10 @@ function throwAuthRequired() {
 	throw new BizError(SHARE_AUTH_REQUIRED);
 }
 
+// 恒 UTC：既是 last_access_at 的写入值，也是配额闸门 `expires_at > ?` 的比较基准。
+// 取进程本地时区会让本地开发(UTC+8)写出比真实时刻晚 8 小时的裸串。
 function nowText() {
-	return dayjs().format('YYYY-MM-DD HH:mm:ss');
+	return toUtc().format('YYYY-MM-DD HH:mm:ss');
 }
 
 function effectiveStatus(row, now) {
@@ -211,7 +213,9 @@ async function issueToken(c, row) {
 	const iat = Math.floor(Date.now() / 1000);
 	const ttlRaw = Number(c.env.SHARE_SESSION_TTL);
 	const ttl = Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : DEFAULT_SESSION_TTL;
-	const shareExp = dayjs(row.expiresAt).unix();
+	// expiresAt 是不带时区标记的 UTC 裸串，必须按 UTC 读回，否则非 UTC 进程会把
+	// token 的绝对上界算偏一个时区偏移量。
+	const shareExp = toUtc(row.expiresAt).unix();
 	const exp = Math.min(Number.isFinite(shareExp) ? shareExp : iat + ttl, iat + ttl);
 	if (exp <= iat) {
 		throwUnavailable();
