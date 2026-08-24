@@ -13,6 +13,14 @@ export function statusMeta(status) {
     return STATUS_META[status] || { labelKey: '', tone: 'info' }
 }
 
+// update / bindings / resetAuthKey all sit behind the backend's loadMutableShare predicate
+// (status ACTIVE and not yet expired), so reading is always open and writing only in these
+// two states. ACCESS_LIMIT_REACHED belongs here: it is still an ACTIVE row that merely ran
+// out of session quota, which is exactly when the owner comes in to raise the quota.
+export function isMutableStatus(effectiveStatus) {
+    return effectiveStatus === 'ACTIVE' || effectiveStatus === 'ACCESS_LIMIT_REACHED'
+}
+
 export function shareTypeLabelKey(shareType) {
     return shareType === 'multi' ? 'shareTypeMulti' : 'shareTypeSingle'
 }

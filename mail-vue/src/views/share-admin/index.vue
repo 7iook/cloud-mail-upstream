@@ -76,9 +76,13 @@
               <dd class="field-value" data-test="share-last-access">{{ row.lastAccessAt || '-' }}</dd>
             </div>
           </dl>
+
+          <ShareRowActions :row="row" @open="activeShareId = row.shareId" @changed="fetchList"/>
         </article>
       </div>
     </el-scrollbar>
+
+    <ShareDetailDrawer v-model:share-id="activeShareId" @changed="fetchList"/>
 
     <div v-if="total > size" class="pager">
       <el-pagination
@@ -99,6 +103,8 @@ import {useI18n} from "vue-i18n"
 import loading from "@/components/loading/index.vue"
 import {isShareForbidden, listMailShares} from "@/request/mail-share.js"
 import {SHARE_STATUSES, bindingSummary, quotaText, shareTypeLabelKey, statusMeta} from "./status.js"
+import ShareRowActions from "./ShareRowActions.vue"
+import ShareDetailDrawer from "./ShareDetailDrawer.vue"
 
 defineOptions({
   name: 'share-admin'
@@ -130,6 +136,7 @@ const statusOptions = SHARE_STATUSES
 const size = 20
 const isMobile = window.innerWidth < 1025
 
+const activeShareId = ref(0)
 const status = ref('')
 const page = ref(1)
 const total = ref(0)

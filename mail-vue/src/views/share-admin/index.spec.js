@@ -7,8 +7,10 @@ import { createI18n } from 'vue-i18n'
 import { useUserStore } from '@/store/user.js'
 import en from '@/i18n/en.js'
 
-const { listMailShares, routerReplace } = vi.hoisted(() => ({
+const { listMailShares, getMailShare, accountList, routerReplace } = vi.hoisted(() => ({
     listMailShares: vi.fn(),
+    getMailShare: vi.fn(),
+    accountList: vi.fn(),
     routerReplace: vi.fn()
 }))
 
@@ -18,7 +20,18 @@ vi.mock('@/request/mail-share.js', async (importOriginal) => {
     const actual = await importOriginal()
     return {
         ...actual,
-        listMailShares
+        listMailShares,
+        getMailShare
+    }
+})
+
+// The T-21 drawer pages the owner's own mailboxes for its add-binding picker; stub it so the
+// list page's wiring case never reaches axios.
+vi.mock('@/request/account.js', async (importOriginal) => {
+    const actual = await importOriginal()
+    return {
+        ...actual,
+        accountList
     }
 })
 
@@ -51,6 +64,37 @@ const stubs = {
         props: ['currentPage', 'pageSize', 'total'],
         emits: ['current-change'],
         template: '<div class="el-pagination-stub"><button data-test="next-page" type="button" @click="$emit(\'current-change\', currentPage + 1)">next</button></div>'
+    },
+    // T-21 mounts real ShareRowActions / ShareDetailDrawer children here so the wiring is
+    // asserted end to end; these stubs only stand in for the element-plus internals.
+    'el-button': {
+        props: ['disabled', 'loading', 'type', 'text'],
+        template: '<button type="button" :disabled="disabled"><slot /></button>'
+    },
+    'el-drawer': {
+        props: ['modelValue', 'title'],
+        emits: ['update:modelValue'],
+        template: '<div class="el-drawer-stub" v-if="modelValue"><slot /></div>'
+    },
+    'el-input': {
+        props: ['modelValue', 'disabled'],
+        emits: ['update:modelValue'],
+        template: '<input :value="modelValue" :disabled="disabled" />'
+    },
+    'el-input-number': {
+        props: ['modelValue', 'disabled'],
+        emits: ['update:modelValue'],
+        template: '<input type="number" :value="modelValue" :disabled="disabled" />'
+    },
+    'el-switch': {
+        props: ['modelValue', 'disabled'],
+        emits: ['update:modelValue'],
+        template: '<input type="checkbox" :checked="modelValue" :disabled="disabled" />'
+    },
+    'el-checkbox': {
+        props: ['modelValue', 'disabled'],
+        emits: ['update:modelValue'],
+        template: '<input type="checkbox" :checked="modelValue" :disabled="disabled" />'
     }
 }
 
@@ -98,9 +142,13 @@ function lastQuery() {
 describe('share-admin list page (AC-ADMIN-01 / AC-ADMIN-09 / AC-ADMIN-10)', () => {
     beforeEach(() => {
         listMailShares.mockReset()
+        getMailShare.mockReset()
+        accountList.mockReset()
         routerReplace.mockReset()
         localStorage.clear()
         listMailShares.mockResolvedValue({ list: [], total: 0 })
+        getMailShare.mockResolvedValue(sampleShare({ bindings: [{ bindingId: 91, accountId: 11, mailbox: 'otp@example.com' }] }))
+        accountList.mockResolvedValue([])
     })
 
     it('shows every audit field the owner needs on one row (AC-ADMIN-01)', async () => {
@@ -240,15 +288,37 @@ describe('share-admin list page (AC-ADMIN-01 / AC-ADMIN-09 / AC-ADMIN-10)', () =
         expect(wrapper.find('[data-test="share-admin-forbidden"]').exists()).toBe(false)
     })
 
-    it('leaves every row action to T-21: rows carry hooks, not buttons', async () => {
+    // T-20 wrote this case as a handover gate ("leaves every row action to T-21: rows carry
+    // hooks, not buttons", asserting row.findAll('button') is empty). T-21 flips the
+    // assertions in place rather than deleting the case: its value is that the list hooks
+    // survive the row actions, not that a row may never hold a button.
+    it('hands row actions to the T-21 drawer without losing the list hooks', async () => {
         listMailShares.mockResolvedValue({ list: [sampleShare()], total: 1 })
         const wrapper = mountPage()
         await flushPromises()
 
         const row = wrapper.get('[data-test="share-row"]')
         expect(row.attributes('data-share-id')).toBe('7')
-        expect(row.findAll('button')).toHaveLength(0)
-        expect(row.findAll('[data-test="revoke-share"]')).toHaveLength(0)
+        expect(row.attributes('data-status')).toBe('ACTIVE')
+        expect(row.find('[data-test="row-open-detail"]').exists()).toBe(true)
+        expect(row.find('[data-test="row-revoke"]').exists()).toBe(true)
+        expect(row.find('[data-test="row-delete"]').exists()).toBe(true)
+        expect(row.get('[data-test="share-name"]').text()).toBe('front desk')
+    })
+
+    it('opens the detail drawer for the clicked row and nothing else', async () => {
+        listMailShares.mockResolvedValue({ list: [sampleShare()], total: 1 })
+        const wrapper = mountPage()
+        await flushPromises()
+
+        expect(getMailShare).not.toHaveBeenCalled()
+
+        await wrapper.get('[data-test="row-open-detail"]').trigger('click')
+        await flushPromises()
+
+        expect(getMailShare).toHaveBeenCalledTimes(1)
+        expect(getMailShare).toHaveBeenCalledWith(7)
+        expect(wrapper.find('[data-test="share-detail"]').exists()).toBe(true)
     })
 })
 
