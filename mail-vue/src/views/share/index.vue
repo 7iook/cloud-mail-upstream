@@ -28,72 +28,113 @@
     >{{ tx('shareVisitWait', 'Please wait a moment, then try again.') }}</p>
 
     <div v-if="state === 'ready'" data-share-body>
-      <ShareOtpCard
-        :mails="mails"
-        :selected="selectedMail"
-        :enabled="otpEnabled"
-      />
-
-      <p
-        v-if="!mails.length"
-        class="share-empty"
-        data-share-empty
-      >{{ tx('shareVisitEmpty', 'No mail yet. New messages will appear here.') }}</p>
-
-      <ul
-        v-else
-        class="share-list"
-        data-share-mail-list
+      <nav
+        v-if="isMulti"
+        class="share-tabs"
+        data-share-tabs
+        role="tablist"
+        :aria-label="tx('shareVisitMailboxes', 'Mailboxes')"
       >
-        <li
-          v-for="item in listMails"
-          :key="mailKey(item)"
+        <button
+          v-for="(box, index) in mailboxes"
+          :key="box.bindingId"
+          type="button"
+          role="tab"
+          class="share-tab"
+          :id="tabId(box.bindingId)"
+          :data-share-tab="box.bindingId"
+          aria-controls="share-tabpanel"
+          :aria-selected="box.bindingId === activeBinding ? 'true' : 'false'"
+          :tabindex="box.bindingId === activeBinding ? 0 : -1"
+          @click="selectTab(box.bindingId)"
+          @keydown="onTabKeydown($event, index)"
         >
-          <button
-            type="button"
-            :data-share-mail="mailKey(item)"
-            :aria-current="isSelected(item) ? 'true' : undefined"
-            @click="selectedId = mailKey(item)"
-          >
-            <span>{{ item.subject || tx('shareVisitNoSubject', '(no subject)') }}</span>
-            <span class="share-list-from">{{ senderLine(item) }}</span>
-          </button>
-        </li>
-      </ul>
+          <span>{{ box.address || MASKED_ADDRESS }}</span>
+          <span
+            v-if="tabHasNew(box)"
+            class="share-tab-dot"
+            data-share-tab-badge
+            role="img"
+            :aria-label="tx('shareVisitNewMail', 'New mail')"
+          ></span>
+        </button>
+      </nav>
 
-      <article
-        v-if="selectedMail"
-        class="share-detail"
+      <div
+        id="share-tabpanel"
+        :role="isMulti ? 'tabpanel' : undefined"
+        :aria-labelledby="isMulti ? tabId(activeBinding) : undefined"
       >
-        <p class="share-from">{{ tx('shareVisitFrom', 'From') }} {{ senderLine(selectedMail) }}</p>
-        <h2>{{ selectedMail.subject || tx('shareVisitNoSubject', '(no subject)') }}</h2>
-        <SafeMailRenderer
-          :text="selectedMail.text || ''"
-          :html="selectedMail.content || ''"
-          default-mode="text"
+        <!-- Keyed by Binding: the copy confirmation belongs to one mailbox's code, so it
+             must not survive a Tab switch. -->
+        <ShareOtpCard
+          :key="activeBinding"
+          :mails="visibleMails"
+          :selected="selectedMail"
+          :enabled="otpEnabled"
         />
+
         <p
-          v-if="hasHtml(selectedMail)"
-          class="share-remote-hint"
-        >{{ tx('shareVisitRemoteHint', 'Opening HTML may load images from the sender, which can reveal that you opened this mail.') }}</p>
+          v-if="!visibleMails.length"
+          class="share-empty"
+          data-share-empty
+        >{{ tx('shareVisitEmpty', 'No mail yet. New messages will appear here.') }}</p>
+
         <ul
-          v-if="selectedMail.attachments && selectedMail.attachments.length"
-          class="share-atts"
+          v-else
+          class="share-list"
+          data-share-mail-list
         >
           <li
-            v-for="att in selectedMail.attachments"
-            :key="att.attachmentId"
+            v-for="item in listMails"
+            :key="mailKey(item)"
           >
             <button
               type="button"
-              data-share-attachment
-              @click="downloadAttachment(selectedMail, att)"
+              :data-share-mail="mailKey(item)"
+              :aria-current="isSelected(item) ? 'true' : undefined"
+              @click="selectedId = mailKey(item)"
             >
-              {{ tx('shareVisitDownload', 'Download') }} {{ att.filename || 'attachment' }}
+              <span>{{ item.subject || tx('shareVisitNoSubject', '(no subject)') }}</span>
+              <span class="share-list-from">{{ senderLine(item) }}</span>
             </button>
           </li>
         </ul>
-      </article>
+
+        <article
+          v-if="selectedMail"
+          class="share-detail"
+        >
+          <p class="share-from">{{ tx('shareVisitFrom', 'From') }} {{ senderLine(selectedMail) }}</p>
+          <h2>{{ selectedMail.subject || tx('shareVisitNoSubject', '(no subject)') }}</h2>
+          <SafeMailRenderer
+            :text="selectedMail.text || ''"
+            :html="selectedMail.content || ''"
+            default-mode="text"
+          />
+          <p
+            v-if="hasHtml(selectedMail)"
+            class="share-remote-hint"
+          >{{ tx('shareVisitRemoteHint', 'Opening HTML may load images from the sender, which can reveal that you opened this mail.') }}</p>
+          <ul
+            v-if="selectedMail.attachments && selectedMail.attachments.length"
+            class="share-atts"
+          >
+            <li
+              v-for="att in selectedMail.attachments"
+              :key="att.attachmentId"
+            >
+              <button
+                type="button"
+                data-share-attachment
+                @click="downloadAttachment(selectedMail, att)"
+              >
+                {{ tx('shareVisitDownload', 'Download') }} {{ att.filename || 'attachment' }}
+              </button>
+            </li>
+          </ul>
+        </article>
+      </div>
     </div>
     <div v-else data-share-body></div>
   </div>
@@ -108,6 +149,7 @@ import { useSharePolling } from '@/composables/useSharePolling.js'
 import {
     createShareSession,
     getShareAttachment,
+    getShareMailboxesStatus,
     isShareRateLimited,
     isShareUnavailable,
     listShareMails
@@ -120,6 +162,13 @@ import {
     writeShareSession
 } from './session.js'
 import { senderLine } from './mail-fields.js'
+import {
+    advance,
+    hasNew,
+    readWatermarks,
+    reconcile,
+    writeWatermarks
+} from './status-watermark.js'
 import ShareOtpCard from './ShareOtpCard.vue'
 
 defineOptions({
@@ -128,6 +177,9 @@ defineOptions({
 
 const PAGE_LIMIT = 50
 const MAX_CATCHUP_PAGES = 40
+// Same placeholder the projection uses for an address it cannot parse, so a Binding that
+// only the status frame knows about still gets a label instead of a bare dot.
+const MASKED_ADDRESS = '***'
 
 const route = useRoute()
 const { t, te, locale } = useI18n()
@@ -140,6 +192,10 @@ const mails = ref([])
 const selectedId = ref('')
 const rateLimited = ref(false)
 const otpEnabled = ref(true)
+const shareType = ref('single')
+const mailboxes = ref([])
+const activeBinding = ref(null)
+const watermarks = ref({})
 let justRecovered = false
 
 function mailKey(item) {
@@ -189,15 +245,66 @@ async function fetchMails(args) {
     }
 }
 
+async function fetchStatus(args) {
+    try {
+        const result = await getShareMailboxesStatus(args)
+        rateLimited.value = false
+        return result
+    } catch (err) {
+        if (isShareRateLimited(err)) {
+            rateLimited.value = true
+        }
+        throw err
+    }
+}
+
 function onPolledMails(list) {
     rateLimited.value = false
     mergeMails(list)
 }
 
+function saveWatermarks(next) {
+    watermarks.value = next
+    writeWatermarks(currentLid(), next)
+}
+
+// The Binding whose mail this page just showed has been consumed up to the largest id the
+// page actually carried — not to the status head, which may already be ahead of the page
+// (design.md:348). An empty page advances nothing and the next tick retries.
+function advanceFromPage(bindingId, list) {
+    const ids = (list || [])
+        .map((item) => Number(item && item.mailId))
+        .filter((id) => Number.isFinite(id))
+    if (bindingId == null || !ids.length) {
+        return
+    }
+    saveWatermarks(advance(watermarks.value, bindingId, Math.max(...ids)))
+}
+
+/**
+ * One poll tick is one status read plus one mails read for the Tab in front of the
+ * visitor — never one request per Binding (AC-OTP-07). The watermarks it writes drive
+ * badges only: skipping the mails call when nothing looks new would lose the mail that
+ * lands between the seeding frame and the first real one.
+ * Errors are deliberately not caught: 429 backoff and SHARE_UNAVAILABLE belong to
+ * useSharePolling, which can only see them if they propagate.
+ */
+async function pollTick({ sessionToken: token, limit, signal }) {
+    const data = await fetchStatus({ sessionToken: token, signal })
+    const list = Array.isArray(data && data.mailboxes) ? data.mailboxes : []
+    saveWatermarks(reconcile(watermarks.value, list).map)
+    syncMailboxesFromStatus(list)
+
+    const bindingId = activeBinding.value
+    const page = await fetchMails({ sessionToken: token, bindingId, limit, signal })
+    advanceFromPage(bindingId, page && page.list)
+    return page
+}
+
 const polling = useSharePolling({
     sessionToken,
     limit: PAGE_LIMIT,
-    listShareMails: fetchMails,
+    listShareMails: pollTick,
     onMails: onPolledMails,
     onUnavailable: (err) => {
         void noteShareFailure(err)
@@ -205,14 +312,117 @@ const polling = useSharePolling({
 })
 polling.stop()
 
-const listMails = computed(() => [...mails.value].reverse())
+// Two conditions, not one: shareType is the server's verdict and mailboxes.length is the
+// rendering precondition, so dirty data cannot produce an empty tablist.
+const isMulti = computed(() => shareType.value === 'multi' && mailboxes.value.length > 1)
+
+// A row whose bindingId the projection could not resolve belongs to no Tab, but it is
+// still the whole list on a single-mailbox page.
+const visibleMails = computed(() => {
+    if (!isMulti.value || activeBinding.value == null) {
+        return mails.value
+    }
+    return mails.value.filter((item) => item.bindingId === activeBinding.value)
+})
+
+const listMails = computed(() => [...visibleMails.value].reverse())
 
 const selectedMail = computed(() => {
+    const visible = visibleMails.value
     if (!selectedId.value) {
-        return mails.value.length ? mails.value[mails.value.length - 1] : null
+        return visible.length ? visible[visible.length - 1] : null
     }
-    return mails.value.find((item) => mailKey(item) === selectedId.value) || null
+    return visible.find((item) => mailKey(item) === selectedId.value) || null
 })
+
+function tabId(bindingId) {
+    return `share-tab-${bindingId}`
+}
+
+function tabHasNew(box) {
+    return box.bindingId !== activeBinding.value
+        && hasNew(watermarks.value, box.bindingId, box.latestEmailId)
+}
+
+function setActiveBinding(bindingId) {
+    if (activeBinding.value === bindingId) {
+        return
+    }
+    activeBinding.value = bindingId
+    // No per-Tab memory: coming back selects that Tab's newest mail, same as first paint.
+    selectedId.value = ''
+}
+
+function pickActiveBinding() {
+    const list = mailboxes.value
+    if (!list.length) {
+        setActiveBinding(null)
+        return
+    }
+    if (!list.some((box) => box.bindingId === activeBinding.value)) {
+        setActiveBinding(list[0].bindingId)
+    }
+}
+
+function setMailboxes(list) {
+    mailboxes.value = (Array.isArray(list) ? list : []).filter((box) => box && box.bindingId != null)
+    pickActiveBinding()
+}
+
+// The status frame is the live set of Bindings: one that disappeared loses its Tab, its
+// mail and its watermark, and the active Tab falls back to the first (AC-EDGE-04). The
+// masked address only ever arrives with the session response, so it is carried over.
+function syncMailboxesFromStatus(list) {
+    const rows = list.filter((item) => item && item.bindingId != null)
+    if (!rows.length) {
+        return
+    }
+    const known = new Map(mailboxes.value.map((box) => [box.bindingId, box]))
+    mailboxes.value = rows.map((item) => ({
+        address: '',
+        ...known.get(item.bindingId),
+        bindingId: item.bindingId,
+        latestEmailId: item.latestEmailId
+    }))
+    const live = rows.map((item) => item.bindingId)
+    mails.value = mails.value.filter((item) => item.bindingId == null || live.includes(item.bindingId))
+    pickActiveBinding()
+}
+
+async function selectTab(bindingId) {
+    if (bindingId == null) {
+        return
+    }
+    setActiveBinding(bindingId)
+    if (mails.value.some((item) => item.bindingId === bindingId)) {
+        return
+    }
+    try {
+        const page = await fetchMails({
+            sessionToken: sessionToken.value,
+            bindingId,
+            limit: PAGE_LIMIT
+        })
+        mergeMails(page && Array.isArray(page.list) ? page.list : [])
+    } catch (err) {
+        await noteShareFailure(err)
+    }
+}
+
+function onTabKeydown(event, index) {
+    const step = event.key === 'ArrowRight' ? 1 : (event.key === 'ArrowLeft' ? -1 : 0)
+    if (!step) {
+        return
+    }
+    event.preventDefault()
+    const list = mailboxes.value
+    const nextIndex = (index + step + list.length) % list.length
+    void selectTab(list[nextIndex].bindingId)
+    const tabs = event.currentTarget.parentNode.querySelectorAll('[data-share-tab]')
+    if (tabs[nextIndex]) {
+        tabs[nextIndex].focus()
+    }
+}
 
 const showWait = computed(() => rateLimited.value || state.value === 'limited')
 
@@ -221,8 +431,12 @@ function isSelected(item) {
     return Boolean(current && mailKey(current) === mailKey(item))
 }
 
+// The single reader of the /share/session response body. T-26 extends this one helper for
+// autoRefresh / refreshIntervalMs / expiresAt rather than opening a second read point.
 function applyShareConfig(data) {
     otpEnabled.value = !(data && data.config && data.config.otpExtractionEnabled === false)
+    shareType.value = data && data.shareType === 'multi' ? 'multi' : 'single'
+    setMailboxes(data && data.mailboxes)
 }
 
 function logShareFailure(err) {
@@ -376,30 +590,22 @@ function resetMailbox() {
     rateLimited.value = false
 }
 
-function rememberCursor(list) {
-    if (list.length && list[list.length - 1].mailId != null) {
-        polling.cursor.value = String(list[list.length - 1].mailId)
-        return
-    }
-    if (mails.value.length) {
-        polling.cursor.value = String(mails.value[mails.value.length - 1].mailId)
-    }
-}
-
 async function beginMailbox() {
     polling.unavailable.value = false
     try {
         let cursor = null
         let pages = 0
         while (pages < MAX_CATCHUP_PAGES) {
+            // The cursor is "older than", so it belongs to this catch-up loop only. The poll
+            // path asks for the newest page instead, and mergeMails deduplicates by mailId.
             const result = await listShareMails({
                 sessionToken: sessionToken.value,
                 cursor,
+                bindingId: activeBinding.value,
                 limit: PAGE_LIMIT
             })
             const list = result && Array.isArray(result.list) ? result.list : []
             mergeMails(list)
-            rememberCursor(list)
             const next = result && result.nextCursor
             if (!next || !list.length || list.length < PAGE_LIMIT) {
                 break
@@ -449,6 +655,11 @@ async function bootstrap() {
     resetMailbox()
     otpEnabled.value = true
     const lid = currentLid()
+    shareType.value = 'single'
+    mailboxes.value = []
+    activeBinding.value = null
+    // Read progress is per lid and survives a reload; a different lid must never inherit it.
+    watermarks.value = readWatermarks(lid)
     state.value = 'loading'
     mailbox.value = ''
     if (!lid) {
@@ -537,6 +748,52 @@ defineExpose({
 .share-empty,
 .share-remote-hint {
     color: #4b5563;
+}
+
+.share-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 16px 0 0;
+    border-bottom: 1px solid #d0d7de;
+}
+
+.share-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: -1px;
+    padding: 10px 12px;
+    font: inherit;
+    color: #4b5563;
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+}
+
+.share-tab:hover {
+    color: #1f2328;
+    background: #f6f8fa;
+}
+
+/* Selection is weight plus a rule, not colour alone. */
+.share-tab[aria-selected="true"] {
+    color: #1f2328;
+    font-weight: 600;
+    border-bottom-color: #0969da;
+}
+
+.share-tab:focus-visible {
+    outline: 2px solid #0969da;
+    outline-offset: -2px;
+}
+
+.share-tab-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #0969da;
 }
 
 .share-list {

@@ -149,6 +149,38 @@ describe('useSharePolling', () => {
     assert.equal(listShareMails.mock.calls[1][0].cursor, '9')
   })
 
+  // T-25:多邮箱取数是「注入的组合函数」,不是 composable 的分支。
+  // 一拍 = 1 次 status + 1 次当前 Binding 的 mails,与 Binding 数无关(AC-OTP-07)。
+  it('runs a composed status-then-mails fetcher exactly once per tick, whatever the binding count', async () => {
+    const getStatus = vi.fn(async () => ({
+      mailboxes: [
+        { bindingId: 0, latestEmailId: 11 },
+        { bindingId: 8002, latestEmailId: 52 },
+        { bindingId: 8003, latestEmailId: 71 }
+      ]
+    }))
+    const getMails = vi.fn(async () => ({ list: [], nextCursor: null }))
+    const listShareMails = vi.fn(async ({ sessionToken, limit, signal }) => {
+      const status = await getStatus({ sessionToken, signal })
+      const active = status.mailboxes[0]
+      return getMails({ sessionToken, bindingId: active.bindingId, limit, signal })
+    })
+    session = runPolling({ listShareMails, limit: 50 })
+
+    for (const tick of [1, 2, 3]) {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+      assert.equal(listShareMails.mock.calls.length, tick)
+      assert.equal(getStatus.mock.calls.length, tick)
+      assert.equal(getMails.mock.calls.length, tick)
+    }
+
+    const askedBindings = new Set(getMails.mock.calls.map(([args]) => args.bindingId))
+    assert.deepEqual([...askedBindings], [0])
+    assert.equal(getMails.mock.calls[0][0].limit, 50)
+    assert.ok(getStatus.mock.calls[0][0].signal)
+    assert.equal(getStatus.mock.calls[0][0].signal, getMails.mock.calls[0][0].signal)
+  })
+
   it('aborts an in-flight request on dispose and when the page is hidden', async () => {
     const signals = []
     const listShareMails = vi.fn(({ signal }) => {

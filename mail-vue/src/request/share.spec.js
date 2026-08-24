@@ -5,6 +5,7 @@ import {
     createShareSession,
     getShareAttachment,
     getShareMail,
+    getShareMailboxesStatus,
     isShareRateLimited,
     isShareUnavailable,
     listShareMails,
@@ -95,6 +96,58 @@ describe('share request client', () => {
         expect(captured[0].params).toEqual({ cursor: '10', limit: 20 })
         expect(readAuth(captured[0])).toBe(`Bearer ${SHARE_TOKEN}`)
         expect(readAuth(captured[0])).not.toContain(USER_TOKEN)
+    })
+
+    it('sends bindingId only when the caller asks for one, and 0 is a real binding (T-25)', async () => {
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: 7, limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: 0, limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: null, limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, bindingId: '', limit: 50 })
+        await listShareMails({ sessionToken: SHARE_TOKEN, limit: 50 })
+
+        expect(captured.map((config) => config.params)).toEqual([
+            { limit: 50, bindingId: 7 },
+            { limit: 50, bindingId: 0 },
+            { limit: 50 },
+            { limit: 50 },
+            { limit: 50 }
+        ])
+        expect(captured.every((config) => config.url === '/share/mails')).toBe(true)
+    })
+
+    it('reads the watermark protocol through the same share client and token (T-25)', async () => {
+        const controller = new AbortController()
+
+        const data = await getShareMailboxesStatus({
+            sessionToken: SHARE_TOKEN,
+            signal: controller.signal
+        })
+
+        expect(captured).toHaveLength(1)
+        expect(captured[0].url).toBe('/share/mailboxes/status')
+        expect(captured[0].method).toBe('get')
+        expect(captured[0].signal).toBe(controller.signal)
+        expect(readAuth(captured[0])).toBe(`Bearer ${SHARE_TOKEN}`)
+        expect(JSON.stringify(captured[0].headers || {})).not.toContain(USER_TOKEN)
+        expect(data).toEqual({ list: [], nextCursor: null })
+    })
+
+    it('surfaces a 429 from the status route as the same recoverable rate limit (T-25, AC-OTP-08)', async () => {
+        shareHttp.defaults.adapter = async (config) => {
+            captured.push(config)
+            httpError(config, 429, { 'retry-after': '5' }, { message: 'rate limited' })
+        }
+
+        let caught
+        try {
+            await getShareMailboxesStatus({ sessionToken: SHARE_TOKEN })
+        } catch (err) {
+            caught = err
+        }
+
+        expect(caught).toBeInstanceOf(ShareRateLimitedError)
+        expect(caught.retryAfter).toBe(5)
+        expect(isShareRateLimited(caught)).toBe(true)
     })
 
     it('hands back HTTP 200 SHARE_UNAVAILABLE without redirect or reload', async () => {

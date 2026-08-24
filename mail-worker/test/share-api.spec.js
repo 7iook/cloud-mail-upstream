@@ -500,3 +500,140 @@ describe('T-11 mail share HTTP routes', () => {
 		expect(created.json?.message).toBe('SHARE_DURATION_EXCEEDED');
 	});
 });
+
+// T-25 · GET /share/mails?bindingId —— design.md:337 承诺的 per-Binding 取数维度。
+// multi create 需要 SHARE_CAPABILITY_V2(本任务不动开关),所以第二个 Binding 照
+// share-status.spec.js:162-169 直接写行。
+describe('T-25 GET /share/mails per-binding scope', () => {
+	async function addBinding(shareId, accountId, windowStartEmailId = 0) {
+		const row = await env.db.prepare(`
+			INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id)
+			VALUES (?, ?, ?)
+			RETURNING binding_id
+		`).bind(shareId, accountId, windowStartEmailId).first();
+		return row.binding_id;
+	}
+
+	async function createShare(accountId) {
+		return jsonApi('POST', '/mailShare/create', {
+			token: ownerJwt,
+			body: { accountId, durationSeconds: 3600, name: 't11-binding', remark: '' }
+		});
+	}
+
+	async function openSession(created) {
+		return jsonApi('POST', '/share/session', {
+			body: { lid: created.json.data.lid, sec: created.json.data.sec }
+		});
+	}
+
+	// 外层 afterEach 只删 mail_share,孤儿 binding 行会被复用的 share_id 认领。
+	afterEach(async () => {
+		await env.db.prepare(`
+			DELETE FROM mail_share_binding
+			WHERE share_id IN (SELECT share_id FROM mail_share WHERE user_id = ?)
+				OR share_id NOT IN (SELECT share_id FROM mail_share)
+		`).bind(ownerUser.userId).run();
+	});
+
+	it('returns only the asked binding while an omitted bindingId keeps the merged list', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const secondAccountId = await insertAccount(OTHER_MAILBOX, ownerUser.userId);
+		const created = await createShare(accountId);
+		const secondBindingId = await addBinding(created.json.data.shareId, secondAccountId);
+		const firstMailId = await insertEmail(accountId, ownerUser.userId, { subject: 't11-binding-first' });
+		const secondMailId = await insertEmail(secondAccountId, ownerUser.userId, { subject: 't11-binding-second' });
+		const session = await openSession(created);
+		const bearer = session.json.data.sessionToken;
+		const firstBindingId = session.json.data.mailboxes[0].bindingId;
+		expect(session.json.data.shareType).toBe('multi');
+
+		const merged = await jsonApi('GET', '/share/mails?limit=50', { bearer });
+		expect(merged.json.data.list.map((row) => row.mailId).sort())
+			.toEqual([firstMailId, secondMailId].sort());
+
+		const first = await jsonApi('GET', `/share/mails?limit=50&bindingId=${firstBindingId}`, { bearer });
+		expect(first.json?.code).toBe(200);
+		expectNoStore(first.headers);
+		expect(first.json.data.list.map((row) => row.mailId)).toEqual([firstMailId]);
+		expect(first.json.data.list.every((row) => row.bindingId === firstBindingId)).toBe(true);
+
+		const second = await jsonApi('GET', `/share/mails?limit=50&bindingId=${secondBindingId}`, { bearer });
+		expect(second.json.data.list.map((row) => row.mailId)).toEqual([secondMailId]);
+		expect(second.json.data.list.every((row) => row.bindingId === secondBindingId)).toBe(true);
+
+		// 空串等同于缺省:旧客户端与手写 URL 都不该被降级成空箱。
+		const blank = await jsonApi('GET', '/share/mails?limit=50&bindingId=', { bearer });
+		expect(blank.json.data.list.map((row) => row.mailId).sort())
+			.toEqual([firstMailId, secondMailId].sort());
+	});
+
+	it('answers an unknown or foreign bindingId with an empty page instead of leaking existence', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const otherAccountId = await insertAccount(OTHER_MAILBOX, ownerUser.userId);
+		const mine = await createShare(accountId);
+		const theirs = await createShare(otherAccountId);
+		await insertEmail(accountId, ownerUser.userId, { subject: 't11-binding-mine' });
+		await insertEmail(otherAccountId, ownerUser.userId, { subject: 't11-binding-theirs' });
+		const session = await openSession(mine);
+		const bearer = session.json.data.sessionToken;
+		const theirSession = await openSession(theirs);
+		const foreignBindingId = theirSession.json.data.mailboxes[0].bindingId;
+
+		const bodies = await Promise.all([
+			jsonApi('GET', `/share/mails?bindingId=${foreignBindingId}`, { bearer }),
+			jsonApi('GET', '/share/mails?bindingId=999999', { bearer }),
+			jsonApi('GET', '/share/mails?bindingId=not-a-number', { bearer }),
+			jsonApi('GET', '/share/mails?bindingId=-1', { bearer })
+		]);
+		for (const item of bodies) {
+			expect(item.status).toBe(200);
+			expect(item.json?.code).toBe(200);
+			expect(item.json.data.list).toEqual([]);
+			expect(item.json.data.nextCursor).toBeNull();
+		}
+		expect(new Set(bodies.map((item) => item.text)).size).toBe(1);
+	});
+
+	it('treats bindingId=0 as the pre-Binding single mailbox, not an empty scope', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const created = await createShare(accountId);
+		// 存量单邮箱分享没有 binding 行,share-auth-service 用 bindingId 0 呈现它。
+		await env.db.prepare('DELETE FROM mail_share_binding WHERE share_id = ?')
+			.bind(created.json.data.shareId).run();
+		const mailId = await insertEmail(accountId, ownerUser.userId, { subject: 't11-binding-legacy' });
+		const session = await openSession(created);
+		const bearer = session.json.data.sessionToken;
+		expect(session.json.data.mailboxes[0].bindingId).toBe(0);
+		expect(session.json.data.shareType).toBe('single');
+
+		const scoped = await jsonApi('GET', '/share/mails?limit=50&bindingId=0', { bearer });
+		expect(scoped.json.data.list.map((row) => row.mailId)).toEqual([mailId]);
+		expect(scoped.json.data.list[0].bindingId).toBe(0);
+	});
+
+	it('pages one binding with its own cursor', async () => {
+		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
+		const secondAccountId = await insertAccount(OTHER_MAILBOX, ownerUser.userId);
+		const created = await createShare(accountId);
+		await addBinding(created.json.data.shareId, secondAccountId);
+		const ids = [];
+		for (let i = 0; i < 3; i++) {
+			ids.push(await insertEmail(accountId, ownerUser.userId, { subject: `t11-binding-page-${i}` }));
+		}
+		await insertEmail(secondAccountId, ownerUser.userId, { subject: 't11-binding-noise' });
+		const session = await openSession(created);
+		const bearer = session.json.data.sessionToken;
+		const bindingId = session.json.data.mailboxes[0].bindingId;
+
+		const page1 = await jsonApi('GET', `/share/mails?limit=2&bindingId=${bindingId}`, { bearer });
+		expect(page1.json.data.list.map((row) => row.mailId)).toEqual([ids[2], ids[1]]);
+		expect(page1.json.data.nextCursor).toBe(String(ids[1]));
+
+		const page2 = await jsonApi('GET', `/share/mails?limit=2&bindingId=${bindingId}&cursor=${page1.json.data.nextCursor}`, {
+			bearer
+		});
+		expect(page2.json.data.list.map((row) => row.mailId)).toEqual([ids[0]]);
+		expect(page2.json.data.nextCursor).toBeNull();
+	});
+});

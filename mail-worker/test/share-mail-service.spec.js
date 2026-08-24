@@ -499,6 +499,75 @@ describe('shareMailService list/getById with injected dependencies', () => {
 		expect(dto).toBeNull();
 	});
 
+	it('listForBinding narrows to one binding and projects it exactly like list', async () => {
+		const bindings = [
+			{ bindingId: UNIT_BINDING, accountId: UNIT_ACCOUNT, windowStartEmailId: 0 },
+			{ bindingId: 8002, accountId: 43, windowStartEmailId: 0 }
+		];
+		const seen = [];
+		const dtos = await shareMailService.listForBinding({}, shareContext({ bindings }), UNIT_BINDING, null, 20, {
+			shareScopedEmailRepository: {
+				listForBinding: async (_c, ctx, bindingId) => {
+					seen.push({ bindingId, bindings: ctx.bindings.map((item) => item.bindingId) });
+					return [fatEmailRow({ code: '' })];
+				},
+				list: async () => {
+					throw new Error('merged list must not serve a real binding id');
+				}
+			},
+			findAttachments: async () => [fatAttRow()],
+			findAccountEmails: async () => [{ accountId: UNIT_ACCOUNT, email: UNIT_MAILBOX }]
+		});
+
+		expect(seen).toEqual([{ bindingId: UNIT_BINDING, bindings: [UNIT_BINDING] }]);
+		expect(dtos).toHaveLength(1);
+		expect(Object.keys(dtos[0]).sort()).toEqual(OTP_ON_KEYS);
+		expect(dtos[0].bindingId).toBe(UNIT_BINDING);
+		expect(dtos[0].mailboxAddress).toBe('i***@example.com');
+	});
+
+	it('listForBinding serves the legacy bindingId 0 instead of treating it as absent', async () => {
+		const bindings = [{ bindingId: 0, accountId: UNIT_ACCOUNT, windowStartEmailId: 0 }];
+		const dtos = await shareMailService.listForBinding({}, shareContext({ bindings }), 0, null, 20, {
+			shareScopedEmailRepository: {
+				list: async (_c, ctx) => {
+					expect(ctx.bindings.map((item) => item.bindingId)).toEqual([0]);
+					return [fatEmailRow({ code: '' })];
+				},
+				listForBinding: async () => {
+					throw new Error('resolveRowId cannot express 0, so this path must not run');
+				}
+			},
+			findAttachments: async () => [],
+			findAccountEmails: async () => [{ accountId: UNIT_ACCOUNT, email: UNIT_MAILBOX }]
+		});
+
+		expect(dtos.map((row) => row.mailId)).toEqual([11]);
+		expect(dtos[0].bindingId).toBe(0);
+	});
+
+	it('listForBinding answers an unknown or malformed bindingId with [] and never queries', async () => {
+		let queries = 0;
+		const repo = {
+			list: async () => {
+				queries += 1;
+				return [fatEmailRow()];
+			},
+			listForBinding: async () => {
+				queries += 1;
+				return [fatEmailRow()];
+			}
+		};
+		for (const bindingId of [9999, -1, null, undefined, '', 'abc', 1.5, {}]) {
+			expect(await shareMailService.listForBinding({}, shareContext(), bindingId, null, 20, {
+				shareScopedEmailRepository: repo,
+				findAttachments: async () => [],
+				findAccountEmails: async () => []
+			})).toEqual([]);
+		}
+		expect(queries).toBe(0);
+	});
+
 	it('does not query mailbox addresses when there is nothing to project', async () => {
 		let called = 0;
 		const dtos = await shareMailService.list({}, shareContext(), null, 20, {

@@ -109,13 +109,18 @@ async function readResponseData(res) {
     return data
 }
 
-function listParams({ cursor, limit } = {}) {
+function listParams({ cursor, limit, bindingId } = {}) {
     const params = {}
     if (cursor !== undefined && cursor !== null && cursor !== '') {
         params.cursor = cursor
     }
     if (limit !== undefined && limit !== null) {
         params.limit = limit
+    }
+    // 0 is the pre-Binding single-mailbox key, so only null / undefined / '' mean
+    // "no binding asked for" and fall back to the merged list.
+    if (bindingId !== undefined && bindingId !== null && bindingId !== '') {
+        params.bindingId = bindingId
     }
     return params
 }
@@ -150,9 +155,16 @@ export function createShareSession(lid, sec, config) {
     return shareHttp.post('/share/session', { lid, sec }, config)
 }
 
-export function listShareMails({ sessionToken, cursor, limit, signal } = {}) {
+export function listShareMails({ sessionToken, cursor, limit, bindingId, signal } = {}) {
     return shareHttp.get('/share/mails', {
-        params: listParams({ cursor, limit }),
+        params: listParams({ cursor, limit, bindingId }),
+        shareSessionToken: sessionToken,
+        signal
+    })
+}
+
+export function getShareMailboxesStatus({ sessionToken, signal } = {}) {
+    return shareHttp.get('/share/mailboxes/status', {
         shareSessionToken: sessionToken,
         signal
     })

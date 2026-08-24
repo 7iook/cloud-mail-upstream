@@ -155,6 +155,30 @@ async function loadMailboxes(c, rows, deps) {
 	return new Map((found || []).map((item) => [item.accountId, item.email]));
 }
 
+// The Binding a visitor asks for by id, or null when this share has no such Binding.
+// `== null` throughout: 0 is the pre-Binding single-mailbox key (share-auth-service
+// loadLiveBindings), not an absent one.
+function narrowToBinding(ctx, bindingId) {
+	const id = Number(bindingId);
+	if (!Number.isSafeInteger(id) || id < 0) {
+		return null;
+	}
+	const bindings = (Array.isArray(ctx && ctx.bindings) ? ctx.bindings : [])
+		.filter((item) => item && Number(item.bindingId) === id);
+	return bindings.length ? { ...ctx, bindings } : null;
+}
+
+async function projectRows(c, rows, ctx, deps) {
+	const attRows = await loadAttachments(c, rows.map((row) => row.emailId), deps);
+	const mailboxes = await loadMailboxes(c, rows, deps);
+	return rows.map((row) => project(
+		row,
+		attRows.filter((item) => item.emailId === row.emailId),
+		ctx,
+		mailboxes
+	));
+}
+
 const shareMailService = {
 
 	maskAddress,
@@ -163,15 +187,28 @@ const shareMailService = {
 	async list(c, ctx, cursor, limit, deps = {}) {
 		const repo = await loadRepo(deps);
 		const rows = await repo.list(c, ctx, cursor, limit);
-		const emailIds = rows.map((row) => row.emailId);
-		const attRows = await loadAttachments(c, emailIds, deps);
-		const mailboxes = await loadMailboxes(c, rows, deps);
-		return rows.map((row) => project(
-			row,
-			attRows.filter((item) => item.emailId === row.emailId),
-			ctx,
-			mailboxes
-		));
+		return projectRows(c, rows, ctx, deps);
+	},
+
+	/**
+	 * One Binding's page of the very same VisibleWindow ∩ latest-N the merged `list`
+	 * reads through, so a visitor Tab cannot see a row the merged list would hide.
+	 * An unknown or foreign bindingId returns [] rather than an error: the visitor must
+	 * not learn which Binding ids exist (AC-MAIL-06).
+	 */
+	async listForBinding(c, ctx, bindingId, cursor, limit, deps = {}) {
+		const scoped = narrowToBinding(ctx, bindingId);
+		if (!scoped) {
+			return [];
+		}
+		const repo = await loadRepo(deps);
+		// `repo.listForBinding` resolves the id with `resolveRowId`, which maps 0 to null
+		// because no real row id is 0 — so the legacy key can only be served by reading the
+		// already-narrowed context through the merged path (one scope, identical query).
+		const rows = Number(bindingId) > 0
+			? await repo.listForBinding(c, scoped, bindingId, cursor, limit)
+			: await repo.list(c, scoped, cursor, limit);
+		return projectRows(c, rows, ctx, deps);
 	},
 
 	async getById(c, ctx, mailId, deps = {}) {

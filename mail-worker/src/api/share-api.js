@@ -66,7 +66,11 @@ app.get('/share/mails', shareRateLimit(SHARE_READ_RATE_LIMITER, SHARE_READ_RETRY
 	const query = c.req.query();
 	const ctx = await shareAuthService.resolveSession(c, readSessionToken(c));
 	const limit = capLimit(query.limit);
-	const list = await shareMailService.list(c, ctx, query.cursor, limit);
+	// An absent or empty bindingId keeps the merged list so a pre-T-25 client stays whole;
+	// "0" is the pre-Binding single-mailbox key, not an absent one.
+	const list = query.bindingId == null || query.bindingId === ''
+		? await shareMailService.list(c, ctx, query.cursor, limit)
+		: await shareMailService.listForBinding(c, ctx, query.bindingId, query.cursor, limit);
 	const nextCursor = list.length === limit && list.length > 0
 		? String(list[list.length - 1].mailId)
 		: null;
