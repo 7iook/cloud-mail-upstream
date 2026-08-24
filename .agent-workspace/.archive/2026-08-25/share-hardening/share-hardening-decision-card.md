@@ -226,7 +226,10 @@
 
 **L3 存量混合格式数据的裁决(修写入侧不会自动订正历史行)**:
 
-- **画像门禁(T-10 前置)**:先跑一次只读盘点——生产库里有多少 `mail_share` 行的 `create_time` 与 `expires_at` 差值不等于任何合法 `durationSeconds` 档位(那是本地时区写入的指纹),以及有多少行仍处于 ACTIVE。**先量化再决定**,不凭感觉。
+- **画像门禁(T-10 前置)**:先跑一次只读盘点,**先量化再决定**,不凭感觉。工具已落 `tests/tools/share-timezone-audit.mjs`(默认只读,`--fix` 才写,内置守恒对账)。
+  - ⛔ **原判据已被证伪,勿再使用**:本卡初稿写的「`create_time` 与 `expires_at` 差值不等于合法 `durationSeconds` 档位」**不成立** —— 两者来自同一次 `dayjs()` 调用,时区偏移在相减时互相抵消,差值恒等于 `durationSeconds`,与时区无关。
+  - ✅ **正确指纹**:`mail_share.create_time` 由 JS 提供,而同一个 `db.batch()` 里插入的 `mail_share_binding.create_time` 落到 SQLite `CURRENT_TIMESTAMP`(恒 UTC),**两者之差即写入进程的 UTC 偏移**,正确行约为 0。
+  - **本地库已跑**:1 行有 binding,偏移超阈值 0 行,ACTIVE 受影响 0 行 → 不订正存量。**生产库 `unverified`,需运维用同一命令跑一次再决定。**
 - **裁定(按画像结果二选一,不留第三种模糊态)**:
   - 受影响行**全部已过期** → **明确不修存量**,在卡里记「已确认无 ACTIVE 受影响行」,理由是过期行只进清理任务,偏移 8 小时最多让它晚 8 小时被删。
   - 存在 ACTIVE 受影响行 → **一次性 UPDATE 订正**(`expires_at`/`delete_at` 各减去写入时区偏移),同批做守恒对账(订正前后行数一致、无 NULL、时间仍晚于 `create_time`)。
@@ -362,7 +365,9 @@
 > 未勾选 = 未完成。每项完成需就地补 `**Evidence**`(commit / verify 命令+EXIT / files / AC)+ 追加 Update Log。
 
 ### 阶段 0 · 开工前(阻塞后续)
-- [ ] T-00 `.gitignore` 补 `.dev.vars`(P0 安全 · 一行 · 用户已知情可提前做)
+- [x] T-00 `.gitignore` 补 `.dev.vars`(P0 安全)
+  - **Evidence**:`commit 0733b6b` · `verify: git check-ignore -v mail-worker/.dev.vars → .gitignore:33:.dev.vars EXIT=0`(修复前 EXIT=1)· `files: .gitignore:28-34 · mail-worker/.dev.vars.example(新建)` · `AC: 决策卡 §1.2 A 项负向条件「密钥被 commit 进仓库」`
+  - **Update Log**:2026-08-25 · 规则含 `!.dev.vars.example` 例外以保留模板;同 diff 内的 `.ace-tool/` 一行非本轮产物,已在 commit message 中标注。
 - [ ] T-01 栅栏四项激活前置逐项核实(§1.6 四条运维命令),缺项则停下报告 · **零项可从代码判定,必须真跑命令,禁止推定已满足**
 - [ ] T-03 告警可用性缺口(第 4 项前置的代码侧障碍):8 个 `logShareEvent` 调用点补传 `requestId` + `init.js:127` 的 `share.migrate.invalid_row` 收归 SSOT
 - [x] T-02 `ADR-share-credential-recoverability.md` 落 Proposed
@@ -370,8 +375,12 @@
   - **Update Log**:2026-08-25 · 记录了推翻 `requirements.md:75`「`sec` 不可再次读取是安全不变量」的理由与代价;写明**轨二不可撤销、轨一可撤销**,这是两轨先后顺序的依据;补了实现期停止条件(KEK 无法与 D1 分离则轨一停止)。五条替代方案含用户初次裁决时未知的两条硬事实。
 
 ### 阶段 1 · 可并行(三条独立轨)
-- [ ] T-10 时区根因修:后端 `dayjs()` → `dayjs.utc()`(3 处)+ 管理台 3 处接 `tzDayjs` · **两者必须同批** · **前置:先跑存量数据画像门禁,按 §3.1 L3 裁定二选一**
-- [ ] T-11 配置文档化:5 个环境变量的 `wrangler.toml` 注释 + README 部署指引 + `secret put` 指引
+- [x] T-10 时区根因修:后端 3 个 service 改用 `toUtc()` + 管理台 3 处接 `tzDayjs`(同批)+ 存量画像门禁
+  - **Evidence**:`commit b717d4f` + `9f7af98`(补漏掉的 `toUtc` import)· `verify: pnpm --dir mail-worker test → 18 files/629 passed/EXIT=0` · `pnpm --dir mail-vue test → 22 files/190 passed/EXIT=0` · `node tests/tools/share-timezone-audit.mjs <本地d1> → 0 受影响行/EXIT=0` · `files: mail-share-service.js:53,289,1142 · share-auth-service.js:46,218 · mail-share-cleanup-service.js:37-38 · share-admin/index.vue:73 · ShareDetailDrawer.vue:49 · ShareDialog.vue:57 · vitest.config.js · share-auth-service.spec.js(functionSource)` · `AC: 决策卡 §1.2 B 项 + 不变量 I-1`
+  - **Update Log**:2026-08-25 · 详见 `exec-wa-timezone.md`。三点要记住:① 访客页本来就是对的,生产真正错的是管理台三处零转换 ② 顺带治好两个测试基础设施问题——`Date.prototype` 补丁在 `singleWorker` 单 isolate 下跨文件泄漏(并行 7 败 → 串行 1 败,且串行还更快),以及 `core.autocrlf=true` 让源码文本断言恒假(已证明改动前后同样失败,属既有缺陷)③ **`unverified`**:红证据缺失(代理中断前未留存)、e2e 未真跑、生产库画像未跑。
+- [x] T-11 配置文档化:5 个环境变量的 `wrangler.toml` 注释 + README 部署指引 + `secret put` 指引
+  - **Evidence**:`commit 0733b6b` · `verify: 见 exec-wb-config.md 的变量名一致性 grep` · `files: mail-worker/wrangler.toml · README.md · README-en.md · mail-worker/.dev.vars.example` · `AC: 决策卡 §1.2 A 项`
+  - **Update Log**:2026-08-25 · 含 `SHARE_CAPABILITY_V2` 取值陷阱的显著标注(填 `TRUE`/`True` 会被静默判为关闭)。
 - [ ] T-12 分享页 Turnstile 接线(后端专用错误码 + API 层校验 + 前端挂载 + token 传递)
 
 ### 阶段 2 · 串行(共享文件)
