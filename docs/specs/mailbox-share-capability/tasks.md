@@ -96,6 +96,11 @@
     - files: `mail-worker/test/setup.js:18-126`
     - AC: AC-CAP-04, AC-CAP-11
     - commit: e878760
+  - **Follow-up (W0 review P0-3 / P1-2)**
+    - verify: 红 `pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js test/mail-share.schema.spec.js` → EXIT=1（17 failed / 55 passed）；主 AI 绿同命令 → EXIT=0（72/72）
+    - files: `mail-worker/test/setup.js:60-63,105,123` · `mail-worker/src/service/mail-share-service.js:73-83` · `mail-worker/test/mail-share-service.spec.js:556-730`
+    - AC: AC-TEST-02
+    - commit: 3cce543
   - [x] T-04.1 `mail-worker/test/setup.js` 扩展:binding 表建表/seed 工厂、含新列的 share 行工厂;记录三套基线数字(worker 16 文件/138、vue 17 文件/95、E2E 13)作为回归底线
     - **Evidence**
       - verify: `git grep -n "CREATE TABLE" -- mail-worker/test/setup.js` → 无匹配；历史地板 16/138、17/95、E2E 13 写在注释
