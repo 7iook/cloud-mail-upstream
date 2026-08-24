@@ -454,9 +454,9 @@ T-12.1 要求「51 个 accountId → `SHARE_BINDING_LIMIT_EXCEEDED`」。按 §3
 |---|---|---|---|
 | T-12.1 红 | `mail-share-service.spec.js` 新增 9 组用例(多邮箱建行 / `shareType` 派生 / 混入他人或已删 accountId 零残留 / 51 个上限 / `refreshIntervalMs=2999` / per-binding window 双态 / AuthKey 明文恰一次 / 指纹含新字段与排序 accountIds / 旧单值载荷默认值创建)+ 改写 `:463-527` 四条 | 红灯 EXIT=1 | `pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js` |
 | T-12.2 绿 | §2 Step 1-7 | 绿灯 EXIT=0 | 同上 |
-| T-12 收口 | 全量 + schema 护栏 | **≥ 185 tests / 17 files,EXIT=0**(只增不减) | `pnpm --dir mail-worker test` |
+| T-12 收口 | 全量 + schema 护栏 | **≥ 213 tests / 17 files,EXIT=0**(只增不减) | `pnpm --dir mail-worker test` |
 
-**收口口径特别说明**:185 是本次实测的**干净 HEAD** 数字(`/tmp/headbase`,`f92d9a5`)。T-06 与 W0 修复都会把这个数推上去,所以 T-12 起跑当天要**重新取一次基线**,别拿 185 当固定值。`test/setup.js:18-24` 记的历史地板(worker 138)是 charter 开工前的值,只增不减的底线是它,不是 185。
+**收口口径特别说明**:213 是侦察收尾时在 `6209960` 上实测的数字(17 files / 213 tests / EXIT=0)。派单基线 `f92d9a5` 是 185,两次之差 = `3cce543` 的 +18 与 `6209960` 的 +10。T-07/T-08 若在 T-12 期间并行落地还会继续推高,**起跑当天重新取一次基线,别把 213 当固定值**。`test/setup.js:18-24` 记的历史地板(worker 138)才是「只增不减」的绝对底线。
 
 ---
 
@@ -492,4 +492,4 @@ T-12.1 要求「51 个 accountId → `SHARE_BINDING_LIMIT_EXCEEDED`」。按 §3
 
 ## Update Log
 
-- 2026-08-24 · recon 执行者:首次落盘。基线 HEAD `f92d9a5`,干净 clone 全量 17 files / 185 tests EXIT=0。侦察期间 `mail-share-service.js`(W0 修复)与 `share-auth-service.js`(T-06)两处并行写入均在工作树中被观察到,全部按 committed HEAD 取锚点。实测取证两条:`idx_msb_share_account` 对重复 binding 抛 UNIQUE、`syncPrimaryAccountId` 在值未变时 `meta.changes=1` —— 二者共同证明 `mail-share-service.spec.js:463-527` 四条 W0 用例会被 T-12 打破(§4.2)。发现两条 spec 级缺口:R1(`refreshIntervalMs` 拒绝 vs 钳制,同一任务红绿灯自相矛盾)、R2(新建行主表 `window_start_email_id` 不双写 → 滚动窗口内旧 Worker 窗口下界为 0 的越权读)。结论:T-12 可先于 T-08 起跑,唯一硬前置是等 `mail-share-service.js` 的 W0 修复入库。
+- 2026-08-24 · recon 执行者:首次落盘。派单基线 HEAD `f92d9a5`(干净 clone 全量 17 files / 185 tests EXIT=0),**收尾基线 HEAD `6209960`(17 files / 213 tests EXIT=0)**。侦察期间两个并行写者先后落地:`3cce543`(W0 `logShareEvent` 信封顺序 + seed ID 收紧)与 `6209960`(T-06 配额闸门);全部行号已换算到 `6209960`,`mail-share-service.js` 现已释放。实测取证两条:`idx_msb_share_account` 对重复 binding 抛 UNIQUE、`syncPrimaryAccountId` 在值未变时 `meta.changes=1` —— 二者共同证明 `mail-share-service.spec.js:463-527` 四条 W0 用例会被 T-12 打破(§4.2)。发现两条 spec 级缺口:R1(`refreshIntervalMs` 拒绝 vs 钳制,同一任务红绿灯自相矛盾)、R2(新建行主表 `window_start_email_id` 不双写 → 滚动窗口内旧 Worker 窗口下界为 0 的越权读)。结论:T-12 可先于 T-08 起跑,唯一硬前置(等 `mail-share-service.js` 释放)已于侦察收尾时自动关闭,**现在即可派单**。
