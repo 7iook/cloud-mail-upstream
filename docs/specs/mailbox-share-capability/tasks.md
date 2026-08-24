@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W4 T-20 已入库 · 待审查 |
+| 状态 Status | in-progress · W4 T-20 APPROVED · 下一波 T-21 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -466,7 +466,7 @@
     - AC: AC-ADMIN-01, AC-ADMIN-09, AC-ADMIN-10
     - commit: 672da73
     - decision: T20-ROUTE 路由落 `perm/perm.js`（`router/index.js` 0 行）；T20-ASIDE 个人组入口复用 `shareManage`；T20-CARD 卡片轨；T20-ACTIONS HOLD（行内 0 button 是 T-21 闸门）
-    - review: pending
+    - review: `review-t20.md` APPROVED p0=0
   - [x] T-20.1 `mail-vue/src/request/mail-share.js` 扩展 8 端点函数(get/update/bindings/delete/resetAuthKey + list 分页参数);路由对象落 `perm/perm.js` `routers['share:manage']` + `meta.perm='share:manage'`(沿用 `permsToRouter` 动态路由;**不动** `router/index.js` / 访客白名单/守卫,那属 W5)
     - **Evidence**
       - verify: 主 AI 独立定点 20/20 + 全量 vue 18/113 EXIT=0
@@ -559,6 +559,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-20 审查 APPROVED p0=0（`review-t20.md`）。T-22 侦察已落。裁决 T21-INLINE / T21-RESET-BOX / T21-FLIP / T22-V2-COLLIDE / T22-CREATE-EXPAND；排期 T-21 先于 T-22。未勾选尾：T-21 → T-29。
 - 2026-08-24 · 主 AI:T-20 `672da73` 勾选。主 AI 独立定点 20/20 + 全量 vue 18/113、worker 18/619、E2E 13，均为 EXIT=0。`pnpm --dir mail-vue build` 绿。审查 pending。未勾选尾：T-20 审查 / T-21 → T-29。
 - 2026-08-24 · 主 AI:T-19 `03d987c` / P1 `db1e511` 勾选。R2 APPROVED p0=0。主 AI 独立定点 38/38 + 全量 worker 18/619、vue 17/95、E2E 13。T-20 侦察已落；T20-ASIDE/CARD CHANGE、T20-ACTIONS HOLD。未勾选尾：T-20 → T-29。
 - 2026-08-24 · 主 AI:T-18 `73dc371` 勾选。审查 APPROVED p0=0（P2-1 HOLD）。主 AI 独立定点 27/27 + 全量 worker 18/598、vue 17/95、E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。

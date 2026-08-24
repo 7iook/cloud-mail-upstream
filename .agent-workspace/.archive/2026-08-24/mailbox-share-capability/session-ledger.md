@@ -66,7 +66,9 @@
 | W3 | T-19 审查 | ✅ R2 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t19-r2.md` |
 | W4 | T-20 列表页侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t20-share-admin.md` |
 | W4 | T-20 列表页 + request | ✅ 已提交 `672da73` | generalPurpose≈executor | 主 AI 独立 20/20 · 全量 vue 18/113 · worker 18/619 · E2E 13 |
+| W4 | T-20 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t20.md` |
 | W4 | T-21 抽屉侦察 | ✅ 已落盘 | executor 顺带 | `recon-t21-drawer.md` |
+| W4 | T-22 向导侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t22-wizard.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
@@ -131,6 +133,12 @@
 | T20-ACTIONS | HOLD:行内撤销/删除按钮归 T-21 | T-20 只列表+筛选+分页 |
 | T20-CARD | CHANGE:列表走卡片轨，不走 `el-table` | recon-t20；决定 W4 视觉基调 |
 | T20-ROUTE | CHANGE:路由对象落 `perm/perm.js` 的 `routers['share:manage']`，`router/index.js` 0 行 | 任务书字面与 permsToRouter 互斥，取可执行的那个 |
+| T21-INLINE | HOLD:一次性密钥不抽 `OneShotSecret.vue`，抽屉内联 | recon-t21 F1；T-22 若已合入再抽不迟 |
+| T21-RESET-BOX | CHANGE:`resetUsedSessions` 走弹窗，不走内联复选框 | recon-t21 F2；任务书「确认交互」字面；一辈子第一次 |
+| T21-FLIP | CHANGE:翻面 `index.spec.js` 行内 0-button 断言并在 exec note 原文登记 | recon-t21 F3；T-20 预留的交接闸门，禁止删除 |
+| T22-V2-COLLIDE | CHANGE:V2 只能撞后降级；unknown 不预置灰；不加 worker 探测、不加 Vite 常量 | recon-t22 F1(a)；W3 封口；禁第二真源 |
+| T22-CREATE-EXPAND | CHANGE:T-22 就地条件展开 `createMailShare`；禁止 `createMailShareV2` | recon-t22 F2(i)；旧四键 `toEqual` 必须仍绿 |
+| T22-AFTER-T21 | CHANGE:T-21 先落 `index.vue`/`index.spec.js`/`status.js`；T-22 其后 rebase，且不碰 `status.js` | recon-t21 §4.4；否决 T-22 先跑 |
 
 ## 冲突热区占用
 
@@ -150,6 +158,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-20 审查 APPROVED p0=0。T-22 侦察已落。T-21 迷雾已裁（内联密钥 / 弹窗清零 / 翻面登记）。T-22 迷雾已裁（撞后降级 / 条件展开 create / T-21 先于 T-22）。未勾选尾：T-21 → T-29。
 - 2026-08-24 · 主 AI：T-20 `672da73` 入库。主 AI 独立定点 20/20 + 全量 vue 18/113 · worker 18/619 · E2E 13 · build 绿。审查 pending。未勾选尾：T-20 审查 / T-21 → T-29。
 - 2026-08-24 · 主 AI：T-19 `03d987c` / P1 `db1e511` 入库。R2 APPROVED。主 AI 独立 38/38 + 全量 18/619 · 17/95 · E2E 13。T-20 侦察已落。未勾选尾：T-20 → T-29。
 - 2026-08-24 · 主 AI：T-18 `73dc371` 入库。审查 APPROVED p0=0。主 AI 独立 27/27 + 全量 18/598 · 17/95 · E2E 13。T-19 侦察已落。未勾选尾：T-19 → T-29。
