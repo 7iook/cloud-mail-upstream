@@ -35,6 +35,7 @@
 | W1 | T-06 侦察 | ✅ 已落盘 | plan-reality-recon | `recon-w1-t06-quota-gate.md` |
 | W1 | T-06-P0 文档门 | ✅ 已关 | 主 AI | last_access_at 进闸门 · AC-SESS-11 · status 收窄 |
 | W1 | T-06 | ✅ 已提交 `6209960` | generalPurpose≈executor | 主 AI 复跑 26/26 · 17/213 · 17/95 · E2E 13 |
+| W1 | T-06 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t06.md` |
 | W2 | T-12 侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-w2-t12-create.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -81,6 +82,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-06 审查 APPROVED、p0=0。循环 import 与空 `options` HOLD。未勾选尾：T-07 / T-12 → T-29。
 - 2026-08-24 · 主 AI：裁 T-12 R1/R2/R3/R5/R6 并回写 design/requirements。派 T-07 与 T-12 并行（文件不重叠）。未勾选尾：T-07 / T-12 → T-29。
 - 2026-08-24 · 主 AI：T-06 提交 `6209960`。独立复跑 auth spec 26/26、worker 17/213、vue 17/95、E2E 13，均为 EXIT=0。未勾选尾：T-07 → T-29。
 - 2026-08-24 · 主 AI：Goal 武装；核验 HEAD=`e120a04` 无实现；建分支 `cursor/mailbox-share-capability-dcb6`；派 T-01 executor + W0 recon。

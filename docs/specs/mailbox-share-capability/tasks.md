@@ -146,6 +146,7 @@
     - files: `mail-worker/src/service/share-auth-service.js:253-328` · `mail-worker/test/share-auth-service.spec.js:383-405,634-891`
     - AC: AC-SESS-01, AC-SESS-02, AC-SESS-05, AC-SESS-07, AC-SESS-11, AC-EDGE-01, AC-EDGE-02, AC-EDGE-13
     - commit: 6209960
+    - review: `review-t06.md` · APPROVED · p0=0
   - [x]* T-06.1 红:`mail-worker/test/share-auth-service.spec.js` —— 成功建会话 `access_count` 恰 +1(RETURNING 含 status/expires/cv/配额四条件);触顶/撤销/过期/cv 变 → 拒发零变更;并发抢最后名额恰 max 次成功(P-SESS-01,必须 `Promise.allSettled` 并发,串行 await 是假绿);读请求序列(mails/mail/attachment)零配额消耗(P-SESS-02;status 端点属 T-14,本任务以 resolveSession 源码无写护栏代替);条件 UPDATE 前状态变更注入 → 正确拒发;UPDATE 后 TOCTOU 注入 → token 首次回源失败、名额不退还(文档化行为);配额 UPDATE 失败/RETURNING 空 → 拒发(AC-SESS-11)
     - **P-SESS-01: 配额不超发** _Validates: AC-SESS-01, AC-SESS-07, AC-EDGE-02_
     - **P-SESS-02: 读请求零配额消耗** _Validates: AC-SESS-02, AC-EDGE-01, AC-EDGE-11_
@@ -334,6 +335,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-06 审查 APPROVED p0=0（`review-t06.md`）。循环 import 与空 `options` HOLD。未勾选尾：T-07 / T-12 → T-29。
 - 2026-08-24 · 主 AI:T-06 勾选。主 AI 独立复跑 worker 17/213、vue 17/95、E2E 13，均为 EXIT=0。`recordAccess` 已删；闸门空/抛错拒发；并发 `Promise.allSettled` 抢最后名额恰 1。未勾选尾：T-07 → T-29。
 - 2026-08-24 · executor(tasks 撰写执行者):Template 3 首次落盘。29 个父任务 / 7 个波次(W0–W6),107 条 AC 全量映射(每任务 `_Requirements` 聚类),9 条 Correctness Properties 挂到核心逻辑任务(T-05/T-06/T-08/T-10/T-11/T-13);冲突热区(`init.js`/`security.js`/`share-auth-service.js`/`mail-share-service.js`/i18n)单 owner 规则成表;全部文件路径已对 2026-08-24 工作树逐一核实(`mail-worker/test/` 17 spec、`kv-const.js`、`tests/e2e/specs/` 等),零虚构路径。依据:design.md(converged,R1–R3)+ requirements.md(107 AC)+ 三份 recon。
 - 2026-08-24 · 主 AI(实现会话):接手直接进入 W0。代码现实 HEAD `e120a04` 无 `v3_2DB`/Binding 实体/`SHARE_CAPABILITY_V2`。分支 `cursor/mailbox-share-capability-dcb6`。T-01 已派 executor；W0 可执行范围与 T-02/T-03/T-04 拆分已派 plan-reality-recon。未勾选任何 `[x]`（尚无 Evidence）。台账:`.agent-workspace/.archive/2026-08-24/mailbox-share-capability/session-ledger.md`。
