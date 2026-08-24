@@ -5,7 +5,7 @@
 | 任务 | T-08(T-08.1 红 + T-08.2 绿) |
 | 分支 | `cursor/mailbox-share-capability-dcb6` |
 | 起点 HEAD | `a0f23eb`(含 T-07 `c2087ce`) |
-| commit | **未提交**(本任务被明确要求不 `git add` / `commit` / `push`) |
+| commit | `5a81065` |
 | 白名单外改动 | 无。但**白名单外有一条既有断言被本次改动打红**,见 §5 R-T08-1,必须由围栏 owner 收口 |
 
 ---
@@ -286,5 +286,6 @@ mail-worker/test/share-auth-service.spec.js        | 713 ++++++++++++++++++++-
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:入库 `5a81065`（含围栏 4→3，R-T08-1 已收口）。独立复跑三 spec 79/79 + 全量 17/289 EXIT=0。vue 17/95 EXIT=0。
 - 2026-08-24 · executor:T-08 落盘未提交。三 spec 红 17/79 → 绿 79/79 EXIT=0。全量 288/289,
   唯一红点为白名单外围栏 `mail-share.schema.spec.js:146`(4 → 3),见 R-T08-1,T-09 前必须收口。

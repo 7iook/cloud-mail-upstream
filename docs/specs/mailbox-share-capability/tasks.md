@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W0 done · W1/T-07 landed · T-08 next |
+| 状态 Status | in-progress · W0 done · W1/T-08 landed · T-12 landed · T-09/T-13 next |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -166,11 +166,12 @@
 
 - [x] T-07 Session 建立幂等恢复:KV 结果重放(R3-A3)
   - **Evidence**
-    - verify: 红 `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js test/share-api.spec.js`（仅测试就位、源码回退 HEAD）→ EXIT=1（7 failed / 33 passed / 40）；绿同命令 → EXIT=0（40/40）；主 AI 独立复跑 `share-auth-service.spec.js` → EXIT=0（34/34，含 `max_sessions=1` AC-SESS-10 重放）· `share-api.spec.js` → EXIT=0（7/7）；全量 worker 套件 `unverified: T-12 工作树未提交`
+    - verify: 红 `pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js test/share-api.spec.js`（仅测试就位、源码回退 HEAD）→ EXIT=1（7 failed / 33 passed / 40）；绿同命令 → EXIT=0（40/40）；主 AI 独立复跑 `share-auth-service.spec.js` → EXIT=0（34/34，含 `max_sessions=1` AC-SESS-10 重放）· `share-api.spec.js` → EXIT=0（7/7）；全量 worker 套件后续独立复跑 17/289 EXIT=0（T-08+T-12 入库后）
     - files: `mail-worker/src/const/kv-const.js:7` · `mail-worker/src/api/share-api.js:56-57` · `mail-worker/src/service/share-auth-service.js:21-23,196,287-329,346-358,385-395` · `mail-worker/test/share-auth-service.spec.js:940-1148` · `mail-worker/test/share-api.spec.js:315-346`
     - AC: AC-SESS-10
     - commit: c2087ce
     - decision: T07-R1 CHANGE（KV 查询在 `loadLiveAccount` 之后、快照配额/`assertAllowed` 之前）
+    - review: `review-t07.md` · APPROVED · p0=0；工件审查 A1/A2 HOLD（T-26 / design.md:241 fail-open）
   - [x]* T-07.1 红:`mail-worker/test/share-auth-service.spec.js` —— 同 `Idempotency-Key` 重放 → 同 token、`access_count` 不变、零 UPDATE;新 key/无 key → 正常消耗;KV 故障注入 → 仍签发(fail-open)+ `share.system.error` 日志;TTL = min(120s, token 剩余寿命)
     - _Requirements: AC-SESS-10_
     - **Evidence**
@@ -186,13 +187,29 @@
       - AC: AC-SESS-10
       - commit: c2087ce
 
-- [ ] T-08 AuthKey 第二因子 + `credentials_version` + ShareContext 集合化 + session 响应扩展
-  - [ ]* T-08.1 红:`mail-worker/test/share-auth-service.spec.js` —— 启用 Key 后无 Key/错 Key → `SHARE_AUTH_REQUIRED`、零 token、零配额、无锁定副作用(扫 schema 断言无 `mail_share_auth_fail` 表);`lid` 不存在/`sec` 错 + 任意 authKey 组合恒 `SHARE_UNAVAILABLE`(P-AUTH-01 property);reset 后旧 token 回源 → `SHARE_UNAVAILABLE`、新 Key 建会话成功且消耗新配额(P-AUTH-02);cv 严格单调;换 IP 头重放读请求仍 200;429 独立运输层、零配额;session 响应含 `shareType`/`mailboxes`(掩码)/`expiresAt`/`config` 四件、KV 写失败注入仍签发(fail-open,与 T-07.1 合并;配额 UPDATE 失败改走 AC-SESS-11 拒发)
+- [x] T-08 AuthKey 第二因子 + `credentials_version` + ShareContext 集合化 + session 响应扩展
+  - **Evidence**
+    - verify: 红（执行者 worktree 回退生产文件）`pnpm --dir mail-worker exec vitest run test/share-auth-service.spec.js test/share-api.spec.js test/share-attachment-service.spec.js --no-cache` → EXIT=1（17 failed / 62 passed / 79）；绿同命令 → EXIT=0（79/79）；主 AI 独立复跑同上四文件含 T-12 → EXIT=0（185/185：auth 56 · api 8 · attachment 15 · mail-share 106）；全量 `pnpm --dir mail-worker test --no-cache` → EXIT=0（17/289）
+    - files: `mail-worker/src/service/share-auth-service.js:185-202,303-413,487-590` · `mail-worker/src/api/share-api.js:54-61` · `mail-worker/src/service/share-attachment-service.js:106-112` · `mail-worker/test/share-auth-service.spec.js:1238-1804` · `mail-worker/test/share-api.spec.js:363-410` · `mail-worker/test/share-attachment-service.spec.js:144-157` · `mail-worker/test/mail-share.schema.spec.js:143-146`
+    - AC: AC-AUTH-01, AC-AUTH-02, AC-AUTH-03, AC-AUTH-04, AC-AUTH-05, AC-AUTH-06, AC-SESS-08, AC-SESS-09, AC-EDGE-05, AC-EDGE-12, AC-LIFE-03
+    - commit: 5a81065
+    - decision: ④ AuthKey 在 `loadLiveBindings` 之后、KV 之前；过期/撤销 + 错 Key 先撞 `SHARE_AUTH_REQUIRED`（过了 lid+sec）；围栏 `row.accountId` 读取 4→3
+  - [x]* T-08.1 红:`mail-worker/test/share-auth-service.spec.js` —— 启用 Key 后无 Key/错 Key → `SHARE_AUTH_REQUIRED`、零 token、零配额、无锁定副作用(扫 schema 断言无 `mail_share_auth_fail` 表);`lid` 不存在/`sec` 错 + 任意 authKey 组合恒 `SHARE_UNAVAILABLE`(P-AUTH-01 property);reset 后旧 token 回源 → `SHARE_UNAVAILABLE`、新 Key 建会话成功且消耗新配额(P-AUTH-02);cv 严格单调;换 IP 头重放读请求仍 200;429 独立运输层、零配额;session 响应含 `shareType`/`mailboxes`(掩码)/`expiresAt`/`config` 四件、KV 写失败注入仍签发(fail-open,与 T-07.1 合并;配额 UPDATE 失败改走 AC-SESS-11 拒发)
     - **P-AUTH-01: Visitor 失败不可区分性** _Validates: AC-AUTH-01, AC-AUTH-02, AC-EDGE-08_
     - **P-AUTH-02: credentials_version 单调失效** _Validates: AC-AUTH-04, AC-EDGE-05_
     - _Requirements: AC-AUTH-01, AC-AUTH-02, AC-AUTH-03, AC-AUTH-04, AC-AUTH-05, AC-AUTH-06, AC-SESS-08, AC-SESS-09, AC-EDGE-05, AC-EDGE-12, AC-LIFE-03_
-  - [ ] T-08.2 绿:`share-auth-service.js` —— `establishSession` 加 `authKey?` 第三参(复用 `digestShareSecret` 同款 HMAC+pepper,`share-auth-service.js:86-89`,常量时间比较);token payload 加 `cv`(保持 `s1` 版本,旧 token 按 `cv=0`);`resolveSession` 扩展:cv 回源比对 + ShareContext 集合化(返回 `{shareId, bindings: [{bindingId, accountId, windowStartEmailId}], messageLimit, otpExtractionEnabled, showFullAddress, expiresAt}`,**形状在此冻结,W2 只消费不改**);拒绝路径打 `share.session.denied_auth`/`denied_cv` 日志
+    - **Evidence**
+      - verify: 红（执行者）同上三 spec → EXIT=1（17 failed / 62 passed / 79）；主 AI 未再回退复现红（实现已入库 `5a81065`）
+      - files: `mail-worker/test/share-auth-service.spec.js:1238-1804` · `mail-worker/test/share-api.spec.js:363-410` · `mail-worker/test/share-attachment-service.spec.js:144-157`
+      - AC: AC-AUTH-01, AC-AUTH-02, AC-AUTH-04, AC-SESS-09
+      - commit: 5a81065
+  - [x] T-08.2 绿:`share-auth-service.js` —— `establishSession` 加 `authKey?` 第三参(复用 `digestShareSecret` 同款 HMAC+pepper,`share-auth-service.js:86-89`,常量时间比较);token payload 加 `cv`(保持 `s1` 版本,旧 token 按 `cv=0`);`resolveSession` 扩展:cv 回源比对 + ShareContext 集合化(返回 `{shareId, bindings: [{bindingId, accountId, windowStartEmailId}], messageLimit, otpExtractionEnabled, showFullAddress, expiresAt}`,**形状在此冻结,W2 只消费不改**);拒绝路径打 `share.session.denied_auth`/`denied_cv` 日志
     - _Requirements: AC-AUTH-03, AC-AUTH-04, AC-SESS-09, AC-SEC-08_
+    - **Evidence**
+      - verify: 绿三 spec → EXIT=0（79/79）；主 AI 独立 56+8+15 + 全量 worker 17/289、vue 17/95、E2E 13，均为 EXIT=0。围栏棘轮 4→3 同 commit
+      - files: `mail-worker/src/service/share-auth-service.js:185-202,303-413,487-590` · `mail-worker/src/api/share-api.js:54-61` · `mail-worker/src/service/share-attachment-service.js:106-112`
+      - AC: AC-AUTH-03, AC-AUTH-04, AC-SESS-09, AC-SEC-08
+      - commit: 5a81065
 
 - [ ] T-09 Checkpoint · W1 收口:`pnpm --dir mail-worker test` 全绿(基线 138 只增不减),ShareContext 契约冻结公告
   - 有疑问(如旧 spec 断言需要语义扩展)先问用户再动。
@@ -219,11 +236,27 @@
   - [ ] T-11.4 绿:`share-mail-service.js` 详情路径复查可见集(window ∩ 最新 N);`mail-worker/src/service/share-attachment-service.js:126-161` 三重校验扩展为多 Binding 集合(`shareContext.accountId` 单值假设改造),服务端为唯一强制点
     - _Requirements: AC-MAIL-05, AC-SEC-05_
 
-- [ ] T-12 create 多邮箱扩展(mail-share-service.js 本波次第一写者)
-  - [ ]* T-12.1 红:`mail-worker/test/mail-share-service.spec.js` —— 多 `accountIds` 创建 → share 行 + N 条 binding 行 + URL 形状不变;`shareType` 实时派生(1→single,>1→multi,扫表断言无 share_type 列);混入他人/已删 accountId → `SHARE_ACCOUNT_FORBIDDEN` 零残留;51 个 accountId → `SHARE_BINDING_LIMIT_EXCEEDED` 整单拒;`refreshIntervalMs=2999` → `SHARE_INVALID_CONFIG`;per-binding window 原子快照(true→各邮箱 MAX(email_id),false→0);authKey 启用 → 明文恰一次、库中仅 hash+kid;幂等重放(指纹含新字段+排序 accountIds)→ 同 shareId 无 sec/authKey 明文;旧 ShareDialog 单 accountId 载荷 → 默认值创建成功
+- [x] T-12 create 多邮箱扩展(mail-share-service.js 本波次第一写者)
+  - **Evidence**
+    - verify: 红（执行者，测试就位、源码回退）`pnpm --dir mail-worker exec vitest run test/mail-share-service.spec.js --no-cache` → EXIT=1（37 failed / 68 passed / 105）；绿同命令 → EXIT=0（当时 105/105，收尾补并发删除探针后 106）；主 AI 独立复跑含 T-08 四文件 → EXIT=0（185/185，其中 mail-share 106/106）；全量 `pnpm --dir mail-worker test --no-cache` → EXIT=0（17/289）
+    - files: `mail-worker/src/service/mail-share-service.js:19-25,107-168,233-266,379-633` · `mail-worker/test/mail-share-service.spec.js:503-557,667-1145` · `mail-worker/src/api/mail-share-api.js:23-28`（`{...body}` 已透传，本任务零改）
+    - AC: AC-CAP-01, AC-CAP-02, AC-CAP-03, AC-CAP-05, AC-CAP-06, AC-CAP-07, AC-CAP-08, AC-CAP-09, AC-CAP-10, AC-CAP-13, AC-CAP-14, AC-OTP-06, AC-LIFE-10, AC-LIFE-11
+    - commit: b6f5a28
+    - decision: T12-R1 写入侧拒绝 `<3000`；T12-R2 主表 window 双写；T12-R3 V2 另拒 `messageLimit`；T12-R6a/R6b seed 改写 + `accountIds` 优先
+  - [x]* T-12.1 红:`mail-worker/test/mail-share-service.spec.js` —— 多 `accountIds` 创建 → share 行 + N 条 binding 行 + URL 形状不变;`shareType` 实时派生(1→single,>1→multi,扫表断言无 share_type 列);混入他人/已删 accountId → `SHARE_ACCOUNT_FORBIDDEN` 零残留;51 个 accountId → `SHARE_BINDING_LIMIT_EXCEEDED` 整单拒;`refreshIntervalMs=2999` → `SHARE_INVALID_CONFIG`;per-binding window 原子快照(true→各邮箱 MAX(email_id),false→0);authKey 启用 → 明文恰一次、库中仅 hash+kid;幂等重放(指纹含新字段+排序 accountIds)→ 同 shareId 无 sec/authKey 明文;旧 ShareDialog 单 accountId 载荷 → 默认值创建成功
     - _Requirements: AC-CAP-01, AC-CAP-02, AC-CAP-03, AC-CAP-05, AC-CAP-06, AC-CAP-07, AC-CAP-08, AC-CAP-09, AC-CAP-13, AC-CAP-14, AC-OTP-06_
-  - [ ] T-12.2 绿:`mail-worker/src/service/mail-share-service.js` —— `loadOwnedAccount`(`:104-110`)改批量 IN 校验;create 收新字段 + 取值域校验(`refresh_interval_ms` 钳 ≥3000)+ `c.env.db.batch()` 写 share/bindings/幂等行 + T-02 双写 + T-03 V2 门控接线;`mail-worker/src/api/mail-share-api.js:23-28` create 端点透传新载荷(兼容旧形状)
+    - **Evidence**
+      - verify: 红（执行者）同上 → EXIT=1（37 failed / 68 passed / 105）；主 AI 未再回退复现红（实现已入库 `b6f5a28`）
+      - files: `mail-worker/test/mail-share-service.spec.js:667-1145`
+      - AC: AC-CAP-01, AC-CAP-02, AC-CAP-03, AC-CAP-05, AC-CAP-09, AC-CAP-13
+      - commit: b6f5a28
+  - [x] T-12.2 绿:`mail-share-service.js` —— `loadOwnedAccount`(`:104-110`)改批量 IN 校验;create 收新字段 + 取值域校验(`refresh_interval_ms` 钳 ≥3000)+ `c.env.db.batch()` 写 share/bindings/幂等行 + T-02 双写 + T-03 V2 门控接线;`mail-worker/src/api/mail-share-api.js:23-28` create 端点透传新载荷(兼容旧形状)
     - _Requirements: AC-CAP-01, AC-CAP-06, AC-CAP-10, AC-LIFE-10, AC-LIFE-11_
+    - **Evidence**
+      - verify: 绿 spec → EXIT=0（106/106）；主 AI 全量 worker 17/289、vue 17/95、E2E 13，均为 EXIT=0。API 端点 `{...body, idempotencyKey}` 已透传，未改 `mail-share-api.js`
+      - files: `mail-worker/src/service/mail-share-service.js:151-168,233-266,379-633` · `mail-worker/src/api/mail-share-api.js:23-28`
+      - AC: AC-CAP-01, AC-CAP-06, AC-CAP-10, AC-LIFE-10, AC-LIFE-11
+      - commit: b6f5a28
 
 - [ ] T-13 bindings 增删:全有或全无原子命令 + `PUT /mailShare/bindings` 端点
   - [ ]* T-13.1 红:`mail-worker/test/mail-share-service.spec.js` —— add 单语句条件 `INSERT ... SELECT`(account 存活/归属),与 account 删除并发 → 零行 + `SHARE_ACCOUNT_FORBIDDEN`;重复绑定 → `SHARE_BINDING_DUPLICATE`(UNIQUE 兜底);remove 三重谓词 `binding_id+share_id+owner`,跨分享/跨租户 bindingId 混入 → 整单 `SHARE_BINDING_FORBIDDEN` 零残留;删光 → REVOKED;增删后立即拉取结果集与新集合一致(P-BIND-02 property);V2=false 时 1→N 拒绝;超 50 → `SHARE_BINDING_LIMIT_EXCEEDED`
@@ -351,6 +384,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-08 / T-12 勾选。T-08 `5a81065`（AuthKey+cv+ShareContext，围栏 4→3）；T-12 `b6f5a28`（多邮箱 create+V2 栅栏）。主 AI 独立 185/185 + 全量 17/289 EXIT=0。未勾选尾：T-09 / T-10 / T-13 → T-29。
 - 2026-08-24 · 主 AI:T-07 勾选。`c2087ce`。T07-R1 CHANGE：KV 在快照配额判定前。主 AI 独立 34/34 + 7/7 EXIT=0。前端 key 归 T-26。未勾选尾：T-08 / T-12 → T-29。
 - 2026-08-24 · 主 AI:T-06 审查 APPROVED p0=0（`review-t06.md`）。循环 import 与空 `options` HOLD。未勾选尾：T-07 / T-12 → T-29。
 - 2026-08-24 · 主 AI:T-06 勾选。主 AI 独立复跑 worker 17/213、vue 17/95、E2E 13，均为 EXIT=0。`recordAccess` 已删；闸门空/抛错拒发；并发 `Promise.allSettled` 抢最后名额恰 1。未勾选尾：T-07 → T-29。

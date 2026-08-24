@@ -179,4 +179,5 @@ Negative: no share_type column; no leftover binding when insertShare misses; no 
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:入库 `b6f5a28`。独立复跑 mail-share spec 含在 185/185 内（106/106）+ 全量 17/289 EXIT=0。vue 17/95 EXIT=0。
 - 2026-08-24 · executor:T-12 落地。红 EXIT=1(37 failed / 68 passed / 105)→ 绿 EXIT=0(spec 105/105;全量 17 files / 264→265 tests,尾数随并行写者 T-07 浮动)。改动 2 文件:`mail-share-service.js`(归一化集合化 + 域校验 + 五条 V2 栅栏接线 + 批量归属校验 + 三条写语句扩写/新增 + `syncPrimaryAccountId` 扩 lid 定位与 window 双写 + 响应扩 shareType/bindings/authKey)、`mail-share-service.spec.js`(+42 用例、改写 4 条 W0 双写用例、栅栏冻结断言补第五条 intent)。`test/setup.js` 未动。踩到的坑:vitest transform 缓存导致第一次红跑报出改动前的用例数,须带 `--no-cache`;`mail_share_binding` 会被既有的 `INSERT INTO mail_share` 正则前缀误命中。写入侧归属谓词另做了一次反证探针(改成恒真 → 该用例转红),探针已还原。未 commit、未 push。
