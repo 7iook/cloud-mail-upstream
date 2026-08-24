@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W4 T-20 APPROVED · 下一波 T-21 |
+| 状态 Status | in-progress · W4 T-20 APPROVED · T-21 实现已入库、P1/P2 待 R2 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -559,6 +559,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-21 实现 `00b0ae1`。审查 NEEDS_CHANGES p0=0 p1=1 p2=1（`review-t21.md`）。T21-P1-1/P2-1 均 CHANGE：`reqGen` 丢弃迟到响应；disable 清空一次性 Key。定点 4 files / 64 tests。T-21 未勾选（等 R2）。未勾选尾：T-21 R2 / T-23 / T-22 → T-29。
 - 2026-08-24 · 主 AI:T-20 审查 APPROVED p0=0（`review-t20.md`）。T-22 侦察已落。裁决 T21-INLINE / T21-RESET-BOX / T21-FLIP / T22-V2-COLLIDE / T22-CREATE-EXPAND；排期 T-21 先于 T-22。未勾选尾：T-21 → T-29。
 - 2026-08-24 · 主 AI:T-20 `672da73` 勾选。主 AI 独立定点 20/20 + 全量 vue 18/113、worker 18/619、E2E 13，均为 EXIT=0。`pnpm --dir mail-vue build` 绿。审查 pending。未勾选尾：T-20 审查 / T-21 → T-29。
 - 2026-08-24 · 主 AI:T-19 `03d987c` / P1 `db1e511` 勾选。R2 APPROVED p0=0。主 AI 独立定点 38/38 + 全量 worker 18/619、vue 17/95、E2E 13。T-20 侦察已落；T20-ASIDE/CARD CHANGE、T20-ACTIONS HOLD。未勾选尾：T-20 → T-29。

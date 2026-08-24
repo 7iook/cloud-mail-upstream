@@ -68,6 +68,7 @@
 | W4 | T-20 列表页 + request | ✅ 已提交 `672da73` | generalPurpose≈executor | 主 AI 独立 20/20 · 全量 vue 18/113 · worker 18/619 · E2E 13 |
 | W4 | T-20 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t20.md` |
 | W4 | T-21 抽屉侦察 | ✅ 已落盘 | executor 顺带 | `recon-t21-drawer.md` |
+| W4 | T-21 详情抽屉 | ⏳ 实现 `00b0ae1` · 审查 NEEDS_CHANGES · P1/P2 已改待 R2 | gpt-5.6-sol-xhigh-fast | `review-t21.md` · 定点 64/64 |
 | W4 | T-22 向导侦察 | ✅ 已落盘 | explore≈plan-reality-recon | `recon-t22-wizard.md` |
 | W0 | P0-3 seed ID + P1-2 日志覆盖 | ✅ 已提交 `3cce543` | generalPurpose | 主 AI 复跑 72/72 |
 
@@ -139,6 +140,8 @@
 | T22-V2-COLLIDE | CHANGE:V2 只能撞后降级；unknown 不预置灰；不加 worker 探测、不加 Vite 常量 | recon-t22 F1(a)；W3 封口；禁第二真源 |
 | T22-CREATE-EXPAND | CHANGE:T-22 就地条件展开 `createMailShare`；禁止 `createMailShareV2` | recon-t22 F2(i)；旧四键 `toEqual` 必须仍绿 |
 | T22-AFTER-T21 | CHANGE:T-21 先落 `index.vue`/`index.spec.js`/`status.js`；T-22 其后 rebase，且不碰 `status.js` | recon-t21 §4.4；否决 T-22 先跑 |
+| T21-P1-1 | CHANGE:抽屉用 `reqGen` 丢弃迟到响应；切分享/关闭都 bump | review-t21；展示 A 写 B / 错 Key / 错关 |
+| T21-P2-1 | CHANGE:AuthKey 成功后 `authKeyOnce = authKey \|\| ''`，disable 清空明文 | review-t21；失效 Key 不得继续留在 DOM |
 
 ## 冲突热区占用
 
@@ -146,7 +149,7 @@
 |---|---|---|
 | `init.js` | T-01 收口 | 其后只读 |
 | `mail-vue/src/request/mail-share.js` | T-20 已入库 `672da73` | T-21 只消费新函数 |
-| `mail-vue/src/views/share-admin/*` | T-20 已入库 `672da73` | T-21 对 `index.vue` 只允许 ≤10 行锚点 |
+| `mail-vue/src/views/share-admin/*` | T-21 实现 `00b0ae1` · 抽屉 P1/P2 修复中 | `index.vue` +7 已收口；T-22 只许 header「新建」锚点；`status.js` T-22 不碰 |
 | `mail-vue/src/perm/perm.js` | T-20 已入库 `672da73` | 其后只加路由须新任务 |
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
 | `share-api.js` | T-14 已入库 `d6fa50b` | 其后只加路由须新任务；W3 不写此文件 |
@@ -158,6 +161,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-21 实现 `00b0ae1`。审查 NEEDS_CHANGES p0=0 p1=1 p2=1。T21-P1-1/P2-1 均 CHANGE。定点 4 files / 64 tests。R2 pending。未勾选尾：T-21 R2 / T-23 入库 / T-22 → T-29。
 - 2026-08-24 · 主 AI：T-20 审查 APPROVED p0=0。T-22 侦察已落。T-21 迷雾已裁（内联密钥 / 弹窗清零 / 翻面登记）。T-22 迷雾已裁（撞后降级 / 条件展开 create / T-21 先于 T-22）。未勾选尾：T-21 → T-29。
 - 2026-08-24 · 主 AI：T-20 `672da73` 入库。主 AI 独立定点 20/20 + 全量 vue 18/113 · worker 18/619 · E2E 13 · build 绿。审查 pending。未勾选尾：T-20 审查 / T-21 → T-29。
 - 2026-08-24 · 主 AI：T-19 `03d987c` / P1 `db1e511` 入库。R2 APPROVED。主 AI 独立 38/38 + 全量 18/619 · 17/95 · E2E 13。T-20 侦察已落。未勾选尾：T-20 → T-29。

@@ -421,6 +421,15 @@ const authKeyError = ref('')
 // The only place the new key ever exists in this app. Not storage, not pinia, not the URL:
 // the detail endpoint never returns it again, so persisting it would void "shown once".
 const authKeyOnce = ref('')
+// Drop stale reads/writes after the owner switches shares. Same idea as the list page reqSeq.
+let reqGen = 0
+function bumpGen() {
+  reqGen += 1
+  return reqGen
+}
+function isCurrent(gen, shareId) {
+  return gen === reqGen && Number(props.shareId) === Number(shareId)
+}
 const accounts = ref([])
 const accountsDone = ref(false)
 const accountsLoading = ref(false)
@@ -488,6 +497,7 @@ function applyDetail(data) {
 }
 
 function close() {
+  bumpGen()
   authKeyOnce.value = ''
   emit('update:shareId', 0)
 }
@@ -506,10 +516,18 @@ function onOpenChange(value) {
 }
 
 async function load(shareId) {
+  const gen = reqGen
   try {
-    applyDetail(await getMailShare(shareId))
+    const data = await getMailShare(shareId)
+    if (!isCurrent(gen, shareId)) {
+      return
+    }
+    applyDetail(data)
     loadError.value = false
   } catch (err) {
+    if (!isCurrent(gen, shareId)) {
+      return
+    }
     if (isGone(err)) {
       // Someone else already deleted or revoked it; a half-drawn form would be a lie.
       closeGone()
@@ -519,7 +537,7 @@ async function load(shareId) {
     console.error('mail share detail failed', {shareId, code: err && err.code})
     return
   }
-  if (writable.value && !atBindingLimit.value && accounts.value.length === 0) {
+  if (isCurrent(gen, shareId) && writable.value && !atBindingLimit.value && accounts.value.length === 0) {
     await loadAccounts()
   }
 }
@@ -550,12 +568,20 @@ async function loadAccounts() {
 }
 
 async function runBindingChange(body) {
+  const opened = props.shareId
+  const gen = reqGen
   bindingBusy.value = true
   bindingError.value = ''
   try {
     await updateMailShareBindings(body)
+    if (!isCurrent(gen, opened)) {
+      return
+    }
     emit('changed')
   } catch (err) {
+    if (!isCurrent(gen, opened)) {
+      return
+    }
     if (isGone(err)) {
       closeGone()
       return
@@ -686,12 +712,14 @@ async function submitSave() {
     ElMessage({message: tf('shareConfigNoChange'), type: 'info', plain: true})
     return
   }
-  const body = {shareId: props.shareId, ...patch}
+  const opened = props.shareId
+  const gen = reqGen
+  const body = {shareId: opened, ...patch}
   // The SQL guard is `CASE WHEN max_sessions IS NULL`, so this check only decides whether to
   // ask; it is not the correctness boundary.
   if (detail.value.maxSessions == null && patch.maxSessions != null) {
     const answer = await askResetUsedSessions()
-    if (answer === 'abort') {
+    if (answer === 'abort' || !isCurrent(gen, opened)) {
       return
     }
     if (answer === 'keep') {
@@ -701,10 +729,17 @@ async function submitSave() {
   saving.value = true
   try {
     // The update response is a full detail, so there is nothing left to re-read.
-    applyDetail(await updateMailShare(body))
+    const data = await updateMailShare(body)
+    if (!isCurrent(gen, opened)) {
+      return
+    }
+    applyDetail(data)
     ElMessage({message: tf('shareConfigSaved'), type: 'success', plain: true})
     emit('changed')
   } catch (err) {
+    if (!isCurrent(gen, opened)) {
+      return
+    }
     if (isGone(err)) {
       closeGone()
       return
@@ -722,20 +757,26 @@ async function submitAuthKey(action) {
   if (!writable.value || authKeyBusy.value) {
     return
   }
+  const opened = props.shareId
+  const gen = reqGen
   authKeyError.value = ''
   authKeyBusy.value = true
   try {
-    const data = await resetMailShareAuthKey({shareId: props.shareId, action}) || {}
+    const data = await resetMailShareAuthKey({shareId: opened, action}) || {}
+    if (!isCurrent(gen, opened)) {
+      return
+    }
     const {authKey, ...rest} = data
     if (rest.shareId != null) {
       applyDetail(rest)
     }
-    // Only enable / reset carry the key; disable has no such property at all.
-    if (authKey) {
-      authKeyOnce.value = authKey
-    }
+    // enable/reset mint a key; disable has no such property and must clear the last one.
+    authKeyOnce.value = authKey || ''
     emit('changed')
   } catch (err) {
+    if (!isCurrent(gen, opened)) {
+      return
+    }
     if (isGone(err)) {
       closeGone()
       return
@@ -777,6 +818,7 @@ async function copyAuthKey() {
 }
 
 watch(() => props.shareId, (shareId) => {
+  bumpGen()
   detail.value = null
   loadError.value = false
   configError.value = ''

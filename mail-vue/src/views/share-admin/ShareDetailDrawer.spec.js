@@ -165,6 +165,16 @@ function saveBody() {
     return updateMailShare.mock.calls[0][0]
 }
 
+function deferred() {
+    let resolve
+    let reject
+    const promise = new Promise((res, rej) => {
+        resolve = res
+        reject = rej
+    })
+    return { promise, resolve, reject }
+}
+
 // The one-shot plaintext must live in exactly one readonly input and in no rendered text.
 function plaintextTrace(wrapper) {
     return {
@@ -658,6 +668,24 @@ describe('share detail drawer · access key (AC-ADMIN-05 / AC-AUTH-07 / AC-AUTH-
         expect(wrapper.find('[data-test="authkey-enable"]').exists()).toBe(true)
     })
 
+    it('clears the one-shot key when disable succeeds after enable (T21-P2-1)', async () => {
+        resetMailShareAuthKey
+            .mockResolvedValueOnce({ ...sampleDetail({ authKeyEnabled: true }), authKey: AUTH_KEY })
+            .mockResolvedValueOnce(sampleDetail({ authKeyEnabled: false }))
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="authkey-enable"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.find('[data-test="authkey-once"]').exists()).toBe(true)
+
+        await wrapper.get('[data-test="authkey-disable"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="authkey-once"]').exists()).toBe(false)
+        expect(plaintextTrace(wrapper).inputs).toHaveLength(0)
+        expect(wrapper.find('[data-test="authkey-enable"]').exists()).toBe(true)
+    })
+
     it('keeps the panel intact and stays disabled when enable is refused (K5)', async () => {
         resetMailShareAuthKey.mockRejectedValue({ code: 500, message: 'SHARE_INVALID_CONFIG' })
         const wrapper = await openDrawer()
@@ -763,6 +791,80 @@ describe('share detail drawer · mask toggle copy (AC-MAIL-08 / Decision 14)', (
 
         expect(updateMailShare).toHaveBeenCalledTimes(1)
         expect(saveBody()).toEqual({ shareId: 7, showFullAddress: true })
+    })
+})
+
+describe('share detail drawer · stale response isolation (T21-P1-1)', () => {
+    beforeEach(() => {
+        getMailShare.mockReset()
+        updateMailShare.mockReset()
+        updateMailShareBindings.mockReset()
+        resetMailShareAuthKey.mockReset()
+        accountList.mockReset()
+        confirm.mockReset()
+        message.mockReset()
+        accountList.mockResolvedValue([])
+        confirm.mockResolvedValue('confirm')
+    })
+
+    it('drops a late detail for share A after the owner opened share B', async () => {
+        const first = deferred()
+        const second = deferred()
+        getMailShare
+            .mockImplementationOnce(() => first.promise)
+            .mockImplementationOnce(() => second.promise)
+
+        const wrapper = mountDrawer({ shareId: 7 })
+        await wrapper.setProps({ shareId: 8 })
+
+        first.resolve(sampleDetail({ shareId: 7, name: 'share A' }))
+        await flushPromises()
+        expect(wrapper.find('[data-test="detail-name"]').exists()).toBe(false)
+
+        second.resolve(sampleDetail({ shareId: 8, name: 'share B' }))
+        await flushPromises()
+        expect(wrapper.get('[data-test="detail-name"]').text()).toBe('share B')
+        expect(wrapper.text()).not.toContain('share A')
+    })
+
+    it('does not paint share A AuthKey onto share B after a late enable', async () => {
+        getMailShare.mockImplementation(async (shareId) => sampleDetail({
+            shareId,
+            name: shareId === 8 ? 'share B' : 'share A'
+        }))
+        const enable = deferred()
+        resetMailShareAuthKey.mockImplementationOnce(() => enable.promise)
+        const wrapper = await openDrawer({ shareId: 7 })
+
+        await wrapper.get('[data-test="authkey-enable"]').trigger('click')
+        await wrapper.setProps({ shareId: 8 })
+        await flushPromises()
+
+        enable.resolve({ ...sampleDetail({ shareId: 7, authKeyEnabled: true }), authKey: AUTH_KEY })
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="detail-name"]').text()).toBe('share B')
+        expect(wrapper.find('[data-test="authkey-once"]').exists()).toBe(false)
+        expect(plaintextTrace(wrapper).inputs).toHaveLength(0)
+    })
+
+    it('does not close share B when a late SHARE_NOT_FOUND for share A arrives', async () => {
+        const first = deferred()
+        const second = deferred()
+        getMailShare
+            .mockImplementationOnce(() => first.promise)
+            .mockImplementationOnce(() => second.promise)
+
+        const wrapper = mountDrawer({ shareId: 7 })
+        await wrapper.setProps({ shareId: 8 })
+
+        first.reject({ code: 404, message: 'SHARE_NOT_FOUND' })
+        await flushPromises()
+        second.resolve(sampleDetail({ shareId: 8, name: 'share B' }))
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="detail-name"]').text()).toBe('share B')
+        expect(wrapper.emitted('update:shareId')).toBeFalsy()
     })
 })
 
