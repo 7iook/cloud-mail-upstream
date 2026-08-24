@@ -1,9 +1,14 @@
 export const SHARE_SESSION_KEY_PREFIX = 'share:session:'
+export const SHARE_ESTABLISH_KEY_PREFIX = 'share:est-key:'
 
 const pendingSecrets = new Map()
 
 export function shareSessionKey(lid) {
     return `${SHARE_SESSION_KEY_PREFIX}${String(lid || '')}`
+}
+
+export function shareEstablishKey(lid) {
+    return `${SHARE_ESTABLISH_KEY_PREFIX}${String(lid || '')}`
 }
 
 function hasLid(lid) {
@@ -29,6 +34,33 @@ export function clearShareSession(lid) {
         return
     }
     sessionStorage.removeItem(shareSessionKey(lid))
+}
+
+// Written before the request goes out, so a lost response replays under the same
+// Idempotency-Key instead of burning a second session slot (AC-SESS-10). getRandomValues,
+// not randomUUID: the latter is undefined outside a secure context, which a share link
+// opened over plain http on a LAN address really is.
+export function ensureEstablishKey(lid) {
+    if (!hasLid(lid)) {
+        return ''
+    }
+    const storageKey = shareEstablishKey(lid)
+    const existing = sessionStorage.getItem(storageKey)
+    if (existing) {
+        return existing
+    }
+    const bytes = new Uint8Array(16)
+    crypto.getRandomValues(bytes)
+    const key = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    sessionStorage.setItem(storageKey, key)
+    return key
+}
+
+export function clearEstablishKey(lid) {
+    if (!hasLid(lid)) {
+        return
+    }
+    sessionStorage.removeItem(shareEstablishKey(lid))
 }
 
 export function clearOtherShareSessions(keepLid) {

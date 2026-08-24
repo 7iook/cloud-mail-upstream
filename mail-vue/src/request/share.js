@@ -43,6 +43,10 @@ export function isShareUnavailable(err) {
     return err.code === 'SHARE_UNAVAILABLE' || err.message === 'SHARE_UNAVAILABLE'
 }
 
+export function isShareAuthRequired(err) {
+    return Boolean(err) && (err.code === 'SHARE_AUTH_REQUIRED' || err.message === 'SHARE_AUTH_REQUIRED')
+}
+
 function readHeader(headers, name) {
     if (!headers) {
         return undefined
@@ -151,8 +155,20 @@ shareHttp.interceptors.response.use(async (res) => {
     return Promise.reject(error)
 })
 
-export function createShareSession(lid, sec, config) {
-    return shareHttp.post('/share/session', { lid, sec }, config)
+// The AuthKey rides in the body and the replay tag rides in the header: a one-time
+// credential in a header or a query string is the half of the request gateways log by
+// default (AC-SEC-09). Both are omitted when blank so an unprotected share keeps the
+// exact request shape it had before T-26.
+export function createShareSession(lid, sec, { authKey, idempotencyKey } = {}) {
+    const body = { lid, sec }
+    if (typeof authKey === 'string' && authKey.trim()) {
+        body.authKey = authKey
+    }
+    const config = {}
+    if (typeof idempotencyKey === 'string' && idempotencyKey.trim()) {
+        config.headers = { 'Idempotency-Key': idempotencyKey }
+    }
+    return shareHttp.post('/share/session', body, config)
 }
 
 export function listShareMails({ sessionToken, cursor, limit, bindingId, signal } = {}) {

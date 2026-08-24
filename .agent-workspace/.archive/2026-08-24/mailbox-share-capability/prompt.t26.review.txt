@@ -1,0 +1,61 @@
+T-26 code review · visitor authRequired + idempotent session + refresh policy + credential cleanup
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+Diff to review: git diff 5f3b10f..HEAD (or working tree if HEAD is still 5f3b10f)
+Do NOT git commit / push / stash / switch branch / edit production code.
+
+Read first:
+1. This prompt only (requirement). Do not treat exec-t26-note.md as evidence.
+2. /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/recon-t26-session.md §12 (fog already decided).
+3. /workspace/docs/specs/mailbox-share-capability/tasks.md T-26 / T-26.1 / T-26.2.
+4. The 8 vue files below.
+
+Success the user must see:
+NOT "auth form exists", BUT an unauthenticated visitor on a share that requires AuthKey can type the key, enter, see latest mail, and with autoRefresh=false can pull new mail with one click; a lost POST /share/session retries once under the same Idempotency-Key; leaving the route or SHARE_UNAVAILABLE drops share:session: and share:est-key: but NOT share:status:.
+Negative: mail-worker/** / router/index.js / init.js / assert-share-chunk.js body / status-watermark.js / ShareOtpCard.vue / mail-fields.js / i18n files / mail-share.js / tests/e2e/** must be untouched. SHARE_CAPABILITY_V2 must stay default false.
+
+Fog contract (do not reopen):
+- Fog-1: createShareSession(lid, sec, { authKey, idempotencyKey } = {}). Empty authKey omitted from body. New header is Idempotency-Key only. isShareAuthRequired lives in request/share.js. index.spec.js call-shape may follow the new signature.
+- Fog-2 A: postSession retries a lost response once under the same key. No dead-link retry button.
+- Fog-3: stored-token revive accepts config degradation (interval=POLL_INTERVAL_MS, autoRefresh defaults true, no countdown). Do not invent a config endpoint. Do not re-POST /share/session. There is already a test that pins this as known limitation for T-29.
+- T26-POLL: useSharePolling uses toValue(intervalMs) at each schedule. No autoStart / listStatus / mode. clampInterval floor is exactly POLL_INTERVAL_MS.
+- T26-KEYGEN: ensureEstablishKey lives in session.js, crypto.getRandomValues 16 bytes hex. Do not import mail-share.js. Do not copy Math.random. Do not use randomUUID.
+- T26-STATUS: the three cleanup points must NOT touch share:status:<lid>. Do not expand clearOtherShareSessions.
+
+Accepted implementation deviations (do not reopen unless new evidence):
+1. index.spec.js changed 3 lines not 1: toHaveBeenCalledWith is exact-args, so adding a third argument also reds the two reestablishSession call sites in the "re-establishes from the in-memory secret" test. All three lines only append expect.objectContaining({ idempotencyKey }). Collapsing to one line would require a second POST exit. Forbidden.
+2. Eighth ref authSubmitting exists because submit-in-flight disabled + shareVisitAuthChecking needs a flag. Did not merge with refreshing.
+3. onUnmounted captures ownedLid at setup; currentLid() during teardown on this vue-router version answers with the NEXT lid (or nothing). Clearing the next lid would be a bug.
+
+Inspect at least:
+- mail-vue/src/views/share/session.js (ensureEstablishKey / clearEstablishKey / prefixes)
+- mail-vue/src/request/share.js (createShareSession third arg, isShareAuthRequired, no new axios)
+- mail-vue/src/composables/useSharePolling.js (toValue only; no autoStart)
+- mail-vue/src/views/share/index.vue:
+  - bootstrap catch still recoverFromUnavailable + showDeadShare + NEW isShareAuthRequired branch
+  - postSession is the only POST /share/session exit
+  - enterReady is the only post-token funnel
+  - reestablishSession calls postSession(lid,sec,'') and is NOT merged into enterReady
+  - applyShareConfig adds autoRefresh / clampInterval / expiresAt; existing fields unchanged
+  - beginMailbox: BOTH polling.start() sites gated by autoRefresh
+  - manualRefresh calls pollTick then onPolledMails; catch → noteShareFailure(err) (fromSession default false)
+  - auth form is AFTER data-share-wait and OUTSIDE data-share-body; empty v-else data-share-body remains
+  - data-share-refresh is AFTER </nav> and BEFORE #share-tabpanel
+  - data-share-expires exists
+  - pageSecret retained during authRequired; authKeyInput never in storage/URL/logs
+  - three cleanup points clear session + est-key, never status
+  - i18n via tx(key, English fallback) only; no i18n file edits
+- mail-vue/src/views/share/index.spec.js: old 22 + T-25 bodies unchanged except the 3 createShareSession call-shape lines; T-25.2 five self-heal tests still present
+- git diff --stat mail-worker (MUST be empty)
+
+You MAY run (always --no-cache):
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/session.spec.js src/request/share.spec.js src/composables/useSharePolling.spec.js src/views/share/index.spec.js src/views/share/share-chunk.spec.js
+pnpm --dir mail-vue test --no-cache
+pnpm --dir mail-worker test --no-cache
+node tests/e2e/run.mjs
+
+Write /workspace/.agent-workspace/.archive/2026-08-24/mailbox-share-capability/review-t26.md
+Verdict: APPROVED or NEEDS_CHANGES. p0 must be 0 to APPROVE.
+Do not reopen Fog-3 / T26-STATUS / T-25 P1-4.
+Reply to user in Chinese.

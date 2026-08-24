@@ -55,7 +55,12 @@ function isPageHidden() {
  */
 export function useSharePolling(options = {}) {
   const fetchMails = options.listShareMails || defaultListShareMails
-  const intervalMs = options.intervalMs ?? POLL_INTERVAL_MS
+  // Read at every schedule, never snapshotted: the share config that carries the interval
+  // arrives one await after this composable is constructed.
+  const readInterval = () => {
+    const raw = toValue(options.intervalMs)
+    return Number.isFinite(raw) && raw > 0 ? raw : POLL_INTERVAL_MS
+  }
   const cursor = ref(normalizeCursor(options.initialCursor))
   const unavailable = ref(false)
 
@@ -160,13 +165,13 @@ export function useSharePolling(options = {}) {
           console.error('[useSharePolling] onMails failed', cbErr)
         }
       }
-      schedule(intervalMs)
+      schedule(readInterval())
     } catch (err) {
       if (stopped || isAbortError(err) || signal.aborted) {
         return
       }
       if (isShareRateLimited(err)) {
-        schedule(retryAfterMs(err, intervalMs))
+        schedule(retryAfterMs(err, readInterval()))
         return
       }
       if (isShareUnavailable(err)) {
@@ -174,7 +179,7 @@ export function useSharePolling(options = {}) {
         return
       }
       console.error('[useSharePolling] poll failed', err)
-      schedule(intervalMs)
+      schedule(readInterval())
     }
   }
 
@@ -199,7 +204,7 @@ export function useSharePolling(options = {}) {
     if (isPageHidden()) {
       return
     }
-    schedule(intervalMs)
+    schedule(readInterval())
   }
 
   start()

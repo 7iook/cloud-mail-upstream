@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it, vi } from 'vitest'
-import { effectScope } from 'vue'
+import { effectScope, ref } from 'vue'
 import { ShareRateLimitedError, isShareUnavailable } from '@/request/share.js'
 import { POLL_INTERVAL_MS, useSharePolling } from './useSharePolling.js'
 
@@ -179,6 +179,25 @@ describe('useSharePolling', () => {
     assert.equal(getMails.mock.calls[0][0].limit, 50)
     assert.ok(getStatus.mock.calls[0][0].signal)
     assert.equal(getStatus.mock.calls[0][0].signal, getMails.mock.calls[0][0].signal)
+  })
+
+  // T-26:下发的 refreshIntervalMs 是 bootstrap 里 await 回来的,永远晚于 setup。
+  // setup 期快照会把它整个吃掉,所以每次排程都要重新读。
+  it('reads intervalMs at each schedule, so a value that lands after setup takes effect', async () => {
+    const listShareMails = vi.fn(async () => ({ list: [], nextCursor: null }))
+    const intervalMs = ref(POLL_INTERVAL_MS)
+    session = runPolling({ listShareMails, intervalMs })
+
+    intervalMs.value = 8000
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    assert.equal(listShareMails.mock.calls.length, 1)
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    assert.equal(listShareMails.mock.calls.length, 1)
+
+    await vi.advanceTimersByTimeAsync(5000)
+    assert.equal(listShareMails.mock.calls.length, 2)
   })
 
   it('aborts an in-flight request on dispose and when the page is hidden', async () => {

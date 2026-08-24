@@ -80,6 +80,8 @@
 | W5 | T-24 审查 | ✅ APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t24.md` |
 | W5 | T-25 多邮箱 Tab | ✅ `2e6754d` / `33213e9` / `16f705b` | generalPurpose≈executor | 主 AI 独立 vue 22/221 · worker 18/626 · E2E 13 |
 | W5 | T-25 审查 | ✅ R3 APPROVED p0=0 | gpt-5.6-sol-xhigh-fast | `review-t25-r3.md` · P1-4 HOLD |
+| W5 | T-26 session UX | ⏳ 已实现待审查 | generalPurpose≈executor | vue 22/250 · worker 18/626 · E2E 13 · worker 零 diff |
+| W5 | T-26 审查 | ⏳ 已派 | gpt-5.6-sol-xhigh-fast | `prompt.t26.review.txt` → `review-t26.md` |
 
 ## 主 AI 裁决（文档能回答，不重开雾区）
 
@@ -201,6 +203,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：T-26 实现待审查（worker 零 diff）。主 AI 独立复跑 vue 定点 5/88 · 全量 22/250；worker 18/626；E2E 13。三处偏离 CHANGE 接受。未勾选。未勾选尾：T-26 审查 / T-27 → T-29。
 - 2026-08-24 · 主 AI：T-26 侦察已裁 Fog-1/2/3。派实现。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 R3 APPROVED p0=0（`review-t25-r3.md`）。勾选 T-25。热区 `index.vue` / `session.js` / `request/share.js` 现为 T-26 写者。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI：T-25 R2 P1 CHANGE（缓存 Tab + hasNew 再拉）。独立 5/68 · 22/221 · 18/626 · E2E 13。未勾选（等 R3）。未勾选尾：T-25 R3 / T-26 → T-29。

@@ -6,11 +6,20 @@
   >
     <header class="share-top">
       <p v-if="state === 'loading'">{{ tx('shareVisitLoading', 'Opening shared mailbox...') }}</p>
+      <p v-else-if="state === 'authRequired'">{{ tx('shareVisitAuthTitle', 'This share needs an access key.') }}</p>
       <p v-else-if="state === 'ready'">{{ tx('shareVisitReady', 'Shared mailbox') }}{{ readyMailboxLabel }}</p>
       <p v-else-if="state === 'unavailable'">{{ tx('shareVisitUnavailable', 'This link is no longer available.') }}</p>
       <p v-else-if="state === 'timedout'">{{ tx('shareVisitTimedOut', 'Your session timed out. Open your original link again.') }}</p>
       <p v-else-if="state === 'limited'">{{ tx('shareVisitLimited', 'Too many attempts. Please wait a moment and try again.') }}</p>
       <p v-else-if="state === 'exited'">{{ tx('shareVisitExited', 'You have left this share.') }}</p>
+      <!-- No aria-live: a countdown that re-announces every second is a screen-reader
+           denial of service. The datetime attribute carries the machine-readable value. -->
+      <time
+        v-if="expiresLabel"
+        class="share-expires"
+        data-share-expires
+        :datetime="expiresIso"
+      >{{ expiresLabel }}</time>
       <button
         v-if="state === 'ready'"
         type="button"
@@ -26,6 +35,46 @@
       class="share-wait"
       data-share-wait
     >{{ tx('shareVisitWait', 'Please wait a moment, then try again.') }}</p>
+
+    <form
+      v-if="state === 'authRequired'"
+      class="share-auth"
+      data-share-auth
+      @submit.prevent="submitAuthKey"
+    >
+      <label
+        class="share-auth-label"
+        for="share-auth-key"
+      >{{ tx('shareVisitAuthLabel', 'Access key') }}</label>
+      <div class="share-auth-row">
+        <input
+          id="share-auth-key"
+          v-model="authKeyInput"
+          class="share-auth-input"
+          data-share-auth-input
+          type="text"
+          autocomplete="off"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          :aria-invalid="authError ? 'true' : undefined"
+          :aria-describedby="authError ? 'share-auth-error' : undefined"
+        >
+        <button
+          type="submit"
+          class="share-auth-submit"
+          data-share-auth-submit
+          :disabled="authSubmitting || !authKeyInput.trim()"
+        >{{ authSubmitting ? tx('shareVisitAuthChecking', 'Checking...') : tx('shareVisitAuthSubmit', 'Open') }}</button>
+      </div>
+      <p
+        v-if="authError"
+        id="share-auth-error"
+        class="share-auth-error"
+        data-share-auth-error
+        role="alert"
+      >{{ tx('shareVisitAuthRetry', 'That key did not work. Check it and try again.') }}</p>
+    </form>
 
     <div v-if="state === 'ready'" data-share-body>
       <nav
@@ -59,6 +108,17 @@
           ></span>
         </button>
       </nav>
+
+      <!-- Refreshes the whole page, not one Tab, so it sits outside the tabpanel. -->
+      <button
+        v-if="!autoRefresh"
+        type="button"
+        class="share-refresh"
+        data-share-refresh
+        :disabled="refreshing"
+        :aria-busy="refreshing ? 'true' : undefined"
+        @click="manualRefresh"
+      >{{ refreshing ? tx('shareVisitRefreshing', 'Checking...') : tx('shareVisitRefresh', 'Check for new mail') }}</button>
 
       <div
         id="share-tabpanel"
@@ -145,19 +205,22 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import SafeMailRenderer from '@/components/safe-mail/index.vue'
-import { useSharePolling } from '@/composables/useSharePolling.js'
+import { POLL_INTERVAL_MS, useSharePolling } from '@/composables/useSharePolling.js'
 import {
     createShareSession,
     getShareAttachment,
     getShareMailboxesStatus,
+    isShareAuthRequired,
     isShareRateLimited,
     isShareUnavailable,
     listShareMails
 } from '@/request/share.js'
 import {
+    clearEstablishKey,
     clearOtherShareSessions,
     clearShareSession,
     consumeShareSecret,
+    ensureEstablishKey,
     readShareSession,
     writeShareSession
 } from './session.js'
@@ -196,7 +259,21 @@ const shareType = ref('single')
 const mailboxes = ref([])
 const activeBinding = ref(null)
 const watermarks = ref({})
+const autoRefresh = ref(true)
+const refreshIntervalMs = ref(POLL_INTERVAL_MS)
+const refreshing = ref(false)
+const expiresAt = ref('')
+const nowMs = ref(Date.now())
+// Memory only: an access key must never reach sessionStorage, the URL or a log line.
+const authKeyInput = ref('')
+// A boolean, not a counter — a counter is the first brick of a lockout UI, and the edge
+// rate limit is the only throttle this page is allowed to have (AC-AUTH-06).
+const authError = ref(false)
+const authSubmitting = ref(false)
 let justRecovered = false
+// useRoute() no longer answers once teardown starts, and by then the router may already
+// have moved on, so the lid this page owns is remembered while it is still alive.
+let ownedLid = ''
 
 function mailKey(item) {
     return item && item.mailId != null ? String(item.mailId) : ''
@@ -320,6 +397,7 @@ async function pollTick({ sessionToken: token, limit, signal }) {
 const polling = useSharePolling({
     sessionToken,
     limit: PAGE_LIMIT,
+    intervalMs: refreshIntervalMs,
     listShareMails: pollTick,
     onMails: onPolledMails,
     onUnavailable: (err) => {
@@ -327,6 +405,25 @@ const polling = useSharePolling({
     }
 })
 polling.stop()
+
+// The manual button runs the same tick the poller runs, so one click costs exactly one
+// status plus one mails call and advances the watermarks identically. A second fetch path
+// here would mean a second set of watermark semantics. pollTick deliberately does not
+// catch, so this caller has to.
+async function manualRefresh() {
+    if (refreshing.value) {
+        return
+    }
+    refreshing.value = true
+    try {
+        const page = await pollTick({ sessionToken: sessionToken.value, limit: PAGE_LIMIT })
+        onPolledMails(page && page.list)
+    } catch (err) {
+        await noteShareFailure(err)
+    } finally {
+        refreshing.value = false
+    }
+}
 
 // Binding count is the shareType SSOT (AC-CAP-02). A stored-token refresh never sees
 // session.shareType, so tabs must appear once status hydrates two or more boxes.
@@ -457,9 +554,41 @@ function onTabKeydown(event, index) {
 
 const showWait = computed(() => rateLimited.value || state.value === 'limited')
 
+// expires_at is a bare 'YYYY-MM-DD HH:mm:ss' the worker wrote in UTC and compares as a
+// string, with no zone marker on it. Left to the browser it would be read as local time,
+// which hands a UTC+8 visitor eight free hours.
+const expiresMs = computed(() => {
+    const raw = String(expiresAt.value || '').trim()
+    if (!raw) {
+        return NaN
+    }
+    return Date.parse(`${raw.replace(' ', 'T')}Z`)
+})
+
+const expiresIso = computed(() => (
+    Number.isFinite(expiresMs.value) ? new Date(expiresMs.value).toISOString() : ''
+))
+
+const expiresLabel = computed(() => {
+    const left = expiresMs.value - nowMs.value
+    if (!Number.isFinite(left) || left <= 0) {
+        return ''
+    }
+    const minutes = Math.ceil(left / 60000)
+    const shown = minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`
+    return `${tx('shareVisitExpiresIn', 'Link expires in')} ${shown}`
+})
+
 function isSelected(item) {
     const current = selectedMail.value
     return Boolean(current && mailKey(current) === mailKey(item))
+}
+
+// A downstream interval below the poll floor would have the visitor's own browser firing
+// two requests every few milliseconds, so the client clamps as well as the worker does.
+function clampInterval(value) {
+    const ms = Number(value)
+    return Number.isFinite(ms) && ms > POLL_INTERVAL_MS ? Math.floor(ms) : POLL_INTERVAL_MS
 }
 
 // The single reader of the /share/session response body. T-26 extends this one helper for
@@ -468,6 +597,9 @@ function applyShareConfig(data) {
     otpEnabled.value = !(data && data.config && data.config.otpExtractionEnabled === false)
     shareType.value = data && data.shareType === 'multi' ? 'multi' : 'single'
     setMailboxes(data && data.mailboxes)
+    autoRefresh.value = !(data && data.config && data.config.autoRefresh === false)
+    refreshIntervalMs.value = clampInterval(data && data.config && data.config.refreshIntervalMs)
+    expiresAt.value = (data && data.expiresAt) || ''
 }
 
 function logShareFailure(err) {
@@ -487,10 +619,49 @@ function hadWorkingSession() {
     return Boolean(sessionToken.value || (currentLid() && readShareSession(currentLid())))
 }
 
+// Only a request that never came back may be replayed. A rejected business envelope, a
+// 429 and anything carrying err.response all mean the worker already answered, so
+// resending would spend a second session slot and more rate-limit budget for nothing.
+function isLostResponse(err) {
+    return Boolean(err)
+        && !err.response
+        && !isShareRateLimited(err)
+        && !isShareUnavailable(err)
+        && !isShareAuthRequired(err)
+        && (err instanceof Error || !Object.prototype.hasOwnProperty.call(err, 'code'))
+}
+
+// The only POST /share/session in this page. The key is written before the request goes
+// out, so a wrong AuthKey, a retry and a lost response all replay under the same one
+// (AC-SESS-10). One replay, not a backoff ladder: backoff belongs to the poller.
+async function postSession(lid, sec, authKey) {
+    const idempotencyKey = ensureEstablishKey(lid)
+    try {
+        return await createShareSession(lid, sec, { authKey, idempotencyKey })
+    } catch (err) {
+        if (!isLostResponse(err)) {
+            throw err
+        }
+        return await createShareSession(lid, sec, { authKey, idempotencyKey })
+    }
+}
+
+// Everything that happens once a token exists. reestablishSession stays out of this: it
+// deliberately leaves state alone and lets noteShareFailure drive the recovery.
+function enterReady(lid, data) {
+    writeShareSession(lid, data.sessionToken)
+    clearEstablishKey(lid)
+    sessionToken.value = data.sessionToken
+    applyShareConfig(data)
+    mailbox.value = (data && data.mailbox) || ''
+    state.value = 'ready'
+}
+
 function clearMailboxView() {
     const lid = currentLid()
     if (lid) {
         clearShareSession(lid)
+        clearEstablishKey(lid)
     }
     sessionToken.value = ''
     mailbox.value = ''
@@ -523,12 +694,13 @@ async function reestablishSession() {
     if (!lid || !sec) {
         return false
     }
-    const data = await createShareSession(lid, sec)
+    const data = await postSession(lid, sec, '')
     const token = data && data.sessionToken
     if (!token) {
         return false
     }
     writeShareSession(lid, token)
+    clearEstablishKey(lid)
     sessionToken.value = token
     applyShareConfig(data)
     if (data.mailbox) {
@@ -597,6 +769,44 @@ async function noteShareFailure(err, fromSession = false) {
     }
 }
 
+// A wrong key costs no quota and writes no cache on the worker, which is why the visitor
+// may keep trying and why the same idempotency key stays valid across attempts.
+async function submitAuthKey() {
+    const lid = currentLid()
+    const sec = pageSecret.value
+    const key = authKeyInput.value.trim()
+    if (!key || authSubmitting.value || !lid || !sec) {
+        return
+    }
+    authSubmitting.value = true
+    authError.value = false
+    // A fresh attempt makes the previous "please wait" notice stale.
+    rateLimited.value = false
+    try {
+        const data = await postSession(lid, sec, key)
+        if (!data || !data.sessionToken) {
+            authError.value = true
+            return
+        }
+        authKeyInput.value = ''
+        enterReady(lid, data)
+        await beginMailbox()
+    } catch (err) {
+        if (isShareAuthRequired(err)) {
+            authError.value = true
+            return
+        }
+        // 429 is the edge throttling the route, not a verdict on the key.
+        if (isShareRateLimited(err)) {
+            rateLimited.value = true
+            return
+        }
+        await noteShareFailure(err, true)
+    } finally {
+        authSubmitting.value = false
+    }
+}
+
 function exitShare() {
     polling.stop()
     pageSecret.value = ''
@@ -604,6 +814,7 @@ function exitShare() {
     const lid = currentLid()
     if (lid) {
         clearShareSession(lid)
+        clearEstablishKey(lid)
     }
     sessionToken.value = ''
     mailbox.value = ''
@@ -650,11 +861,17 @@ async function beginMailbox() {
         }
         justRecovered = false
         rateLimited.value = false
-        polling.start()
+        if (autoRefresh.value) {
+            polling.start()
+        }
     } catch (err) {
         if (isShareRateLimited(err)) {
             rateLimited.value = true
-            polling.start()
+            // Both gates, not just the happy path: a share with auto refresh off must not
+            // start polling merely because it walked into a 429.
+            if (autoRefresh.value) {
+                polling.start()
+            }
             return
         }
         await noteShareFailure(err)
@@ -686,7 +903,14 @@ async function bootstrap() {
     applyShareLocale()
     resetMailbox()
     otpEnabled.value = true
+    autoRefresh.value = true
+    refreshIntervalMs.value = POLL_INTERVAL_MS
+    expiresAt.value = ''
+    authKeyInput.value = ''
+    authError.value = false
+    authSubmitting.value = false
     const lid = currentLid()
+    ownedLid = lid
     shareType.value = 'single'
     mailboxes.value = []
     activeBinding.value = null
@@ -705,20 +929,21 @@ async function bootstrap() {
     if (sec) {
         pageSecret.value = sec
         try {
-            const data = await createShareSession(lid, sec)
-            const token = data && data.sessionToken
-            if (!token) {
+            const data = await postSession(lid, sec, '')
+            if (!data || !data.sessionToken) {
                 clearShareSession(lid)
                 state.value = 'unavailable'
                 return
             }
-            writeShareSession(lid, token)
-            sessionToken.value = token
-            applyShareConfig(data)
-            mailbox.value = (data && data.mailbox) || ''
-            state.value = 'ready'
+            enterReady(lid, data)
             await beginMailbox()
         } catch (err) {
+            // Diverted before noteShareFailure, whose fromSession=true reads every session
+            // error as a dead link. recoverFromUnavailable keeps its meaning untouched.
+            if (isShareAuthRequired(err)) {
+                state.value = 'authRequired'
+                return
+            }
             await noteShareFailure(err, true)
         }
         return
@@ -735,9 +960,23 @@ async function bootstrap() {
 
 watch(() => route.params.lid, bootstrap, { immediate: true })
 
+// The countdown is minute-level, so the local clock is accurate enough; aligning to the
+// status frame's serverTime would buy a second ref and no visible correctness.
+const clockTimer = setInterval(() => {
+    nowMs.value = Date.now()
+}, 1000)
+
 onUnmounted(() => {
+    clearInterval(clockTimer)
     pageSecret.value = ''
     justRecovered = false
+    // The router already drops share:session on a real navigation; doing both here keeps
+    // AC-SEC-07 testable at component level. share:status is read progress, not a
+    // credential, and stays.
+    if (ownedLid) {
+        clearShareSession(ownedLid)
+        clearEstablishKey(ownedLid)
+    }
 })
 
 defineExpose({
@@ -780,6 +1019,83 @@ defineExpose({
 .share-empty,
 .share-remote-hint {
     color: #4b5563;
+}
+
+/* Pushed to the right so the countdown sits with the Leave button, not between it and
+   the title. Tabular figures keep the row from twitching as the digits change. */
+.share-expires {
+    margin-left: auto;
+    color: #4b5563;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.share-auth {
+    margin: 16px 0 0;
+}
+
+.share-auth-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 13px;
+    color: #4b5563;
+}
+
+.share-auth-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.share-auth-input {
+    flex: 1 1 12rem;
+    min-width: 0;
+    padding: 10px 12px;
+    font: inherit;
+    color: #1f2328;
+    background: #fff;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+}
+
+.share-auth-input[aria-invalid="true"] {
+    border-color: #cf222e;
+}
+
+.share-auth-submit,
+.share-refresh {
+    padding: 10px 12px;
+    font: inherit;
+    color: #1f2328;
+    background: #f6f8fa;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.share-auth-submit:disabled,
+.share-refresh:disabled {
+    color: #8c959f;
+    cursor: default;
+}
+
+.share-auth-input:focus-visible,
+.share-auth-submit:focus-visible,
+.share-refresh:focus-visible {
+    outline: 2px solid #0969da;
+    outline-offset: -2px;
+}
+
+/* Beside the field it belongs to, not in a banner at the top of the page. */
+.share-auth-error {
+    margin: 8px 0 0;
+    color: #cf222e;
+    font-size: 13px;
+}
+
+.share-refresh {
+    margin: 16px 0 0;
 }
 
 .share-tabs {

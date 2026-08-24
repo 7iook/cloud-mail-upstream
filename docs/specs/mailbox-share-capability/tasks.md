@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W5 T-24/T-25 APPROVED · T-26 实现 |
+| 状态 Status | in-progress · W5 T-24/T-25 APPROVED · T-26 待审查 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -629,6 +629,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-26 实现待审查。vue 22/250 · worker 18/626 · E2E 13。worker 零 diff。未勾选（等审查 APPROVED）。未勾选尾：T-26 审查 / T-27 → T-29。
 - 2026-08-24 · 主 AI:T-26 侦察已裁 Fog-1/2/3（`recon-t26-session.md`）。未勾选。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI:T-25 R3 APPROVED p0=0（`review-t25-r3.md`）。勾选 T-25。独立复跑 vue 定点 5/68 · 全量 22/221；worker 18/626；E2E 13。未勾选尾：T-26 → T-29。
 - 2026-08-24 · 主 AI:T-25 R2 P1 CHANGE（缓存 Tab + hasNew 再拉）。独立复跑 vue 定点 5/68 · 全量 22/221；worker 18/626；E2E 13。未勾选（等 R3）。未勾选尾：T-25 R3 / T-26 → T-29。

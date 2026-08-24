@@ -161,7 +161,9 @@ describe('share view session shell', () => {
         const wrapper = await mountShare('lid-a', 'sec-a')
 
         expect(createShareSession).toHaveBeenCalledTimes(1)
-        expect(createShareSession).toHaveBeenCalledWith('lid-a', 'sec-a')
+        expect(createShareSession).toHaveBeenCalledWith('lid-a', 'sec-a', expect.objectContaining({
+            idempotencyKey: expect.any(String)
+        }))
         expect(readShareSession('lid-a')).toBe('sess-a')
         expect(window.location.hash).toBe('')
         expect(window.location.href).not.toContain('sec-a')
@@ -420,7 +422,9 @@ describe('share view visitor mailbox', () => {
         const wrapper = await mountShare('lid-a', 'sec-keep')
         expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
         expect(createShareSession).toHaveBeenCalledTimes(1)
-        expect(createShareSession).toHaveBeenCalledWith('lid-a', 'sec-keep')
+        expect(createShareSession).toHaveBeenCalledWith('lid-a', 'sec-keep', expect.objectContaining({
+            idempotencyKey: expect.any(String)
+        }))
         expect(window.location.hash).toBe('')
         expect(window.location.href).not.toContain('sec-keep')
         expect(JSON.stringify(sessionStorage)).not.toContain('sec-keep')
@@ -433,7 +437,9 @@ describe('share view visitor mailbox', () => {
         expect(wrapper.text()).not.toMatch(/no longer available/i)
         expect(wrapper.text()).not.toMatch(/timed out/i)
         expect(createShareSession).toHaveBeenCalledTimes(2)
-        expect(createShareSession).toHaveBeenLastCalledWith('lid-a', 'sec-keep')
+        expect(createShareSession).toHaveBeenLastCalledWith('lid-a', 'sec-keep', expect.objectContaining({
+            idempotencyKey: expect.any(String)
+        }))
         expect(readShareSession('lid-a')).toBe('sess-b')
         expect(JSON.stringify(sessionStorage)).not.toContain('sec-keep')
         expect(wrapper.get('[data-share-mail-list]').text()).toContain('After recover')
@@ -1045,5 +1051,479 @@ describe('share view multi-mailbox tabs', () => {
         expect(wrapper.get('[data-share-mail-list]').text()).toContain('First box mail')
         expect(wrapper.get('[data-share-mail-list]').text()).not.toContain('Second box mail')
         expect(wrapper.text()).not.toContain('first@example.com')
+    })
+})
+
+// T-26 · 需要 AuthKey 的分享、建会话幂等、刷新策略与会话清理。
+const AUTH_REQUIRED = { code: 501, message: 'SHARE_AUTH_REQUIRED' }
+
+function idempotencyKeys() {
+    return createShareSession.mock.calls.map(([, , options]) => options && options.idempotencyKey)
+}
+
+function sentAuthKeys() {
+    return createShareSession.mock.calls.map(([, , options]) => (options && options.authKey) || '')
+}
+
+async function submitAuthKey(wrapper, value) {
+    await wrapper.get('[data-share-auth-input]').setValue(value)
+    await wrapper.get('[data-share-auth]').trigger('submit')
+    await flushPromises()
+}
+
+describe('share view visitor auth key', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia())
+        sessionStorage.clear()
+        createShareSession.mockReset()
+        listShareMails.mockReset()
+        getShareAttachment.mockReset()
+        getShareMailboxesStatus.mockReset()
+        listShareMails.mockResolvedValue({ list: [], nextCursor: null })
+        getShareAttachment.mockResolvedValue(new Blob(['x']))
+        getShareMailboxesStatus.mockResolvedValue({ mailboxes: [{ bindingId: 0, latestEmailId: null }] })
+    })
+
+    afterEach(() => {
+        while (wrappers.length) {
+            wrappers.pop().unmount()
+        }
+        sessionStorage.clear()
+        vi.clearAllMocks()
+        vi.useRealTimers()
+        vi.unstubAllGlobals()
+    })
+
+    it('asks for the access key instead of declaring the link dead (AC-AUTH-01)', async () => {
+        createShareSession.mockRejectedValue(AUTH_REQUIRED)
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('authRequired')
+        // 信封已经回来了,重发只会白烧一个会话名额。
+        expect(createShareSession).toHaveBeenCalledTimes(1)
+        expect(readShareSession('lid-a')).toBe('')
+        expect(wrapper.find('[data-share-auth]').exists()).toBe(true)
+        expect(wrapper.find('[data-share-auth-input]').exists()).toBe(true)
+        expect(wrapper.find('[data-share-body]').exists()).toBe(true)
+        expect(wrapper.find('[data-share-auth-error]').exists()).toBe(false)
+        expect(wrapper.find('[data-share-wait]').exists()).toBe(false)
+        expect(wrapper.text()).not.toMatch(/no longer available|timed out/i)
+        // 空输入不能提交。
+        expect(wrapper.get('[data-share-auth-submit]').attributes('disabled')).toBeDefined()
+    })
+
+    it('labels the key field visibly and keeps the mobile keyboard from mangling it', async () => {
+        createShareSession.mockRejectedValue(AUTH_REQUIRED)
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+
+        const input = wrapper.get('[data-share-auth-input]')
+        const id = input.attributes('id')
+        expect(id).toBeTruthy()
+        expect(wrapper.get(`label[for="${id}"]`).text()).toBeTruthy()
+        // AuthKey 是大小写敏感的定长串:移动端自动首字母大写会稳定毁掉第一次输入。
+        expect(input.attributes('autocapitalize')).toBe('none')
+        expect(input.attributes('autocomplete')).toBe('off')
+        expect(input.attributes('spellcheck')).toBe('false')
+        expect(input.attributes('type')).toBe('text')
+    })
+
+    it('lets a wrong key be retried and keeps the same idempotency key, without leaking either secret (AC-AUTH-01, AC-SEC-09)', async () => {
+        createShareSession
+            .mockRejectedValueOnce(AUTH_REQUIRED)
+            .mockRejectedValueOnce(AUTH_REQUIRED)
+            .mockResolvedValueOnce({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+        const lines = []
+        const capture = (...args) => {
+            lines.push(flattenLogged(args))
+        }
+        const log = vi.spyOn(console, 'log').mockImplementation(capture)
+        const error = vi.spyOn(console, 'error').mockImplementation(capture)
+        const warn = vi.spyOn(console, 'warn').mockImplementation(capture)
+        const info = vi.spyOn(console, 'info').mockImplementation(capture)
+
+        try {
+            const wrapper = await mountShare('lid-a', 'sec-a')
+
+            await submitAuthKey(wrapper, 'wrong-key-aaaa')
+
+            expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('authRequired')
+            expect(wrapper.get('[data-share-auth-error]').text()).toBeTruthy()
+            // 无锁定、无冷却、无「还剩 N 次」。
+            expect(wrapper.text()).not.toMatch(/attempt|remaining|locked|too many/i)
+            expect(wrapper.get('[data-share-auth-input]').attributes('disabled')).toBeUndefined()
+
+            await submitAuthKey(wrapper, 'right-key-bbbb')
+
+            expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+            expect(createShareSession).toHaveBeenCalledTimes(3)
+            expect(sentAuthKeys()).toEqual(['', 'wrong-key-aaaa', 'right-key-bbbb'])
+            const keys = idempotencyKeys()
+            expect(keys[0]).toEqual(expect.any(String))
+            expect(new Set(keys).size).toBe(1)
+            // 成功之后这个去重标签就没用了。
+            expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+
+            const stored = JSON.stringify(sessionStorage)
+            const joined = lines.join('\n')
+            for (const secret of ['wrong-key-aaaa', 'right-key-bbbb', 'sec-a']) {
+                expect(stored).not.toContain(secret)
+                expect(joined).not.toContain(secret)
+            }
+            expect(window.location.href).not.toContain('right-key-bbbb')
+        } finally {
+            log.mockRestore()
+            error.mockRestore()
+            warn.mockRestore()
+            info.mockRestore()
+        }
+    })
+
+    it('treats a 429 on the key submit as wait, not as a wrong key (AC-AUTH-06)', async () => {
+        createShareSession
+            .mockRejectedValueOnce(AUTH_REQUIRED)
+            .mockRejectedValueOnce({ name: 'ShareRateLimitedError', status: 429, retryAfter: 12 })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        await submitAuthKey(wrapper, 'some-key')
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('authRequired')
+        expect(wrapper.get('[data-share-wait]').text()).toMatch(/wait/i)
+        expect(wrapper.find('[data-share-auth-error]').exists()).toBe(false)
+        // 429 是运输层的节流,重发只会加重限流。
+        expect(createShareSession).toHaveBeenCalledTimes(2)
+    })
+})
+
+describe('share view session idempotency', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia())
+        sessionStorage.clear()
+        createShareSession.mockReset()
+        listShareMails.mockReset()
+        getShareAttachment.mockReset()
+        getShareMailboxesStatus.mockReset()
+        listShareMails.mockResolvedValue({ list: [], nextCursor: null })
+        getShareAttachment.mockResolvedValue(new Blob(['x']))
+        getShareMailboxesStatus.mockResolvedValue({ mailboxes: [{ bindingId: 0, latestEmailId: null }] })
+    })
+
+    afterEach(() => {
+        while (wrappers.length) {
+            wrappers.pop().unmount()
+        }
+        sessionStorage.clear()
+        vi.clearAllMocks()
+        vi.useRealTimers()
+        vi.unstubAllGlobals()
+    })
+
+    it('stores the idempotency key before the request leaves and clears it once a token arrives (AC-SESS-10)', async () => {
+        const keyAtCallTime = []
+        createShareSession.mockImplementation(async () => {
+            keyAtCallTime.push(sessionStorage.getItem('share:est-key:lid-a'))
+            return { sessionToken: 'sess-a', mailbox: 'otp@example.com' }
+        })
+
+        await mountShare('lid-a', 'sec-a')
+
+        expect(keyAtCallTime).toEqual([idempotencyKeys()[0]])
+        expect(keyAtCallTime[0]).toMatch(/^[0-9a-f]{32}$/)
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+    })
+
+    it('replays a lost response once under the same key instead of spending a second session (AC-SESS-10)', async () => {
+        createShareSession
+            .mockRejectedValueOnce(new Error('Network Error'))
+            .mockResolvedValueOnce({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(createShareSession).toHaveBeenCalledTimes(2)
+        const keys = idempotencyKeys()
+        expect(keys[0]).toMatch(/^[0-9a-f]{32}$/)
+        expect(keys[1]).toBe(keys[0])
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+        expect(readShareSession('lid-a')).toBe('sess-a')
+    })
+
+    it('gives up after one replay rather than hammering an unreachable worker', async () => {
+        createShareSession.mockRejectedValue(new Error('Network Error'))
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+
+        expect(createShareSession).toHaveBeenCalledTimes(2)
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
+    })
+
+    it('does not replay a 429 or a business envelope, which both mean the worker answered', async () => {
+        createShareSession.mockRejectedValue({ name: 'ShareRateLimitedError', status: 429 })
+        const limited = await mountShare('lid-a', 'sec-a')
+        expect(createShareSession).toHaveBeenCalledTimes(1)
+        expect(limited.get('[data-share-state]').attributes('data-share-state')).toBe('limited')
+
+        createShareSession.mockReset()
+        createShareSession.mockRejectedValue({ code: 501, message: 'SHARE_UNAVAILABLE' })
+        const dead = await mountShare('lid-b', 'sec-b')
+        expect(createShareSession).toHaveBeenCalledTimes(1)
+        expect(dead.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
+    })
+})
+
+describe('share view refresh policy', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia())
+        sessionStorage.clear()
+        createShareSession.mockReset()
+        listShareMails.mockReset()
+        getShareAttachment.mockReset()
+        getShareMailboxesStatus.mockReset()
+        listShareMails.mockResolvedValue({ list: [], nextCursor: null })
+        getShareAttachment.mockResolvedValue(new Blob(['x']))
+        getShareMailboxesStatus.mockResolvedValue({ mailboxes: [{ bindingId: 0, latestEmailId: null }] })
+    })
+
+    afterEach(() => {
+        while (wrappers.length) {
+            wrappers.pop().unmount()
+        }
+        sessionStorage.clear()
+        vi.clearAllMocks()
+        vi.useRealTimers()
+        vi.unstubAllGlobals()
+    })
+
+    it('polls nothing and offers a manual refresh when autoRefresh is off (AC-OTP-05)', async () => {
+        vi.useFakeTimers()
+        createShareSession.mockResolvedValue({
+            sessionToken: 'sess-a',
+            mailbox: 'otp@example.com',
+            config: { autoRefresh: false }
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(wrapper.find('[data-share-refresh]').exists()).toBe(true)
+        listShareMails.mockClear()
+        getShareMailboxesStatus.mockClear()
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 20)
+        await flushPromises()
+
+        expect(getShareMailboxesStatus).not.toHaveBeenCalled()
+        expect(listShareMails).not.toHaveBeenCalled()
+
+        // 一次点击 = 一拍:1 次 status + 1 次 mails,与自动轮询同形。
+        await wrapper.get('[data-share-refresh]').trigger('click')
+        await flushPromises()
+
+        expect(getShareMailboxesStatus).toHaveBeenCalledTimes(1)
+        expect(listShareMails).toHaveBeenCalledTimes(1)
+        expect(listShareMails).toHaveBeenCalledWith(expect.objectContaining({ sessionToken: 'sess-a' }))
+    })
+
+    it('merges what a manual refresh returned and keeps the token when it hits a 429', async () => {
+        createShareSession.mockResolvedValue({
+            sessionToken: 'sess-a',
+            mailbox: 'otp@example.com',
+            config: { autoRefresh: false }
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        listShareMails.mockResolvedValue({
+            list: [mail({ mailId: 41, subject: 'Pulled by hand', code: '' })],
+            nextCursor: null
+        })
+
+        await wrapper.get('[data-share-refresh]').trigger('click')
+        await flushPromises()
+        expect(wrapper.get('[data-share-mail-list]').text()).toContain('Pulled by hand')
+
+        getShareMailboxesStatus.mockRejectedValue({ name: 'ShareRateLimitedError', status: 429, retryAfter: 9 })
+        await wrapper.get('[data-share-refresh]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-wait]').text()).toMatch(/wait/i)
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(readShareSession('lid-a')).toBe('sess-a')
+        expect(wrapper.find('[data-share-refresh]').exists()).toBe(true)
+    })
+
+    it('honours a session refreshIntervalMs that only arrives after setup (AC-OTP-05)', async () => {
+        vi.useFakeTimers()
+        createShareSession.mockResolvedValue({
+            sessionToken: 'sess-a',
+            mailbox: 'otp@example.com',
+            config: { refreshIntervalMs: 8000 }
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        expect(wrapper.find('[data-share-refresh]').exists()).toBe(false)
+        listShareMails.mockClear()
+        getShareMailboxesStatus.mockClear()
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+        expect(getShareMailboxesStatus).not.toHaveBeenCalled()
+
+        await vi.advanceTimersByTimeAsync(5000)
+        await flushPromises()
+        expect(getShareMailboxesStatus).toHaveBeenCalledTimes(1)
+        expect(listShareMails).toHaveBeenCalledTimes(1)
+    })
+
+    it('clamps a downstream interval below the floor back up to it, so the visitor never self-DoSes', async () => {
+        vi.useFakeTimers()
+        createShareSession.mockResolvedValue({
+            sessionToken: 'sess-a',
+            mailbox: 'otp@example.com',
+            config: { refreshIntervalMs: 10 }
+        })
+
+        await mountShare('lid-a', 'sec-a')
+        getShareMailboxesStatus.mockClear()
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS - 1)
+        expect(getShareMailboxesStatus).not.toHaveBeenCalled()
+
+        await vi.advanceTimersByTimeAsync(1)
+        await flushPromises()
+        expect(getShareMailboxesStatus).toHaveBeenCalledTimes(1)
+    })
+
+    // Fog-3:复活路径拿不到 config,刷新策略与倒计时按缺省降级 —— 这是已知限制,不是回归。
+    it('revives a stored token without spending a session, an establish key or a countdown (AC-SESS-03)', async () => {
+        vi.useFakeTimers()
+        writeShareSession('lid-a', 'sess-refresh')
+
+        const wrapper = await mountShare('lid-a')
+
+        expect(createShareSession).not.toHaveBeenCalled()
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+        expect(wrapper.find('[data-share-expires]').exists()).toBe(false)
+        expect(wrapper.find('[data-share-refresh]').exists()).toBe(false)
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+        expect(getShareMailboxesStatus).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe('share view expiry countdown and cleanup', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia())
+        sessionStorage.clear()
+        createShareSession.mockReset()
+        listShareMails.mockReset()
+        getShareAttachment.mockReset()
+        getShareMailboxesStatus.mockReset()
+        listShareMails.mockResolvedValue({ list: [], nextCursor: null })
+        getShareAttachment.mockResolvedValue(new Blob(['x']))
+        getShareMailboxesStatus.mockResolvedValue({ mailboxes: [{ bindingId: 0, latestEmailId: null }] })
+    })
+
+    afterEach(() => {
+        while (wrappers.length) {
+            wrappers.pop().unmount()
+        }
+        sessionStorage.clear()
+        vi.clearAllMocks()
+        vi.useRealTimers()
+        vi.unstubAllGlobals()
+    })
+
+    // expires_at 是 worker 用 UTC 写下的裸字符串。浏览器把它当本地时间解析,东八区访客
+    // 的倒计时就会凭空多出 8 小时,所以这条测试刻意在非 UTC 时区里跑。
+    it('reads expiresAt as UTC, not as the visitor local time', async () => {
+        const original = process.env.TZ
+        process.env.TZ = 'Asia/Shanghai'
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-08-24T12:00:00Z'))
+        try {
+            createShareSession.mockResolvedValue({
+                sessionToken: 'sess-a',
+                mailbox: 'otp@example.com',
+                expiresAt: '2026-08-24 12:30:00'
+            })
+
+            const wrapper = await mountShare('lid-a', 'sec-a')
+
+            const node = wrapper.get('[data-share-expires]')
+            expect(node.attributes('datetime')).toBe('2026-08-24T12:30:00.000Z')
+            expect(node.text()).toMatch(/30m/)
+            // 每秒播报剩余时间是读屏灾难。
+            expect(node.attributes('aria-live')).toBeUndefined()
+
+            await vi.advanceTimersByTimeAsync(60_000)
+            expect(wrapper.get('[data-share-expires]').text()).toMatch(/29m/)
+        } finally {
+            if (original === undefined) {
+                delete process.env.TZ
+            } else {
+                process.env.TZ = original
+            }
+        }
+    })
+
+    it('renders no countdown at all when the session carries no expiresAt', async () => {
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+        expect(wrapper.find('[data-share-expires]').exists()).toBe(false)
+        expect(wrapper.text()).not.toContain('--')
+    })
+
+    it('drops the session and the establish key on unmount but keeps the read watermark (AC-SEC-07)', async () => {
+        createShareSession.mockRejectedValue(AUTH_REQUIRED)
+        writeShareSession('lid-a', 'stale-token')
+        sessionStorage.setItem('share:status:lid-a', '{"0":7}')
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('authRequired')
+        expect(sessionStorage.getItem('share:est-key:lid-a')).not.toBeNull()
+
+        wrappers.pop()
+        wrapper.unmount()
+
+        expect(sessionStorage.getItem('share:session:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+        // 水位是已读进度不是凭据:清掉只会丢失跨会话未读(T-25 红线)。
+        expect(sessionStorage.getItem('share:status:lid-a')).toBe('{"0":7}')
+    })
+
+    it('drops both session keys on SHARE_UNAVAILABLE but keeps the read watermark (AC-SEC-07)', async () => {
+        writeShareSession('lid-a', 'sess-a')
+        sessionStorage.setItem('share:status:lid-a', '{"0":7}')
+
+        const wrapper = await mountShare('lid-a')
+        sessionStorage.setItem('share:est-key:lid-a', 'leftover-from-a-failed-establish')
+
+        await wrapper.vm.noteShareFailure({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' }, true)
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
+        expect(sessionStorage.getItem('share:session:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:status:lid-a')).toBe('{"0":7}')
+    })
+
+    it('drops both session keys when the visitor leaves the share (AC-SEC-07)', async () => {
+        writeShareSession('lid-a', 'sess-a')
+        sessionStorage.setItem('share:status:lid-a', '{"0":7}')
+
+        const wrapper = await mountShare('lid-a')
+        sessionStorage.setItem('share:est-key:lid-a', 'leftover-from-a-failed-establish')
+
+        await wrapper.get('[data-share-exit]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('exited')
+        expect(sessionStorage.getItem('share:session:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
+        expect(sessionStorage.getItem('share:status:lid-a')).toBe('{"0":7}')
     })
 })
