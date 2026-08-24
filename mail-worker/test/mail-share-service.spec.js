@@ -554,6 +554,44 @@ describe('mailShareService owner write path', () => {
 		await expect(seedShareRow({ userId: USER_A, accountId: 0 })).rejects.toThrow(/never|forbids|positive/i);
 	});
 
+	// 这四种形状都满足 `value > 0`，却都不是行 ID：'1e3' / '1.5' 是字符串，true 是布尔，
+	// Infinity 溢出安全整数区间。放进 D1 绑定后只会被静默强转，种子行的主键语义随之失真。
+	describe.each([
+		['exponent-notation string', '1e3'],
+		['fractional string', '1.5'],
+		['boolean true', true],
+		['Infinity', Infinity]
+	])('rejects %s as a seed row id', (_label, value) => {
+		it('as seedShareRow userId', async () => {
+			await expect(seedShareRow({ userId: value, accountId: ACC_A })).rejects.toThrow(/positive/i);
+		});
+
+		it('as seedShareRow accountId', async () => {
+			await expect(seedShareRow({ userId: USER_A, accountId: value })).rejects.toThrow(/positive/i);
+		});
+
+		it('as seedBindingRow shareId', async () => {
+			await expect(seedBindingRow({ shareId: value, accountId: ACC_A })).rejects.toThrow(/positive/i);
+		});
+
+		it('as seedBindingRow accountId', async () => {
+			await expect(seedBindingRow({ shareId: 1, accountId: value })).rejects.toThrow(/positive/i);
+		});
+	});
+
+	it('still seeds normally at the integer floor of 1', async () => {
+		const share = await seedShareRow({ userId: 1, accountId: 1 });
+		try {
+			expect(Number.isSafeInteger(share.shareId)).toBe(true);
+			expect(share.shareId).toBeGreaterThan(0);
+			const bindingId = await seedBindingRow({ shareId: share.shareId, accountId: 1 });
+			expect(bindingId).toBeGreaterThan(0);
+		} finally {
+			await env.db.prepare('DELETE FROM mail_share_binding WHERE share_id = ?').bind(share.shareId).run();
+			await env.db.prepare('DELETE FROM mail_share WHERE share_id = ?').bind(share.shareId).run();
+		}
+	});
+
 	it('caps bindings per share at the design constant of 50 (AC-CAP-13)', () => {
 		expect(SHARE_BINDING_LIMIT).toBe(50);
 	});
@@ -669,6 +707,26 @@ describe('structured share observability events (R2-F2 / R3-A7)', () => {
 			requestId: null,
 			shareId: null
 		});
+	});
+
+	it('never lets a diagnostic field overwrite the canonical envelope', () => {
+		const lines = [];
+		const log = console.log;
+		console.log = (...args) => lines.push(args.map(String).join(' '));
+		try {
+			logShareEvent(SHARE_EVENT.SESSION_DENIED_AUTH, {
+				event: 'overridden',
+				ts: 'overridden',
+				shareId: 7,
+				reason: 'bad_sec'
+			});
+		} finally {
+			console.log = log;
+		}
+		const parsed = JSON.parse(lines[0]);
+		expect(parsed.event).toBe('share.session.denied_auth');
+		expect(parsed.ts).not.toBe('overridden');
+		expect(parsed).toMatchObject({ requestId: null, shareId: 7, reason: 'bad_sec' });
 	});
 
 	it('keeps init.js on its own literal instead of importing service constants', () => {

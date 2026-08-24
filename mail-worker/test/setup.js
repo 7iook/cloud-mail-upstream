@@ -57,6 +57,12 @@ const MAIL_SHARE_COLUMNS = [
 
 let seedSeq = 0;
 
+// 行 ID 只接受安全整数正数。`value > 0` 单独用会放行 '1e3' / '1.5' / true / Infinity ——
+// 这些形状进到 D1 绑定后被静默强转，种子行的主键语义就和用例断言对不上了。
+function isRowId(value) {
+	return Number.isSafeInteger(value) && value > 0;
+}
+
 function sqlTime(offsetSeconds = 0) {
 	return new Date(Date.now() + offsetSeconds * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
@@ -96,7 +102,7 @@ export async function seedShareRow(overrides = {}) {
 		credentialsVersion: 0,
 		...overrides
 	};
-	if (!(row.userId > 0) || !(row.accountId > 0)) {
+	if (!isRowId(row.userId) || !isRowId(row.accountId)) {
 		throw new Error('seedShareRow needs positive userId and accountId (AC-LIFE-10 forbids a 0 primary account_id)');
 	}
 	const columns = MAIL_SHARE_COLUMNS.map(([column]) => column).join(', ');
@@ -114,7 +120,7 @@ export async function seedShareRow(overrides = {}) {
  * 主 Binding = 同一 share 下 `binding_id` 最小的那条，所以调用顺序即主次顺序。
  */
 export async function seedBindingRow({ shareId, accountId, windowStartEmailId = 0 } = {}) {
-	if (!(shareId > 0) || !(accountId > 0)) {
+	if (!isRowId(shareId) || !isRowId(accountId)) {
 		throw new Error('seedBindingRow needs positive shareId and accountId');
 	}
 	const inserted = await env.db.prepare(`

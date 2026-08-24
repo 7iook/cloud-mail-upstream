@@ -72,11 +72,12 @@ export function assertCapabilityV2(c, intent) {
 // 调用方只传诊断字段,禁止传 sec / authKey / token / IP / 邮箱地址等 PII 与凭据。
 export function logShareEvent(event, fields = {}) {
 	const { requestId = null, shareId = null, ...rest } = fields;
+	// 诊断字段先铺，规范字段后写：调用方传进来的 event / ts 只能被覆盖，不能反过来改写信封。
 	console.log(JSON.stringify({
+		...rest,
 		event,
 		requestId,
 		shareId,
-		...rest,
 		ts: new Date().toISOString()
 	}));
 }
