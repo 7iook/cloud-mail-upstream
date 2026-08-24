@@ -139,13 +139,11 @@ function toNullableCount(value) {
 	return count;
 }
 
-// AC-CAP-09/10:`accountIds` 优先,缺失才回落旧 `accountId` 单值。去重 + 升序是三处口径的
-// 共同前提 —— 表级 UNIQUE(share_id, account_id) 只收一条,栅栏计数、上限计数与指纹必须同口径;
-// 升序还让 accountIds[0] 恒等于 ORDER BY 写入的主 Binding(binding_id 最小)。
-function toAccountIdSet(params) {
-	const raw = params && params.accountIds != null
-		? (Array.isArray(params.accountIds) ? params.accountIds : [params.accountIds])
-		: [params && params.accountId];
+// 去重 + 升序是三处口径的共同前提 —— 表级 UNIQUE(share_id, account_id) 只收一条,
+// 栅栏计数、上限计数与指纹必须同口径;升序还让 ids[0] 恒等于 ORDER BY 写入的主 Binding
+// (binding_id 最小)。单值与数组同收,`null`/缺省即空集。
+function toIdSet(value) {
+	const raw = value == null ? [] : (Array.isArray(value) ? value : [value]);
 	const seen = new Set();
 	const ids = [];
 	for (const item of raw) {
@@ -157,6 +155,11 @@ function toAccountIdSet(params) {
 		ids.push(id);
 	}
 	return ids.sort((left, right) => left - right);
+}
+
+// AC-CAP-09/10:`accountIds` 优先,缺失才回落旧 `accountId` 单值。
+function toAccountIdSet(params) {
+	return toIdSet(params && params.accountIds != null ? params.accountIds : (params && params.accountId));
 }
 
 // 字段顺序是指纹的一部分:JSON.stringify 按插入顺序序列化,所以这里必须一次性构造整个字面量,
@@ -338,13 +341,19 @@ function projectOwnerRow(row, mailbox, now) {
 	};
 }
 
-async function applyRevoke(c, whereSql, binds) {
+// 撤销谓词的唯一真源:revoke / 级联 / T-13 删空转撤销共用。返回未执行的语句,
+// 让「删空即撤销」能与同一批的 DELETE 一起提交(AC-BIND-04)。
+function prepareRevoke(c, whereSql, binds) {
 	return c.env.db.prepare(`
 		UPDATE mail_share
 		SET status = 'REVOKED', revoked_at = ?
 		WHERE ${whereSql} AND status = 'ACTIVE'
 		RETURNING share_id
-	`).bind(nowText(), ...binds).all();
+	`).bind(nowText(), ...binds);
+}
+
+async function applyRevoke(c, whereSql, binds) {
+	return prepareRevoke(c, whereSql, binds).all();
 }
 
 // AC-CAP-02:shareType 由现存 Binding 计数实时派生,不落库(落列即双真源)。
@@ -491,7 +500,10 @@ function prepareShareInsert(c, values) {
 // AC-BIND-10(条件 INSERT,account 存活且归属)。share 未插入 → `ms.lid = ?` 零行 →
 // binding 零行,不需要额外守卫。`ORDER BY a.account_id` 让 AUTOINCREMENT 的 binding_id
 // 顺序等于 accountIds 的升序,主 Binding 与主表初值因此恒等。
+// WHERE 里的归属计数谓词让本语句自身「全有或全无」:只要有一个 account 在预检之后被删掉,
+// 整条语句零行而不是插一半 —— D1 的 batch 只在语句报错时回滚,插一半不报错,会就地提交。
 function prepareBindingInsert(c, values) {
+	const owned = placeholders(values.accountIds);
 	return c.env.db.prepare(`
 		INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id)
 		SELECT ms.share_id, a.account_id,
@@ -499,11 +511,49 @@ function prepareBindingInsert(c, values) {
 				THEN (SELECT COALESCE(MAX(e.email_id), 0) FROM email e WHERE e.account_id = a.account_id)
 				ELSE 0 END
 		FROM mail_share ms
-		JOIN account a ON a.account_id IN (${placeholders(values.accountIds)})
+		JOIN account a ON a.account_id IN (${owned})
 			AND a.user_id = ? AND a.is_del = ${isDel.NORMAL}
 		WHERE ms.lid = ?
+		AND (
+			SELECT COUNT(*) FROM account
+			WHERE account_id IN (${owned}) AND user_id = ? AND is_del = ${isDel.NORMAL}
+		) = ?
 		ORDER BY a.account_id ASC
-	`).bind(values.onlyMessagesAfterCreated, ...values.accountIds, values.userId, values.lid);
+	`).bind(
+		values.onlyMessagesAfterCreated,
+		...values.accountIds,
+		values.userId,
+		values.lid,
+		...values.accountIds,
+		values.userId,
+		values.accountIds.length
+	);
+}
+
+// AC-BIND-12 的三重资源谓词:binding_id + share_id + owner(经 mail_share 回查 user_id)。
+// 同批还有 add 时再挂一条「新增行确已落库」的守卫 —— 0 行 INSERT 不报错也就不触发回滚,
+// DELETE 必须自己看得见 add 的结果,否则会单独提交成半单变更。
+function prepareBindingDelete(c, values) {
+	const guardSql = values.addAccountIds.length
+		? `AND (
+				SELECT COUNT(*) FROM mail_share_binding added
+				WHERE added.share_id = mail_share_binding.share_id
+					AND added.account_id IN (${placeholders(values.addAccountIds)})
+			) = ?`
+		: '';
+	const guardBinds = values.addAccountIds.length
+		? [...values.addAccountIds, values.addAccountIds.length]
+		: [];
+	return c.env.db.prepare(`
+		DELETE FROM mail_share_binding
+		WHERE binding_id IN (${placeholders(values.bindingIds)})
+			AND share_id = ?
+			AND EXISTS (
+				SELECT 1 FROM mail_share ms
+				WHERE ms.share_id = mail_share_binding.share_id AND ms.user_id = ?
+			)
+			${guardSql}
+	`).bind(...values.bindingIds, values.shareId, values.userId, ...guardBinds);
 }
 
 // Expand 阶段双写(design.md「迁移/发布协议」步骤 1 / AC-LIFE-10 + R2):主表 `account_id` 与
@@ -611,6 +661,49 @@ async function insertShareAndIdempotency(c, values) {
 	throw new BizError('SHARE_LIMIT_EXCEEDED');
 }
 
+// 变更入口只认 effectiveStatus=ACTIVE 的本人分享(AC-BIND-02)。他人 / 不存在 / 已撤销 /
+// 已过期共用 revoke 的 `SHARE_NOT_FOUND`,不新增可区分错误码。
+async function loadMutableShare(c, shareId, userId) {
+	const row = isRowId(shareId) ? await c.env.db.prepare(`
+		SELECT share_id, lid, only_messages_after_created FROM mail_share
+		WHERE share_id = ? AND user_id = ? AND status = 'ACTIVE' AND expires_at > ?
+	`).bind(shareId, userId, nowText()).first() : null;
+	if (!row) {
+		throw new BizError('SHARE_NOT_FOUND');
+	}
+	return row;
+}
+
+// 全部拒绝路径都排在建 batch 之前(AC-BIND-12「零残留」):D1 没有 BEGIN,batch 一旦提交
+// 就没有回头路,只有语句报错才回滚。写入侧仍各自带同款谓词,与并发删除赛跑时整批零变更。
+function assertBindingChange(c, values) {
+	if (!values.add.every(isRowId)) {
+		throw new BizError('SHARE_ACCOUNT_FORBIDDEN');
+	}
+	// 不属于本分享的 bindingId(他人分享 / 已删 / 根本不存在)共用一个错误码:
+	// 错误码可区分本身就是存在性探针。
+	const known = new Set(values.current.map((binding) => binding.bindingId));
+	if (!values.remove.every((bindingId) => known.has(bindingId))) {
+		throw new BizError('SHARE_BINDING_FORBIDDEN');
+	}
+	// 表级 UNIQUE(share_id, account_id) 兜底,但先拒才有零残留:同批 INSERT 在 DELETE 之前,
+	// 「移除某邮箱又同时加回来」也走这条 —— 想换窗口快照请分两次提交。
+	const bound = new Set(values.current.map((binding) => binding.accountId));
+	if (values.add.some((accountId) => bound.has(accountId))) {
+		throw new BizError('SHARE_BINDING_DUPLICATE');
+	}
+	// 上限看变更后的投影数,不是现存数;与 create 同序 —— 上限(永久领域错误)排在栅栏(暂时发布态)前。
+	const projected = values.current.length + values.add.length - values.remove.length;
+	if (projected > SHARE_BINDING_LIMIT) {
+		throw new BizError('SHARE_BINDING_LIMIT_EXCEEDED');
+	}
+	// AC-LIFE-11 ②:使现存 Binding 数变大且大于 1 的变更,旧 Worker 执行不了。
+	// 缩减(N→1 / 1→0)与等量替换不触发。
+	if (projected > 1 && projected > values.current.length) {
+		assertCapabilityV2(c, SHARE_V2_INTENT.BINDING_EXPAND);
+	}
+}
+
 const mailShareService = {
 	async create(c, params, userId) {
 		if (isShareDisabled(c)) {
@@ -683,6 +776,67 @@ const mailShareService = {
 			return inserted.replay;
 		}
 		return firstCreateResponse(c, inserted, sec, authKey, await loadBindings(c, inserted.share_id));
+	},
+
+	// AC-BIND-12:add/remove 是一条全有或全无的命令,全部变更进同一个 `c.env.db.batch()`。
+	async updateBindings(c, params, userId) {
+		const shareId = Number(params && params.shareId);
+		const share = await loadMutableShare(c, shareId, userId);
+		const add = toIdSet(params && params.add);
+		const remove = toIdSet(params && params.remove);
+		const current = await loadBindings(c, shareId);
+		assertBindingChange(c, { add, remove, current });
+		if (add.length) {
+			await assertOwnedAccounts(c, add, userId);
+		}
+
+		const statements = [];
+		let addIndex = -1;
+		if (add.length) {
+			addIndex = statements.length;
+			// 同一条 INSERT…SELECT,与 create 共用:窗口快照口径取本分享的 only_messages_after_created
+			// (true → 加入时刻 MAX(email_id),false → 0,AC-BIND-02)。
+			statements.push(prepareBindingInsert(c, {
+				onlyMessagesAfterCreated: share.only_messages_after_created,
+				accountIds: add,
+				userId,
+				lid: share.lid
+			}));
+		}
+		if (remove.length) {
+			statements.push(prepareBindingDelete(c, { bindingIds: remove, shareId, userId, addAccountIds: add }));
+		}
+		// AC-BIND-04:删空即撤销。谓词读同批 DELETE 之后的真实状态,不信预检算出的投影数。
+		statements.push(prepareRevoke(c, `share_id = ? AND user_id = ? AND NOT EXISTS (
+			SELECT 1 FROM mail_share_binding b WHERE b.share_id = mail_share.share_id
+		)`, [shareId, userId]));
+		// AC-LIFE-10 双写:主表两列跟随剩余主 Binding;无 Binding 时助手自身零变更,不写 0。
+		statements.push(syncPrimaryAccountId(c, shareId));
+
+		try {
+			const results = await c.env.db.batch(statements);
+			// 与 account 删除并发时 INSERT 是零行而不是报错;DELETE 的守卫已让整批零变更,
+			// 这里只负责把它翻译成 AC-BIND-10 的错误码。
+			if (addIndex >= 0 && results[addIndex].meta.changes !== add.length) {
+				throw new BizError('SHARE_ACCOUNT_FORBIDDEN');
+			}
+		} catch (err) {
+			if (err instanceof BizError) {
+				throw err;
+			}
+			if (isUniqueConflict(err)) {
+				throw new BizError('SHARE_BINDING_DUPLICATE');
+			}
+			throw err;
+		}
+
+		const bindings = await loadBindings(c, shareId);
+		return {
+			shareId,
+			status: bindings.length ? 'ACTIVE' : 'REVOKED',
+			shareType: shareTypeOf(bindings),
+			bindings
+		};
 	},
 
 	async list(c, _params, userId) {

@@ -1,6 +1,8 @@
-import { env } from 'cloudflare:test';
+import { env, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import { emailConst, isDel } from '../src/const/entity-const';
+import KvConst from '../src/const/kv-const';
+import jwtUtils from '../src/utils/jwt-utils';
 import shareAuthService from '../src/service/share-auth-service';
 import mailShareService, {
 	SHARE_BINDING_LIMIT,
@@ -107,6 +109,7 @@ async function cleanup() {
 	await env.db.prepare('DELETE FROM email WHERE user_id IN (?, ?) OR subject LIKE ?').bind(USER_A, USER_B, 't09-%').run();
 	await env.db.prepare('DELETE FROM account WHERE account_id IN (?, ?, ?) OR email LIKE ?')
 		.bind(ACC_A, ACC_B, ACC_C, 't09-%@example.com').run();
+	await env.db.prepare('DELETE FROM user WHERE user_id IN (?, ?)').bind(USER_A, USER_B).run();
 }
 
 afterEach(async () => {
@@ -1388,5 +1391,456 @@ describe('structured share observability events (R2-F2 / R3-A7)', () => {
 	it('keeps init.js on its own literal instead of importing service constants', () => {
 		expect(initSource).toContain("event: 'share.migrate.invalid_row'");
 		expect(initSource).not.toMatch(/from\s+['"].*mail-share-service/);
+	});
+});
+
+// ── T-13 · bindings 增删（全有或全无原子命令）────────────────────────────────
+// 分享行一律用 seedShareRow + seedBindingRow 直接造：create 走 V2 栅栏，而这里要测的
+// 是「已经存在 N 条 Binding 的分享」被增删时的行为，两者是不同的写入口。
+async function seedShareWithBindings(accountIds, overrides = {}) {
+	const share = await seedShareRow({ userId: USER_A, accountId: accountIds[0], ...overrides });
+	const bindingIds = [];
+	for (const accountId of accountIds) {
+		bindingIds.push(await seedBindingRow({ shareId: share.shareId, accountId }));
+	}
+	return { ...share, bindingIds };
+}
+
+async function bindingAccountIds(shareId) {
+	return (await listBindings(shareId)).map((row) => row.account_id);
+}
+
+function batchProbe() {
+	const seen = [];
+	let batches = 0;
+	const prepare = env.db.prepare.bind(env.db);
+	const batch = env.db.batch.bind(env.db);
+	const db = new Proxy(env.db, {
+		get(target, prop) {
+			if (prop === 'prepare') {
+				return (sql) => {
+					seen.push(String(sql));
+					return prepare(sql);
+				};
+			}
+			if (prop === 'batch') {
+				return (statements) => {
+					batches += 1;
+					return batch(statements);
+				};
+			}
+			const value = target[prop];
+			return typeof value === 'function' ? value.bind(target) : value;
+		}
+	});
+	return { seen, db, batchCount: () => batches };
+}
+
+const ACC_D = 909104;
+const MAIL_D = 't09-owner-d@example.com';
+
+// 把 account 软删塞进预检与 batch 之间：写入侧谓词是唯一防线，预检只决定错误码。
+function killAccountOnBatch(accountId) {
+	const realBatch = env.db.batch.bind(env.db);
+	return new Proxy(env.db, {
+		get(target, prop) {
+			if (prop === 'batch') {
+				return async (statements) => {
+					await env.db.prepare('UPDATE account SET is_del = ? WHERE account_id = ?')
+						.bind(isDel.DELETE, accountId).run();
+					return realBatch(statements);
+				};
+			}
+			const value = target[prop];
+			return typeof value === 'function' ? value.bind(target) : value;
+		}
+	});
+}
+
+const OWNER_EMAIL = 't13-owner@example.com';
+
+async function ownerJwt() {
+	await env.db.prepare('DELETE FROM user WHERE user_id = ? OR email = ?').bind(USER_A, OWNER_EMAIL).run();
+	await env.db.prepare(`
+		INSERT INTO user (user_id, email, type, password, salt, status, is_del)
+		VALUES (?, ?, 0, 'x', 'x', 0, 0)
+	`).bind(USER_A, OWNER_EMAIL).run();
+	const token = crypto.randomUUID();
+	const jwt = await jwtUtils.generateToken({ env }, { userId: USER_A, token });
+	await env.kv.put(KvConst.AUTH_INFO + USER_A, JSON.stringify({
+		tokens: [token],
+		user: { userId: USER_A, email: OWNER_EMAIL },
+		refreshTime: new Date().toISOString()
+	}));
+	return jwt;
+}
+
+async function putBindings(jwt, body) {
+	const response = await SELF.fetch('http://example.com/api/mailShare/bindings', {
+		method: 'PUT',
+		headers: { Authorization: jwt, 'content-type': 'application/json', 'accept-language': 'en' },
+		body: JSON.stringify(body)
+	});
+	return { status: response.status, json: await response.json() };
+}
+
+describe('mailShareService.updateBindings (T-13)', () => {
+	it('adds an owned live mailbox and snapshots its own window (AC-BIND-02)', async () => {
+		await seedOwners();
+		await insertEmail(ACC_A, USER_A, 't09-bind-a1');
+		await insertEmail(ACC_C, USER_A, 't09-bind-c1');
+		const maxC = await insertEmail(ACC_C, USER_A, 't09-bind-c2');
+		const share = await seedShareWithBindings([ACC_A]);
+
+		const result = await mailShareService.updateBindings(v2ctx(), {
+			shareId: share.shareId,
+			add: [ACC_C]
+		}, USER_A);
+
+		const rows = await listBindings(share.shareId);
+		expect(rows.map((row) => [row.account_id, row.window_start_email_id])).toEqual([
+			[ACC_A, 0],
+			[ACC_C, maxC]
+		]);
+		expect(result.shareType).toBe('multi');
+		expect(result.bindings).toEqual(rows.map((row) => ({ bindingId: row.binding_id, accountId: row.account_id })));
+	});
+
+	it('snapshots the new binding window at 0 when only_messages_after_created is false (AC-BIND-02)', async () => {
+		await seedOwners();
+		await insertEmail(ACC_C, USER_A, 't09-bind-zero');
+		const share = await seedShareWithBindings([ACC_A], { onlyMessagesAfterCreated: 0 });
+
+		await mailShareService.updateBindings(v2ctx(), { shareId: share.shareId, add: [ACC_C] }, USER_A);
+
+		const rows = await listBindings(share.shareId);
+		expect(rows.map((row) => row.window_start_email_id)).toEqual([0, 0]);
+	});
+
+	it('refuses the add with zero residue when the account dies after the precheck (AC-BIND-10)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+
+		const message = await catchBiz(mailShareService.updateBindings({
+			env: shareEnv({ db: killAccountOnBatch(ACC_C), SHARE_CAPABILITY_V2: 'true' })
+		}, { shareId: share.shareId, add: [ACC_C] }, USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+		expect((await readShareRow(share.shareId)).status).toBe('ACTIVE');
+	});
+
+	// 这两条直击 batch 的语义边界：D1 只在语句报错时回滚，0 行 INSERT 会就地提交，
+	// 所以 add 必须自己「全有或全无」，remove 必须看得见 add 的结果才敢删。
+	it('inserts every add or none when one of them dies after the precheck (AC-BIND-10)', async () => {
+		await seedOwners();
+		await ensureAccount({ accountId: ACC_D, email: MAIL_D, userId: USER_A });
+		const share = await seedShareWithBindings([ACC_A]);
+
+		const message = await catchBiz(mailShareService.updateBindings({
+			env: shareEnv({ db: killAccountOnBatch(ACC_D), SHARE_CAPABILITY_V2: 'true' })
+		}, { shareId: share.shareId, add: [ACC_C, ACC_D] }, USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+	});
+
+	it('does not commit the remove when the add is emptied by a concurrent delete (AC-BIND-12)', async () => {
+		await seedOwners();
+		await ensureAccount({ accountId: ACC_D, email: MAIL_D, userId: USER_A });
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const message = await catchBiz(mailShareService.updateBindings({
+			env: shareEnv({ db: killAccountOnBatch(ACC_D), SHARE_CAPABILITY_V2: 'true' })
+		}, { shareId: share.shareId, add: [ACC_D], remove: [share.bindingIds[0]] }, USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A, ACC_C]);
+		expect((await readShareRow(share.shareId)).status).toBe('ACTIVE');
+	});
+
+	it('rejects an add that belongs to another owner (AC-BIND-10)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+
+		const message = await catchBiz(mailShareService.updateBindings(v2ctx(), {
+			shareId: share.shareId,
+			add: [ACC_B]
+		}, USER_A));
+
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+	});
+
+	it('rejects a malformed accountId in add (AC-BIND-10)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+
+		for (const add of [[0], [-1], [1.5], [null], [Infinity], [ACC_C, 0]]) {
+			expect(await catchBiz(mailShareService.updateBindings(v2ctx(), {
+				shareId: share.shareId,
+				add
+			}, USER_A))).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		}
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+	});
+
+	it('rejects adding a mailbox the share already binds (AC-BIND-07)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const message = await catchBiz(mailShareService.updateBindings(v2ctx(), {
+			shareId: share.shareId,
+			add: [ACC_C]
+		}, USER_A));
+
+		expect(message).toBe('SHARE_BINDING_DUPLICATE');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A, ACC_C]);
+	});
+
+	it('removes a binding located by binding_id + share_id + owner (AC-BIND-03)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const result = await mailShareService.updateBindings(ctx(), {
+			shareId: share.shareId,
+			remove: [share.bindingIds[1]]
+		}, USER_A);
+
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+		expect(result.shareType).toBe('single');
+		expect(result.status).toBe('ACTIVE');
+		expect((await readShareRow(share.shareId)).status).toBe('ACTIVE');
+	});
+
+	it('refuses the whole command when a bindingId belongs to another share (AC-BIND-12)', async () => {
+		await seedOwners();
+		const mine = await seedShareWithBindings([ACC_A]);
+		const other = await seedShareWithBindings([ACC_C]);
+
+		const message = await catchBiz(mailShareService.updateBindings(ctx(), {
+			shareId: mine.shareId,
+			remove: [mine.bindingIds[0], other.bindingIds[0]]
+		}, USER_A));
+
+		expect(message).toBe('SHARE_BINDING_FORBIDDEN');
+		expect(await bindingAccountIds(mine.shareId)).toEqual([ACC_A]);
+		expect(await bindingAccountIds(other.shareId)).toEqual([ACC_C]);
+	});
+
+	// 他人 Binding 与根本不存在的 Binding 必须返回同一个错误码，否则错误码本身就是存在性探针。
+	it('does not distinguish another owner binding from an unknown one (AC-BIND-12)', async () => {
+		await seedOwners();
+		const mine = await seedShareWithBindings([ACC_A]);
+		const theirs = await seedShareRow({ userId: USER_B, accountId: ACC_B });
+		const theirBinding = await seedBindingRow({ shareId: theirs.shareId, accountId: ACC_B });
+
+		const foreign = await catchBiz(mailShareService.updateBindings(ctx(), {
+			shareId: mine.shareId,
+			remove: [theirBinding]
+		}, USER_A));
+		const unknown = await catchBiz(mailShareService.updateBindings(ctx(), {
+			shareId: mine.shareId,
+			remove: [88880000]
+		}, USER_A));
+
+		expect(foreign).toBe('SHARE_BINDING_FORBIDDEN');
+		expect(unknown).toBe(foreign);
+		expect(await bindingAccountIds(mine.shareId)).toEqual([ACC_A]);
+		expect(await bindingAccountIds(theirs.shareId)).toEqual([ACC_B]);
+	});
+
+	it('rolls the add back when one removed bindingId is invalid (AC-BIND-12)', async () => {
+		await seedOwners();
+		const mine = await seedShareWithBindings([ACC_A]);
+		const other = await seedShareWithBindings([ACC_C]);
+
+		const message = await catchBiz(mailShareService.updateBindings(v2ctx(), {
+			shareId: mine.shareId,
+			add: [ACC_C],
+			remove: [other.bindingIds[0]]
+		}, USER_A));
+
+		expect(message).toBe('SHARE_BINDING_FORBIDDEN');
+		expect(await bindingAccountIds(mine.shareId)).toEqual([ACC_A]);
+		expect(await bindingAccountIds(other.shareId)).toEqual([ACC_C]);
+	});
+
+	it('revokes the share when the last binding is removed (AC-BIND-04)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+
+		const result = await mailShareService.updateBindings(ctx(), {
+			shareId: share.shareId,
+			remove: share.bindingIds
+		}, USER_A);
+
+		expect(result.bindings).toEqual([]);
+		expect(result.status).toBe('REVOKED');
+		const row = await readShareRow(share.shareId);
+		expect(row.status).toBe('REVOKED');
+		expect(row.revoked_at).toEqual(expect.any(String));
+		// 主表 account_id 是 NOT NULL 且禁止写 0：没有 Binding 可跟随时停在旧值（AC-LIFE-10）。
+		expect(row.account_id).toBe(ACC_A);
+	});
+
+	it('keeps the share ACTIVE while any binding survives (AC-BIND-04)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		await mailShareService.updateBindings(ctx(), {
+			shareId: share.shareId,
+			remove: [share.bindingIds[0]]
+		}, USER_A);
+
+		const row = await readShareRow(share.shareId);
+		expect(row.status).toBe('ACTIVE');
+		expect(row.revoked_at == null).toBe(true);
+	});
+
+	it('dual-writes the primary account_id and window onto the main row (AC-LIFE-10)', async () => {
+		await seedOwners();
+		const maxA = await insertEmail(ACC_A, USER_A, 't09-primary-follow');
+		const share = await seedShareWithBindings([ACC_C]);
+
+		await mailShareService.updateBindings(v2ctx(), { shareId: share.shareId, add: [ACC_A] }, USER_A);
+		expect(await readPrimaryAccountId(share.shareId)).toBe(ACC_C);
+
+		await mailShareService.updateBindings(ctx(), {
+			shareId: share.shareId,
+			remove: [share.bindingIds[0]]
+		}, USER_A);
+
+		const row = await readShareRow(share.shareId);
+		expect(row.account_id).toBe(ACC_A);
+		expect(row.window_start_email_id).toBe(maxA);
+	});
+
+	it('rejects a 1 to N expansion while SHARE_CAPABILITY_V2 is off (AC-LIFE-11)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+
+		const message = await catchBiz(mailShareService.updateBindings(ctx(), {
+			shareId: share.shareId,
+			add: [ACC_C]
+		}, USER_A));
+
+		expect(message).toBe('SHARE_INVALID_CONFIG');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
+	});
+
+	it('needs no capability fence to shrink or hold the binding count (AC-LIFE-11)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const result = await mailShareService.updateBindings(ctx(), {
+			shareId: share.shareId,
+			remove: [share.bindingIds[1]]
+		}, USER_A);
+
+		expect(result.bindings.map((binding) => binding.accountId)).toEqual([ACC_A]);
+	});
+
+	it('rejects the command when the projected count passes SHARE_BINDING_LIMIT (AC-CAP-13)', async () => {
+		await seedOwners();
+		const filler = Array.from({ length: SHARE_BINDING_LIMIT - 1 }, (_unused, index) => 991000 + index);
+		const share = await seedShareWithBindings([ACC_A, ...filler]);
+
+		const message = await catchBiz(mailShareService.updateBindings(v2ctx(), {
+			shareId: share.shareId,
+			add: [ACC_C]
+		}, USER_A));
+
+		expect(message).toBe('SHARE_BINDING_LIMIT_EXCEEDED');
+		expect((await listBindings(share.shareId))).toHaveLength(SHARE_BINDING_LIMIT);
+	});
+
+	// 上限看的是变更后的投影数，不是变更前的现存数：满仓时「删一个加一个」仍然合法。
+	it('measures the cap against the projected count, not the current one (AC-CAP-13)', async () => {
+		await seedOwners();
+		const filler = Array.from({ length: SHARE_BINDING_LIMIT - 1 }, (_unused, index) => 992000 + index);
+		const share = await seedShareWithBindings([ACC_A, ...filler]);
+
+		const result = await mailShareService.updateBindings(v2ctx(), {
+			shareId: share.shareId,
+			add: [ACC_C],
+			remove: [share.bindingIds[0]]
+		}, USER_A);
+
+		expect(result.bindings).toHaveLength(SHARE_BINDING_LIMIT);
+		expect(result.bindings.some((binding) => binding.accountId === ACC_C)).toBe(true);
+		expect(result.bindings.some((binding) => binding.accountId === ACC_A)).toBe(false);
+	});
+
+	// P-BIND-02：命令返回的集合就是库里的集合，Visitor 下一次读不需要等任何缓存过期。
+	it('returns exactly the set an immediate reload sees (P-BIND-02, AC-BIND-08)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_C]);
+
+		const applied = await mailShareService.updateBindings(v2ctx(), {
+			shareId: share.shareId,
+			add: [ACC_A],
+			remove: [share.bindingIds[0]]
+		}, USER_A);
+
+		const reloaded = await listBindings(share.shareId);
+		expect(applied.bindings).toEqual(reloaded.map((row) => ({
+			bindingId: row.binding_id,
+			accountId: row.account_id
+		})));
+		expect(applied.bindings.map((binding) => binding.accountId)).toEqual([ACC_A]);
+	});
+
+	it('hides shares that are missing, owned by someone else, revoked or expired (AC-MGMT-07)', async () => {
+		await seedOwners();
+		const theirs = await seedShareWithBindings([ACC_C], { userId: USER_B });
+		const revoked = await seedShareWithBindings([ACC_A], { status: 'REVOKED', revokedAt: '2001-01-01 00:00:00' });
+		const expired = await seedShareWithBindings([ACC_A], { expiresAt: '2001-01-01 00:00:00' });
+
+		for (const shareId of [88881111, theirs.shareId, revoked.shareId, expired.shareId]) {
+			expect(await catchBiz(mailShareService.updateBindings(ctx(), {
+				shareId,
+				remove: [1]
+			}, USER_A))).toBe('SHARE_NOT_FOUND');
+		}
+		expect(await bindingAccountIds(theirs.shareId)).toEqual([ACC_C]);
+		expect(await bindingAccountIds(revoked.shareId)).toEqual([ACC_A]);
+		expect(await bindingAccountIds(expired.shareId)).toEqual([ACC_A]);
+	});
+
+	// 一个 batch = 一次提交：D1 没有 BEGIN，跨 batch 的第二条语句失败就再也回不去了。
+	// Binding INSERT 只有一套方言：create 与 bindings 两个写入口必须落到同一条 SQL 文本。
+	it('commits every mutation in one batch and reuses the create binding INSERT (AC-BIND-12)', async () => {
+		await seedOwners();
+		const share = await seedShareWithBindings([ACC_A]);
+		const probe = batchProbe();
+
+		await mailShareService.updateBindings({
+			env: shareEnv({ db: probe.db, SHARE_CAPABILITY_V2: 'true' })
+		}, { shareId: share.shareId, add: [ACC_C], remove: [share.bindingIds[0]] }, USER_A);
+
+		expect(probe.batchCount()).toBe(1);
+		const bindingInserts = probe.seen.filter((sql) => /INSERT\s+INTO\s+mail_share_binding/i.test(sql));
+		expect(bindingInserts).toHaveLength(1);
+
+		const createProbe = batchProbe();
+		await mailShareService.create({ env: shareEnv({ db: createProbe.db }) }, createParams(), USER_A);
+		const createInsert = createProbe.seen.find((sql) => /INSERT\s+INTO\s+mail_share_binding/i.test(sql));
+		expect(bindingInserts[0]).toBe(createInsert);
+	});
+
+	it('serves PUT /mailShare/bindings over HTTP for the owner', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const share = await seedShareWithBindings([ACC_A, ACC_C]);
+
+		const ok = await putBindings(jwt, { shareId: share.shareId, remove: [share.bindingIds[1]] });
+		expect(ok.json.code).toBe(200);
+		expect(ok.json.data.shareType).toBe('single');
+		expect(ok.json.data.bindings.map((binding) => binding.accountId)).toEqual([ACC_A]);
+
+		const forbidden = await putBindings(jwt, { shareId: share.shareId, remove: [88882222] });
+		expect(forbidden.json.message).toBe('SHARE_BINDING_FORBIDDEN');
+		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
 	});
 });

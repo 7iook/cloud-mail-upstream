@@ -32,6 +32,12 @@ app.get('/mailShare/list', withShare(async (c) => {
 	return shareJson(c, shareResult.ok(data));
 }));
 
+app.put('/mailShare/bindings', withShare(async (c) => {
+	const body = await c.req.json();
+	const data = await mailShareService.updateBindings(c, body, userContext.getUserId(c));
+	return shareJson(c, shareResult.ok(data));
+}));
+
 app.delete('/mailShare/revoke', withShare(async (c) => {
 	const data = await mailShareService.revoke(c, c.req.query(), userContext.getUserId(c));
 	return shareJson(c, shareResult.ok(data));
