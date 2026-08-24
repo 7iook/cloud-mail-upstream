@@ -161,6 +161,7 @@
 | T25-ACTIVE-0 | CHANGE:单邮箱也设 `activeBinding`（可为 0）；禁 `if (bindingId)` | recon-t25 |
 | Fog-2 T-25 | CHANGE:`getShareMailboxesStatus` 归 T-25；T-26 只加 Idempotency-Key | recon-t25；tasks.md T-26.2 已改写 |
 | Fog-3 T-25 | CHANGE:`useSharePolling.js` 零改；水位纯函数自带 spec | recon-t25 |
+| T25-ALWAYS-FETCH | CHANGE:每 tick 1 status + 1 mails；水位只驱动角标，不跳过取数 | recon-t25；保旧轮询用例 / 防 seed 吞信 |
 
 ## 冲突热区占用
 
@@ -171,20 +172,22 @@
 | `mail-vue/src/views/share-admin/*` | T-21/`T-22` 已收口 | `status.js` / 抽屉 / 向导其后只读；T-29 清 PENDING_COPY |
 | `mail-vue/src/perm/perm.js` | T-20 已入库 `672da73` | 其后只加路由须新任务 |
 | `share-auth-service.js` | T-08 复审通过 | T-09 只跑测；形状已冻结 |
-| `share-api.js` / `share-mail-service.js` | 只读至 T-24 APPROVED | T-25 只加 `bindingId` → `listForBinding` 接线，不改范围模型 |
+| `share-api.js` / `share-mail-service.js` | **T-25 当前写者** | 只加 `bindingId` → `listForBinding` 接线，不改范围模型 |
 | `security.js` | T-17 已入库 `d18f027` | 其后只读，除非再加 Owner 路径 |
 | `mail-share-service.js` | T-18 已入库 `73dc371` | 其后只读，除非再开任务 |
 | `mail-share-cleanup-service.js` | T-18 已入库 `73dc371` | 其后只读 |
 | `share-scoped-email-repository.js` | T-14 已加 `latestByBinding` | 只读，除非范围模型再变 |
 | `mail-vue/src/views/email/ShareDialog.*` | T-23 已收口 `4f4cc65` | 其后 T-29 才清 PENDING_COPY |
-| `mail-vue/src/views/share/index.vue` | **T-24 当前写者** | 与 T-25/T-26 同触，串行；T-25/T-26 等 T-24 APPROVED |
+| `mail-vue/src/views/share/index.vue` | **T-25 当前写者** | T-24 已收口 `baab349`；T-26 等 T-25 APPROVED |
 | `mail-vue/src/views/share/session.js` | T-26 | T-24/T-25 0 行 |
 | `useSharePolling.js` | 只读 | T-25 零改；T-26 只注入 `intervalMs` |
-| `mail-vue/src/request/share.js` | **T-25 下一写者** | status + `listShareMails` 可选 bindingId；T-26 只加 Idempotency-Key |
+| `mail-vue/src/request/share.js` | **T-25 当前写者** | status + `listShareMails` 可选 bindingId；T-26 只加 Idempotency-Key |
 | i18n | 无 | T-29 收口 |
 
 ## Update Log
 
+- 2026-08-24 · 主 AI：派出 T-25 实现（tabs + watermark + listForBinding）。热区 `index.vue` / `request/share.js` / `share-api.js` 现为 T-25 写者。未勾选尾：T-25 → T-29。
+- 2026-08-24 · 主 AI：T-24 APPROVED p0=0（`review-t24.md`）。主 AI 独立 22+1 · vue 21/189 · worker 18/619 · E2E 13。未勾选尾：T-25 → T-29。
 - 2026-08-24 · 主 AI：T-24 实现待审查。未勾选。未勾选尾：T-24 审查 / T-25 → T-29。
 - 2026-08-24 · 主 AI：T-25 侦察已落并裁 Fog-1（接线 listForBinding）/ Fog-2（status 归 T-25）/ Fog-3（composable 零改）。未派 T-25。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI：T-24 侦察已落并裁 Fog-1/2/3 + T24-SENDER/CONFIG。未勾选 T-24。未勾选尾：T-24 → T-29。

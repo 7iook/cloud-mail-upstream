@@ -382,4 +382,5 @@ tasks.md:539 要求扩展 `useSharePolling.spec.js`,tasks.md:541 要求「`useSh
 | T25-ACTIVE-0 | **CHANGE** | 单邮箱也要把 `activeBinding` 设成 `mailboxes[0].bindingId`（可为 `0`），只是不渲染 Tab。`pollTick` 在 `activeBinding == null` 时不得直接 `{list:[]}` 停刷。判空一律 `== null`。 |
 | Fog-2 | **CHANGE** | `getShareMailboxesStatus` 与 `listShareMails` 的可选 `bindingId` 都由 **T-25** 写进 `request/share.js`。T-26 同文件只加 `Idempotency-Key`。禁止在 `views/share/` 另起 axios。 |
 | Fog-3 | **CHANGE** | `useSharePolling.js` **零改**。水位语义进 `status-watermark.spec.js`；composable spec 只加 1 条注入式 tick 断言；N 路并发的端到端断言进 `index.spec.js`。 |
-| T25-WAIT-T24 | **HOLD** | T-24 未 APPROVED 前 **不派 T-25 实现**，不同触 `index.vue`。 |
+| T25-WAIT-T24 | HOLD | T-24 未 APPROVED 前 **不派 T-25 实现**，不同触 `index.vue`。现已 APPROVED（`review-t24.md` / `baab349`），本条关闭。 |
+| T25-ALWAYS-FETCH | **CHANGE** | 每 tick **1 status + 1 mails**（当前 Binding，无 cursor）。水位只驱动角标，**不**用 `!hasNew` 跳过取数。否则旧 AC-RT-14 / 轮询 UNAVAILABLE 会红，且首帧 seed 会吞空箱后到达的信。AC-OTP-07 禁的是 N 路并发，不是空闲 0 次 mails。 |

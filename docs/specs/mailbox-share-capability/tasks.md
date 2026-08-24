@@ -7,7 +7,7 @@
 | 来源 Source | docs/specs/mailbox-share-capability/design.md(converged,R1–R3 已裁决) |
 | 类型 Type | feature |
 | 创建 Created | 2026-08-24 |
-| 状态 Status | in-progress · W5 T-24 侦察已裁 · 实现中 |
+| 状态 Status | in-progress · W5 T-24 APPROVED · T-25 实现派出 |
 
 **图例 Legend**: `- [ ]` 待办 · `- [x]` 完成(必须带证据) · 行尾 `— ⛔ BLOCKED:<原因>` / `— ⏭ SKIPPED:<理由>` / `— ⏳ PENDING:<原因>` · 子任务标 `*` = red→green 测试类子任务(TDD 红灯先行)
 
@@ -531,9 +531,21 @@
 
 ### W5 · 访客页多邮箱(匿名 chunk 隔离域;T-24 组件抽取先行)
 
-- [ ] T-24 `ShareOtpCard` 组件抽取(单邮箱页重构,为多邮箱页复用铺路)
-  - [ ]* T-24.1 红→绿:从 `mail-vue/src/views/share/index.vue:255-266,31-60` 抽出 `ShareOtpCard`(featuredMail 选取 + 一键复制走 `mail-vue/src/composables/useCopyWithFallback.js` + 复制降级);`otpExtractionEnabled=false` 整区不渲染;`code=''` 邮件正常渲染不隐藏;`views/share/index.spec.js` **18** 条 `it()` 基线保持全绿(原写 15,HEAD 实测 18;只扩不改,AC-VISIT-10 可扩文件列表)
+- [x] T-24 `ShareOtpCard` 组件抽取(单邮箱页重构,为多邮箱页复用铺路)
+  - **Evidence**
+    - verify: 主 AI 独立定点 `index.spec.js` 22 + `share-chunk` 1；全量 vue 21/189、worker 18/619、E2E 13，均为 EXIT=0
+    - files: `mail-vue/src/views/share/ShareOtpCard.vue` · `mail-fields.js` · `index.vue` · `index.spec.js`
+    - AC: AC-OTP-02, AC-OTP-03, AC-OTP-04
+    - commit: baab349
+    - decision: Fog-1/2/3 CHANGE；T24-SENDER/CONFIG CHANGE；T24-NO-SPEC HOLD
+    - review: `review-t24.md` APPROVED p0=0
+  - [x]* T-24.1 红→绿:从 `mail-vue/src/views/share/index.vue:255-266,31-60` 抽出 `ShareOtpCard`(featuredMail 选取 + 一键复制走 `mail-vue/src/composables/useCopyWithFallback.js` + 复制降级);`otpExtractionEnabled=false` 整区不渲染;`code=''` 邮件正常渲染不隐藏;`views/share/index.spec.js` **18** 条 `it()` 基线保持全绿(原写 15,HEAD 实测 18;只扩不改,AC-VISIT-10 可扩文件列表)
     - _Requirements: AC-OTP-02, AC-OTP-03, AC-OTP-04_
+    - **Evidence**
+      - verify: 主 AI 独立 22/22 + chunk 1；审查 APPROVED
+      - files: `mail-vue/src/views/share/index.spec.js` · `ShareOtpCard.vue` · `mail-fields.js`
+      - AC: AC-OTP-02, AC-OTP-03, AC-OTP-04
+      - commit: baab349
 
 - [ ] T-25 多邮箱 Tab + 本地水位 map + 单实例轮询 + 隔离守护
   - [ ]* T-25.1 红:`views/share/index.spec.js` 与 `mail-vue/src/composables/useSharePolling.spec.js` 扩展 —— 每 tick 恰一次 status 请求无 N 路并发;水位 map(sessionStorage 键 `share:status:<lid>`,值 `{bindingId: watermark}`)推进语义:仅消费过的 Binding 推进、首帧建基准不渲染角标、Binding 增删对齐(新增建基准/已删丢弃);浏览中移除一邮箱 → 下拍消失余箱正常
@@ -595,6 +607,7 @@
 
 ## Update Log
 
+- 2026-08-24 · 主 AI:T-24 R2 不需要（`review-t24.md` APPROVED p0=0）。主 AI 独立定点 22+1；全量 vue 21/189、worker 18/619、E2E 13。未勾选尾：T-25 → T-29。
 - 2026-08-24 · 主 AI:T-24 实现待审查（ShareOtpCard 抽取 + applyShareConfig）。未勾选。未勾选尾：T-24 审查 / T-25 → T-29。
 - 2026-08-24 · 主 AI:T-25 侦察已落（`recon-t25-tabs.md`）。Fog-1 否决零后端：接线 `listForBinding`；Fog-2 status 函数划给 T-25；Fog-3 composable 零改。未派 T-25（等 T-24 APPROVED）。未勾选尾：T-24 → T-29。
 - 2026-08-24 · 主 AI:T-24 侦察已落（`recon-t24-otp-card.md`）。迷雾已裁：Fog-1/2/3 CHANGE；T24-SENDER/CONFIG CHANGE；T24-NO-SPEC HOLD。未勾选 T-24。未勾选尾：T-24 → T-29。

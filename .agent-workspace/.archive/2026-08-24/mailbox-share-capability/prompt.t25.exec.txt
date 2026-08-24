@@ -1,0 +1,117 @@
+T-25 implement · visitor multi-mailbox tabs + watermark + single poll
+
+Repo: /workspace
+Branch: cursor/mailbox-share-capability-dcb6
+HEAD includes T-24 APPROVED baab349. Do NOT git commit / push / stash / switch branch.
+
+Read first:
+1. frontend-design / impeccable / ui-ux-pro-max / ponytail(lite)
+   under $HOME/.cursor/plugins/cache/7iook-cursor-team-plugins/
+   Native tabs in the existing GitHub-light toolbox tokens. No el-tabs, no new palette, no motion library.
+2. recon-t25-tabs.md **§11 first** (fog already decided — do not reopen).
+   Ignore §0 "只能客户端过滤、零后端" — that sentence is superseded by Fog-1 CHANGE.
+3. Current T-24 files: views/share/index.vue (applyShareConfig, ShareOtpCard),
+   request/share.js, share-api.js:65-74, share-mail-service.js:163-175,
+   useSharePolling.js (read only), useSharePolling.spec.js (6 it()).
+
+Success:
+NOT "tabs exist", BUT a visitor with multiple bindings sees masked addresses as native tabs, a badge only after they have consumed a binding's watermark, and each poll tick is 1 status + at most 1 mails (never N-way). Single-mailbox page still lists/copies OTP the same way.
+Negative: do not touch visitor guard / init.js regex / /s/<lid>#<sec> / session.js / i18n / ShareOtpCard props (no bindingId on the card) / useSharePolling.js production source / assert-share-chunk.js gate body.
+
+## Fog rulings (execute as-is)
+
+- Fog-1: wire listForBinding. GET /share/mails without bindingId keeps merged list(); with bindingId (including 0) uses listForBinding. pollTick does NOT pass cursor. Advance watermark to max mailId actually in the returned page, not status.latestEmailId.
+- T25-TAB-LOAD: selectTab must fetch immediately if that binding has no rows in `mails`.
+- T25-ACTIVE-0: even shareType=single, set activeBinding from mailboxes[0] (may be 0). Never `if (bindingId)`. pollTick must not return {list:[]} solely because activeBinding is null — fall back to list() without bindingId.
+- Fog-2: getShareMailboxesStatus lives in request/share.js. listShareMails gains optional bindingId via listParams. No second axios client.
+- Fog-3: useSharePolling.js ZERO edits. Watermark tests in status-watermark.spec.js. composable spec +1 injected-fetcher test. N-way assertion in index.spec.js.
+- T25-ALWAYS-FETCH: every tick is 1 status + 1 mails for the active binding (no cursor). Watermarks drive **badges only**, do not skip the mails call when !hasNew. Old AC-RT-14 and poll-UNAVAILABLE tests depend on a mails call every tick.
+- T25-WAIT-T24: closed. You may edit index.vue.
+
+## Files you may write
+
+Worker:
+- mail-worker/src/service/share-mail-service.js  (add listForBinding, same project path as list)
+- mail-worker/src/api/share-api.js              (optional bindingId query)
+- mail-worker/test/share-api.spec.js            (append only)
+- mail-worker/test/share-mail-service.spec.js   (append only if a list() spec already lives there; else cover via share-api)
+
+Vue:
+- NEW mail-vue/src/views/share/status-watermark.js
+- NEW mail-vue/src/views/share/status-watermark.spec.js
+- mail-vue/src/request/share.js + share.spec.js
+- mail-vue/src/views/share/index.vue
+- mail-vue/src/views/share/index.spec.js        (extend only)
+- mail-vue/src/composables/useSharePolling.spec.js  (+1 it only)
+- archive exec-t25-note.md
+
+MUST NOT edit:
+useSharePolling.js, router/index.js, init/init.js, session.js, assert-share-chunk.js,
+i18n, ShareOtpCard.vue, mail-fields.js, share-admin, ShareDialog, security.js.
+
+## TDD order
+
+1. Worker: red test that GET /share/mails?bindingId=<A> returns only A's mail; omitted bindingId still returns the merged list (existing tests must stay green). Then wire API + service.
+2. Vue: red tests for tabs/badge/watermark/poll counts. Then implement.
+3. Add getShareMailboxesStatus to the existing vi.hoisted mock of @/request/share.js and both index.spec.js beforeEach (mockReset + default resolve). That is extending setup, not rewriting old it() bodies.
+   Default: `{ mailboxes: [{ bindingId: 0, latestEmailId: null }] }` so pollTick can resolve and still call listShareMails.
+
+Old index.spec.js it() count is **22**. Do not rewrite those 22 bodies. AC-VISIT-10 loop may append `status-watermark.js` (and a tab component file if you split one — prefer inline nav in index.vue, ponytail).
+
+## Implementation contract
+
+share-mail-service.listForBinding(c, ctx, bindingId, cursor, limit, deps):
+  repo.listForBinding then same attach/project as list(). Unknown / foreign binding → [] (no existence leak).
+
+share-api GET /share/mails:
+  bindingId absent/'' → list(); else listForBinding. "0" is a real id.
+
+request/share.js:
+  listParams also copies bindingId when != null && !== ''
+  getShareMailboxesStatus({ sessionToken, signal }) → GET /share/mailboxes/status
+  listShareMails may pass bindingId
+
+status-watermark.js: pure functions per recon §3. bindingId 0 serializes as "0".
+hasNew after reconcile uses stored keys. Advance is Math.max, never backwards.
+
+index.vue:
+- Extend applyShareConfig to also read shareType (default 'single') and mailboxes[].
+  After mailboxes change, pick activeBinding if null: mailboxes[0].bindingId.
+  Reset shareType/mailboxes/activeBinding/watermarks at bootstrap start (same place as otpEnabled=true).
+  Do not read autoRefresh / refreshIntervalMs / expiresAt.
+- visibleMails filters mails by activeBinding when isMulti; else all.
+  listMails / selectedMail / ShareOtpCard :mails="visibleMails" :selected="selectedMail" :enabled="otpEnabled"
+- Native tablist only when isMulti (shareType==='multi' && mailboxes.length>1).
+  Hooks: data-share-tabs, data-share-tab="<id>", data-share-tab-badge
+  tx('shareVisitMailboxes','Mailboxes') / tx('shareVisitNewMail','New mail') — do not edit i18n files.
+- pollTick injected as listShareMails: 1 status, reconcile+writeWatermarks, syncMailboxesFromStatus (AC-EDGE-04: drop removed boxes; if active gone, fall back to first), then 1 mails with bindingId=activeBinding (or omit if still null), no cursor. After success, advance watermark to max mailId in that page for the active binding.
+- selectTab: set activeBinding, clear selectedId, if no mails for that binding then listShareMails({sessionToken, bindingId, limit, signal}) and mergeMails.
+- beginMailbox: if activeBinding != null, pass it; keep cursor catch-up for older pages of that binding.
+- sessionStorage restore still has no mailboxes until first status tick — pollTick hydrates via syncMailboxesFromStatus. Do not persist mailboxes in sessionStorage.
+- Do not clear share:status:<lid> on exit (T-26 credential cleanup only).
+- No el-tabs. Selected tab: aria-selected + 2px bottom border #0969da. Badge is a dot + aria-label, not a count.
+
+useSharePolling.spec.js: one new it() — injected fetcher that itself calls a status mock then maybe mails; each tick status exactly 1; do not change the existing 6.
+
+index.spec.js new tests (names = scenarios):
+- multi session renders tabs with masked addresses; single/default does not
+- tick: getShareMailboxesStatus called once, listShareMails called once, never with two bindingIds in one tick
+- first status visit seeds watermarks and does not show badge
+- after consuming active tab, sibling binding with higher latestEmailId shows badge; active does not
+- selectTab to a binding with no cached mail fetches that bindingId immediately
+- status dropping a binding removes its tab and remaining tab still works
+- bindingId 0 is a valid tab key (if you cover legacy single-as-0)
+
+## Verify (vitest always --no-cache)
+
+pnpm --dir mail-worker exec vitest run --no-cache test/share-api.spec.js
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/status-watermark.spec.js src/views/share/index.spec.js src/composables/useSharePolling.spec.js src/request/share.spec.js
+pnpm --dir mail-vue exec vitest run --no-cache src/views/share/share-chunk.spec.js
+pnpm --dir mail-vue test -- --no-cache
+pnpm --dir mail-worker test -- --no-cache
+
+Write file/test counts. Old index 22 must still pass. git diff --stat mail-vue/src/composables/useSharePolling.js must be empty.
+
+Write exec-t25-note.md.
+
+Reply to user in Chinese.
