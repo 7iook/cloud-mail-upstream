@@ -1,7 +1,7 @@
 import KvConst from '../const/kv-const';
 import setting from '../entity/setting';
 import orm from '../entity/orm';
-import {verifyRecordType} from '../const/entity-const';
+import {settingConst, verifyRecordType} from '../const/entity-const';
 import fileUtils from '../utils/file-utils';
 import r2Service from './r2-service';
 import constant from '../const/constant';
@@ -9,6 +9,20 @@ import BizError from '../error/biz-error';
 import {t} from '../i18n/i18n'
 import verifyRecordService from './verify-record-service';
 import userContext from '../security/user-context';
+
+// 提取模式是三态(关闭 / 仅规则 / 规则+AI)。越界值必须在这里被拒:`ai_code` 直接进
+// 摄取链的分支判断,存进一个谁也不认识的数值等于让提取行为落到未定义分支上。
+// 只收数字:字符串 '' 会被 Number() 悄悄变成 0(= OPEN),那是把「没填」读成「开启」。
+function assertAiCode(params) {
+	if (!Object.prototype.hasOwnProperty.call(params, 'aiCode')) {
+		return;
+	}
+	const value = params.aiCode;
+	const allowed = Object.values(settingConst.aiCode);
+	if (typeof value !== 'number' || !Number.isInteger(value) || !allowed.includes(value)) {
+		throw new BizError(`提取模式取值非法 Invalid extraction mode: ${JSON.stringify(value) ?? String(value)}`);
+	}
+}
 
 const settingService = {
 
@@ -125,6 +139,7 @@ const settingService = {
 	},
 
 	async set(c, params) {
+		assertAiCode(params);
 		const settingData = await this.query(c);
 		let resendTokens = { ...settingData.resendTokens, ...params.resendTokens };
 		Object.keys(resendTokens).forEach(domain => {

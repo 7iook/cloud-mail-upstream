@@ -100,9 +100,12 @@ function project(emailRow, attachmentRows, ctx, mailboxes) {
 		text: emailRow.text === undefined ? null : emailRow.text,
 		content: emailRow.content === undefined ? null : emailRow.content,
 		receivedAt: emailRow.createTime ?? emailRow.receivedAt ?? null,
-		// The key exists only while the switch is on (AC-OTP-02); a null placeholder would
-		// still tell the visitor page an OTP slot exists.
-		...(ctx && ctx.otpExtractionEnabled === true ? { code: emailRow.code } : {}),
+		// The keys exist only while the switch is on (AC-OTP-02); a null placeholder would
+		// still tell the visitor page an OTP slot exists. `verify_link` is renamed to `link`
+		// here and nowhere else: the projection owns the column -> DTO mapping.
+		...(ctx && ctx.otpExtractionEnabled === true
+			? { code: emailRow.code, link: emailRow.verifyLink }
+			: {}),
 		attachments
 	};
 }

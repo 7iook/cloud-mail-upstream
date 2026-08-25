@@ -20,7 +20,7 @@ const BASE_MAIL_KEYS = [
 	'receivedAt',
 	'attachments'
 ];
-const OTP_ON_KEYS = [...BASE_MAIL_KEYS, 'code'].sort();
+const OTP_ON_KEYS = [...BASE_MAIL_KEYS, 'code', 'link'].sort();
 const OTP_OFF_KEYS = [...BASE_MAIL_KEYS].sort();
 
 const ATTACHMENT_KEYS = ['attachmentId', 'filename', 'size', 'downloadUrl'].sort();
@@ -62,6 +62,7 @@ function fatEmailRow(overrides = {}) {
 		userId: 7,
 		subject: 'Your code',
 		code: '',
+		verifyLink: '',
 		content: '<p>hello</p>',
 		cc: '[]',
 		bcc: '[]',

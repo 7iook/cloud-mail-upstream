@@ -33,8 +33,28 @@ const dbInit = {
 		await this.v3_1DB(c);
 		await this.v3_2DB(c);
 		await this.v3_3DB(c);
+		await this.v3_4DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+	// 提取管线的链接字段(决策卡 §3.3)。与既有 `code` 同形:空串 = 无,不用 null ——
+	// 消费侧因此只有「有 / 无」两态,不必区分「还没算过」。
+	// 沿用 v3_3DB 的 expand-only 幂等模式,重复跑时靠 catch 吞掉「duplicate column name」。
+	async v3_4DB(c) {
+
+		const ADD_COLUMN_SQL_LIST = [
+			`ALTER TABLE email ADD COLUMN verify_link TEXT NOT NULL DEFAULT '';`
+		];
+
+		const columnPromises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		});
+		await Promise.all(columnPromises);
 	},
 
 	// 轨一(ADR-share-credential-recoverability):`sec` 的可逆信封与它的 KEK kid。

@@ -23,6 +23,7 @@ const VISITOR_MAIL_KEYS = [
 	'content',
 	'receivedAt',
 	'code',
+	'link',
 	'attachments'
 ].sort();
 const ATTACHMENT_KEYS = ['attachmentId', 'filename', 'size', 'downloadUrl'].sort();
