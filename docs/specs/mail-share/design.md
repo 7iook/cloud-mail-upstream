@@ -99,6 +99,7 @@ fragment 这一个决定同时解决三件事：token 不进服务端日志、�
 - **Decision 4 · Visitor 端点精确匹配 + 既有前缀路由保留**：现有 `exclude` 用 `startsWith`，加 `/share` 会放行所有 `/share*`。Visitor 分享端点须用精确 `method + path` 枚举；Owner `/mailShare/*` **不**进 `exclude`，走 JWT + `share:manage`（见 `security.js:24-62`、`64-90`）。`/oss/`、`/oauth/`、`/telegram/`、`/init/` 等含动态段的路由**保留**受控前缀语义——禁止 blanket 把整个 `exclude` 改为精确匹配。
 - **Decision 5 · 新增 owner-scoped 邮件查询契约**：`selectById` 无 owner 条件且已有两个消费者（`star-service.js:11-20` 自行补判、`email-service.js:247-258` **未补**）。分享服务禁止调用它；本期新增明确的 owner/scope 查询方法，并把 `email-service.js:247-258` 的缺陷单列上报（不在本期修，避免扩大范围）。
 - **Decision 6 · OTP 只读邮件域结果（R2-A1 · 用户 R2 收缩）**：分享投影链**只读** `email.code`；非空则展示+复制，为空则不展示。**不做**确定性打分器、双路合并或 HTML 转文本再推断。改进版若需增强，统一抽取应归属邮件摄取链。
+  - *2026-08-25*：末句已兑现——摄取链新增确定性提取 + AI 补位，并扩出 `email.verify_link`（验证链接）。**本决策本身不变**：投影层依旧只读、不推断，新字段同样受此约束。详见 `requirements.md` Requirement 5 策略段的后续说明与 Requirement 5.1。
 - **Decision 7 · 分享接口自有响应封装**：`result.ok()` 的 truthiness 会把 `0`/`false`/`''` 吞成 `null`，而分享响应含 `views:0`、布尔开关等。分享 API 使用不吞值的封装。
 - **Decision 8 · ADR needed? yes** — 理由：确立了一个新的资源级授权边界并明确拒绝复用既有全局 public token，属边界定义型且难以反转的决策。落 Proposed ADR 于 `docs/architecture/`，实现完成后转 Accepted。
 
@@ -465,6 +466,21 @@ R2 原文写的是 `PUT`，落地改用 **`POST`**：与 `resetAuthKey` 同理�
 | AC-OTP-13 | {status: deprecated, by: R2-A1} | — |
 | AC-OTP-14 | `email.code` 非空时 DTO 含 code 且页面顶部展示 | E |
 | AC-OTP-15 | `email.code` 为空时不展示验证码区块 | E |
+| AC-EXT-01 | 三模式各跑一次；`RULE_ONLY` 用 spy 断言 `env.ai` 零调用 | U |
+| AC-EXT-02 | 高置信正文码存在时 AI 桩不被调用；低置信时 AI 结果被采纳 | U |
+| AC-EXT-03 | 带 `One-Time-Code` 头且正文含验证链接 → 两字段都有值 | U |
+| AC-EXT-04 | 码只在主题时取到；主题关键词不得给正文无关数字背书；两者皆高置信取正文 | U |
+| AC-EXT-05 | 4/6/8 位纯数字、字母数字混合、带连字符各一例；纯字母不入选 | U |
+| AC-EXT-06 | 「验证码 918273。客服电话 555-…」取到 918273；订单号/年份/电话不入选 | U |
+| AC-EXT-07 | `javascript:` / `data:` / `file:` 候选出局（href 其余特征均像验证链接） | U |
+| AC-EXT-08 | AI 返回越界下标、返回原文不存在的码 → 均丢弃并回落确定性结果 | U |
+| AC-EXT-09 | AI 桩挂起 → 落库仍在时限内完成 | U |
+| AC-EXT-10 | 六类失败各触发一次，计数分别递增 | U |
+| AC-EXT-11 | 注入的 insert 首次抛错 → 摘 `verifyLink` 重试一次并成功；无该字段时不重试 | U |
+| AC-EXT-12 | 开关关闭时 `'code' in dto` 与 `'link' in dto` 均为 false | U |
+| AC-EXT-13 | 选中无码邮件时不得出现其它邮件的码（组件级） | U |
+| AC-EXT-14 | 码/链接任一有值即展示；皆空出现未识别文案 | U |
+| AC-EXT-15 | 链接元素带 `rel="noopener noreferrer"`、文本等于完整 URL、非法协议不渲染 | U |
 | AC-SEC-01 | 默认渲染路径断言渲染的是 `text` 分支 | E |
 | AC-SEC-02 | 切换后在沙箱 iframe 中原样渲染 HTML | E |
 | AC-SEC-03 | {status: deprecated, by: R2+用户收缩} 净化库 | — |

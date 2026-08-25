@@ -161,6 +161,12 @@ Verified once by：在一个全新的浏览器上下文（无 localStorage、无
 
 本期**不做**确定性 OTP 打分器、候选模型、置信度阈值或 HTML 转文本再推断。分享投影链**只读**邮件域既有权威结果 `email.code`（LLM 抽取，字段已存在于 `email` 表）：非空则在分享页顶部展示并提供一键复制；为空则不展示验证码区块。若未来样本证明需增强识别，应把统一抽取/归一化移到**邮件摄取链**，使所有消费者读同一结果——**不在** Share 投影时重新推断（改进版事项）。
 
+> **2026-08-25 后续：上面那句「改进版事项」已经兑现。** 用户报告识别不可靠（`email.code` 由单次 LLM 调用产出，提示词硬编码「≤8 字符无空白」，且失败即空、无任何兜底），并追加了「验证链接」这一新字段的需求。增强按本段自己指定的方向落在**邮件摄取链**：确定性提取优先、AI 补位，两个字段（码与链接）各自独立求解，结果落 `email.code` 与 `email.verify_link` 两列。
+>
+> **本段的收缩结论继续有效，一个字未改**：分享投影链仍然只读邮件行上的既有结果，不重新推断（Decision 6 / 不变量 P-OTP-03）。变的只是"那个结果由谁、在哪一层、用什么方式算出来"。被废弃的 AC-OTP-01~05/10~13 保持废弃状态——它们描述的是**在投影层**打分，那个位置至今仍是错的。
+>
+> 摄取链侧的新验收标准见 **Requirement 5.1**；决策与权衡见 `.agent-workspace/.archive/2026-08-25/share-extract/share-extract-decision-card.md`。
+
 #### Acceptance Criteria (EARS)
 
 - [AC-OTP-01] {status: deprecated, by: R2-A1} ~~WHEN 一封邮件进入 Visible Window, THE DeterministicOtpScorer SHALL 从邮件主题与正文中产出零个或多个候选码，每个候选码带一个 0 到 1 之间的置信度。~~（用户 R2 裁决：本期不做确定性打分器）
@@ -178,6 +184,42 @@ Verified once by：在一个全新的浏览器上下文（无 localStorage、无
 - [AC-OTP-13] {status: deprecated, by: R2-A1} ~~WHERE 确定性候选与 `email.code` 归一化后相同, THE ShareMailService SHALL 只返回一个验证码并标注来源 `deterministic`。~~
 - [AC-OTP-14] WHERE `email.code` 非空（**空字符串 `''` 视为无验证码**，列定义 `text notNull default ''`，非 null）, THE ShareMailService SHALL 在 Visitor DTO 中原样返回该值；THE ShareView SHALL 在页面顶部展示并提供一键复制。
 - [AC-OTP-15] WHERE `email.code` 为空字符串, THE ShareView SHALL NOT 展示验证码区块；THE ShareMailService SHALL NOT 在分享投影链中重新推断或打分。
+
+### Requirement 5.1: 邮件内容提取（摄取链 · 2026-08-25）
+
+**User Story:** As a 持有分享链接的访问者, I want 我点开的那一封邮件里的验证码或验证链接被直接呈现出来, so that 我不用在正文里翻找，也不会被上一封邮件的结果误导。
+
+#### 策略
+
+提取落在**邮件摄取链**（Requirement 5 策略段自己指定的方向），产出 `email.code` 与 `email.verify_link` 两个独立字段；分享投影链继续只读、不推断（Decision 6 / P-OTP-03 不变）。
+
+顺序是**确定性优先、AI 补位**，不是反过来。三条依据：Workers AI 免费额度 10,000 neurons/天且**账户级共享**，逐封调用不可持续；防注入要求 AI 输出必须能在原文逐字回验，而回验依赖确定性候选集，所以确定性层无论如何都得存在；确定性层零成本、零注入面。
+
+**链接提取的风险归属**：邮件正文由发件人控制，页面把其中一条链接挑出来放大展示这个动作本身构成背书——与是否用 AI 无关，纯规则提取一样会挑中攻击者放的链接。因此缓解落在**展示层**（AC-EXT-15），而不是靠约束 AI。
+
+#### Acceptance Criteria (EARS)
+
+- [AC-EXT-01] THE ExtractionPipeline SHALL 支持三种模式：`CLOSE`（完全不提取，**保持列默认值语义**）、`RULE_ONLY`（只跑确定性层）、`OPEN`（确定性优先 + AI 补位）；WHERE 模式为 `RULE_ONLY`, THE ExtractionPipeline SHALL NOT 发起任何 `env.ai` 调用。
+- [AC-EXT-02] WHERE 确定性层对某字段已产出高置信结果, THE ExtractionPipeline SHALL NOT 就该字段调用 AI；AI 结果 SHALL 只填空或替换低置信结果，SHALL NOT 覆盖高置信的确定性结果。
+- [AC-EXT-03] WHERE 邮件带 `One-Time-Code` 头, THE ExtractionPipeline SHALL 采纳其中的码并视该**字段**为已完成，SHALL NOT 因此终止链接字段的提取。
+- [AC-EXT-04] THE ExtractionPipeline SHALL 对邮件主题与正文**各自独立**扫描候选码，SHALL NOT 将两者拼接后统一扫描（拼接会让主题中的关键词落入正文首个候选的邻域）；WHERE 两者均产出高置信结果, THE ExtractionPipeline SHALL 采用正文的结果。
+- [AC-EXT-05] THE DeterministicExtractor SHALL 接受长度 4 到 8 的候选码，包含纯数字、字母数字混合与含单个连字符的形态；候选 SHALL 至少包含一个数字。
+- [AC-EXT-06] WHERE 候选码邻域内同时存在正向与负向关键词, THE DeterministicExtractor SHALL 按**距离就近**仲裁归属，SHALL NOT 用加权求和（否则「验证码 918273。客服电话 555-…」中的合法码会被判死）。
+- [AC-EXT-07] THE DeterministicExtractor SHALL 只接受 `http` 与 `https` 协议的链接候选。
+- [AC-EXT-08] WHERE 调用 AI 补位, THE ExtractionPipeline SHALL 令其在既有候选中作选择：链接 SHALL 以候选下标形式返回且越界即丢弃，验证码 SHALL 能在归一化正文中逐字找到否则丢弃。
+- [AC-EXT-09] IF AI 调用超过时限未返回, THEN THE ExtractionPipeline SHALL 放弃该结果并以确定性结果完成落库，SHALL NOT 阻塞邮件入库。
+- [AC-EXT-10] THE ExtractionPipeline SHALL 区分并计数以下失败：AI 未绑定、额度耗尽、超时、返回非法 JSON、越界下标、逐字回验失败；SHALL NOT 将它们合并为单一「提取失败」。指标 SHALL NOT 含邮件正文。
+- [AC-EXT-11] IF 写入 `verify_link` 列失败（迁移尚未执行）, THEN THE 摄取链 SHALL 降级为不带该列重写一次，SHALL NOT 因提取结果而丢弃邮件本身。
+- [AC-EXT-12] WHERE `otpExtractionEnabled` 为 false, THE ShareMailService SHALL 在 Visitor DTO 中**同时省略** `code` 与 `link` 两个键（不是 null 占位）。
+- [AC-EXT-13] THE ShareOtpCard SHALL 只呈现**当前选中邮件**的提取结果，SHALL NOT 在当前邮件无结果时回退展示其它邮件的结果。
+- [AC-EXT-14] WHERE 验证码与验证链接任一非空, THE ShareOtpCard SHALL 展示对应区块；WHERE 两者皆空, THE ShareOtpCard SHALL 展示「未识别到验证码 / 验证链接」。
+- [AC-EXT-15] WHERE 展示验证链接, THE ShareOtpCard SHALL 只渲染 `http`/`https` 协议的链接、SHALL 将完整 URL 作为可见文本、SHALL 以 `target="_blank"` 与 `rel="noopener noreferrer"` 打开，且措辞 SHALL 只陈述来源不作安全断言。
+
+#### 已知边界（不是缺陷，是本轮取舍）
+
+- **不回溯**：提取在收信时执行，功能上线前收到的邮件其 `verify_link` 恒空，UI 显示「未识别」。不做一次性回填，也不做读时惰性补算——后者会把 AI 调用搬到不受信任的访客请求路径上。
+- **纯字母口令不支持**：候选要求至少含一个数字，否则正文里每个 4-8 字母英文单词都会成为候选。
+- **指标无导出通道**：AC-EXT-10 的分类计数目前是进程内计数器，isolate 回收即清零。`unverified: 无落盘/上报链路`——「运维侧能分辨 AI 挂了」这一目标只做到了分类，未做到可观测。
 
 ### Requirement 6: 正文安全渲染（双模式）
 
