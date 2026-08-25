@@ -167,7 +167,8 @@ Owner 侧（JWT + perm `share:manage`）：
 - `GET /mailShare/list` → `{ list, total }`
 - `DELETE /mailShare/revoke` → `{ shareId }`
 
-**本期不做** `PUT /mailShare/regenerate`（revoke + create 已覆盖；R2 regenerate 语义保留为后续约定，见下文「后续 regenerate 约定」）。
+~~**本期不做** `PUT /mailShare/regenerate`（revoke + create 已覆盖；R2 regenerate 语义保留为后续约定，见下文「后续 regenerate 约定」）。~~
+**2026-08-25 已实现为 `POST /mailShare/regenerate`**（动词由 PUT 改为 POST：每次铸新凭据不是幂等覆盖，与 `resetAuthKey` 同理）。语义按下文「regenerate 约定」原样兑现，AC-SHARE-13 / AC-LIFE-05 / AC-LIFE-11 与 P-LIFE-02 一并重新激活。
 
 Visitor 侧（公开，精确路径）：
 - `POST /share/session` → `{ lid, sec }` → `{ sessionToken, mailbox, expiresAt }`（`sec` 仅此一次出现在请求体）
@@ -292,9 +293,17 @@ effectiveStatus(row, now) =
 | 物理清理 | `delete_at ≤ now` | 行删除 | — | `index.js:27-37` scheduled 扩展 |
 | 功能关闭 | 管理员关开关 | **不变**（仍 `ACTIVE`） | Visitor 判不可用；**重开恢复**（AC-LIFE-13） | 管理员 |
 
-#### 后续 regenerate 约定（本期不做 · R2 语义保留）
+#### regenerate 约定（T-20a 已实现 · R2 语义原样兑现）
 
-当未来引入 `PUT /mailShare/regenerate` 时：**仅**对 `effectiveStatus=ACTIVE` 的授权在同一 `share_id` 行内原子更新 `lid` 与 `sec_hmac`，**保持** `expires_at` 与 `window_start_email_id`；`EXPIRED`/`REVOKED` 拒绝 regenerate，须新建授权。本期泄露场景用 revoke + create 替代。
+`POST /mailShare/regenerate`：**仅**对 `effectiveStatus=ACTIVE` 的授权在同一 `share_id` 行内原子更新 `lid` 与 `sec_hmac`（连同 `pepper_kid`，新 `sec` 用当前 pepper 摘要），**保持** `expires_at` 与 `window_start_email_id`；`EXPIRED`/`REVOKED` 拒绝 regenerate，须新建授权。
+
+R2 原文写的是 `PUT`，落地改用 **`POST`**：与 `resetAuthKey` 同理——每次都铸一把新 `sec`，不是幂等的字段覆盖，幂等由 `Idempotency-Key` 请求头显式表达（AC-SHARE-13），而不是由 HTTP 动词隐含。
+
+补充两条实现级约束（原文未及，与本模块既有写入路径同款）：
+
+- **`credentials_version + 1`**：让在飞 Visitor Session 当场断开（`share-auth-service` 每请求比对 cv）。旧链接的失效由 `sec_hmac` 变更保证，cv 只管已经建立的会话。
+- **CAS**：预读到的 `credentials_version` 与 `expires_at` 原样进 WHERE（与 `update` 的 `prepareUpdate` 同款）。预读之后、写入之前发生的 `resetAuthKey` / 续期会让本次零命中，分流 `SHARE_UPDATE_CONFLICT`，而不是无声盖过。
+- **不设 V2 栅栏**：只写 v1 就有的 `lid` / `sec_hmac` / `pepper_kid`，滚动发布窗口内的旧 Worker 完全认得（照样会拒掉旧 `sec`）；`cv` 是纯加严，旧 Worker 读不到也不会放宽任何东西。
 
 ### 辅助表
 
@@ -391,7 +400,7 @@ effectiveStatus(row, now) =
 | AC-SHARE-10 | 同一 `accountId` 连续创建 2 条均成功且 `lid` 不同 | I |
 | AC-SHARE-11 | 同一 Idempotency-Key 重放：第二次无 `sec` 且 `idempotentReplay=true` | I |
 | AC-SHARE-12 | 并发创建达上限：恰 N 成功、其余 `SHARE_LIMIT_EXCEEDED`、无孤儿行 | I |
-| AC-SHARE-13 | {status: deprecated, by: R3-regenerate} regenerate 幂等 | — |
+| AC-SHARE-13 | {status: active, by: 2026-08-25-T-20a} regenerate 幂等：同 owner+key+shareId 返回相同 lid 且不再下发 sec；跨 shareId 冲突；与 create 的 operation 隔离 | U |
 | AC-SHARE-14 | 同 Key 异请求体 → `SHARE_IDEMPOTENCY_CONFLICT` | I |
 | AC-SHARE-15 | Share 行与幂等行 `batch()` 原子提交；失败无孤儿行 | I |
 | AC-SHARE-16 | 复合游标退路**本期不实施**——单语句 `INSERT ... SELECT MAX(...)` 已提供线性化切点（T-02 否定 drizzle `.transaction()`） | — |
@@ -415,13 +424,13 @@ effectiveStatus(row, now) =
 | AC-LIFE-02 | 销毁后断言 `status='REVOKED'` 且 `revoked_at` 非空 | I |
 | AC-LIFE-03 | 销毁后访问 → `SHARE_UNAVAILABLE` | I |
 | AC-LIFE-04 | 对已销毁记录尝试延期/重新启用 → 被拒且状态未变 | I |
-| AC-LIFE-05 | {status: deprecated, by: R3-regenerate} regenerate 凭据轮换 | — |
+| AC-LIFE-05 | {status: active, by: 2026-08-25-T-20a} regenerate 凭据轮换：新 lid/sec + cv+1 使在途会话失效,`expires_at` 与 Visible Window 不变 | U+I |
 | AC-LIFE-06 | 断言 `delete_at > expires_at` | U |
 | AC-LIFE-07 | 造 `delete_at` 未到与已到各一条，跑清理，断言只删后者 | I |
 | AC-LIFE-08 | 过期/销毁未到 `delete_at` 时 Owner 列表仍含该条且 `effectiveStatus` 正确 | I |
 | AC-LIFE-09 | 软删 account 后访问 → `SHARE_UNAVAILABLE` | I |
 | AC-LIFE-10 | 建立 Session 成功后 `access_count` +1 且 `last_access_at` 更新；轮询不触发 | I |
-| AC-LIFE-11 | {status: deprecated, by: R3-regenerate} EXPIRED regenerate 拒绝 | — |
+| AC-LIFE-11 | {status: active, by: 2026-08-25-T-20a} EXPIRED / REVOKED 的 regenerate 拒绝且零变更（过期授权不得原地复活） | U |
 | AC-LIFE-12 | account 删除路径撤销相关 Share；转移挂钩点（转移能力不存在，本期不测转移路径） | I |
 | AC-LIFE-13 | 功能关→开：旧 ACTIVE 链接恢复可用 | I |
 | AC-LIFE-14 | 统计写入失败仍返回有效 sessionToken | I |
@@ -592,11 +601,11 @@ For any 时刻 T 与任意 MailShare，IF `expires_at ≤ T`，THEN THE ShareAut
 
 **Validates: AC-LIFE-01**
 
-### P-LIFE-02: {status: deprecated, by: R3-regenerate} regenerate 不改变授权边界
+### P-LIFE-02: {status: active, by: 2026-08-25-T-20a} regenerate 不改变授权边界
 
-~~For any `effectiveStatus=ACTIVE` 的 MailShare 上的 regenerate 操作，THE MailShareService SHALL 只变更 `lid`/`sec_hmac`，SHALL NOT 变更 `expires_at` 或 `window_start_email_id`。~~（本期无 regenerate；语义保留于「后续 regenerate 约定」）
+For any `effectiveStatus=ACTIVE` 的 MailShare 上的 regenerate 操作，THE MailShareService SHALL 只变更 `lid`/`sec_hmac`（连同 `sec_cipher`/`kek_kid`/`credentials_version`），SHALL NOT 变更 `expires_at` 或 `window_start_email_id`。
 
-**Validates: AC-LIFE-05, AC-LIFE-11（已废弃）**
+**Validates: AC-LIFE-05, AC-LIFE-11**
 
 ## Decision Record
 
@@ -606,6 +615,17 @@ For any 时刻 T 与任意 MailShare，IF `expires_at ≤ T`，THEN THE ShareAut
 | 用户裁决 | R1：正文双模式 / 严格最小集 / 首版不提供附件（2026-08-16）。R2 有意推翻：附件提供、沙箱原样 HTML、登录态渲染器一并交付、不做 OTP 打分器（2026-08-17） |
 | 侦察来源 | 6 份 plan-reality-recon（后端架构 / 数据模型与威胁面 / 前端渲染 / 前端外壳 / Workers 实时推送 / token 与并发计数）+ 主 AI 亲读 `ai-service.js` |
 | unverified | `run_worker_first=true` 下 `_headers` 的应用时机；Dexie 两次 `.version(1)` 语义；生产数据量级与 `EXPLAIN QUERY PLAN` 实测；浏览器矩阵 sandbox/srcdoc/CSP 行为；软删 account 后是否仍算失效（运行时确认） |
+
+### 2026-08-25 · regenerate 重新激活（T-20a · 推翻 R3 的「本期延后」）
+
+R3 当初把 `regenerate` 移出本期，理由是「revoke + create 已覆盖」。该理由在**凭据可恢复性**这一需求下不再成立：
+
+- `sec` 明文在创建响应之后不存在于任何地方，Owner 关掉对话框即永久失去链接；而 `revoke + create` 会**换掉整条授权**——有效期、可见邮件窗口、各项配置全部重来，已分发出去的旧链接同时作废。管理员因此宁可不处理，也不愿"为了换条链接把整个分享重配一遍"。
+- 上线前创建的存量分享其明文已不可能回填，`regenerate` 是它们**唯一**的出路（详见 `docs/architecture/ADR-share-credential-recoverability.md`）。
+
+**重新激活范围**：`POST /mailShare/regenerate`（动词由 R2 原文的 `PUT` 改为 `POST` —— 每次铸新凭据不是幂等覆盖，与 `resetAuthKey` 同理）；AC-SHARE-13 / AC-LIFE-05 / AC-LIFE-11 与 P-LIFE-02 一并转回 active。语义**未作任何修改**，原样兑现 R2-A2 收敛的结论：仅 ACTIVE 可调、保持 `expires_at` 与 Visible Window、`cv+1` 使在途会话失效、EXPIRED/REVOKED 拒绝。
+
+**本条为追加，不改写上方 R2/R3 的历史记录** —— 那些结论在当时的范围内是对的，变的是需求而非判断。
 
 ## 既有缺陷（本期不修，单列上报）
 
@@ -760,14 +780,14 @@ For any 时刻 T 与任意 MailShare，IF `expires_at ≤ T`，THEN THE ShareAut
 
 **权限与范围：**
 - 三份 `share:*` 合并为 `share:manage`（AC-MGMT-09）；废弃 AC-MGMT-08。
-- `regenerate` 本期移除；R2 语义保留于「后续 regenerate 约定」；废弃 AC-SHARE-13、AC-LIFE-05/11、P-LIFE-02。
+- ~~`regenerate` 本期移除；R2 语义保留于「后续 regenerate 约定」；废弃 AC-SHARE-13、AC-LIFE-05/11、P-LIFE-02。~~ → **2026-08-25 重新激活**，见下方 Decision Record 同日条目。
 
 **有意推翻的 R2 结论（避免下轮当不一致）：**
 - 附件公开直链（R2 用户收缩）→ R3 受控端点（临时授权边界优先）
 - 服务端长轮询（R2-A3 保留）→ R3 客户端 3s 轮询
 - iframe 自动高度（R2 沙箱方案）→ R3 固定高度+内层滚动
 - 三份 share 权限（R1/R2）→ 单一 share:manage
-- regenerate 保留（R2-A2）→ 本期延后
+- regenerate 保留（R2-A2）→ 本期延后 ｜ **2026-08-25 再度反转：重新激活并实现**（本行保留以存续 R2→R3 的裁决轨迹，现状以同日 Decision Record 为准）
 
 **其他：** 新增「开工前需实现方核实清单」节（来自 review3 末尾，全部标 unverified）。矩阵已同步（含 R3-F3 AC-VISIT-13~15）。
 

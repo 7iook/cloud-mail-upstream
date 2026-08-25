@@ -307,13 +307,13 @@
   | `SHARE_SESSION_SIGNING_KEY` | secret | `.dev.vars` | `wrangler secret put` | 访客建会话 `SHARE_UNAVAILABLE` | 访客页能打开 |
   | `SHARE_SEC_PEPPER_KID` | var | 可选,默认 `v1` | 可选 | 无(有默认) | — |
   | **`SHARE_SEC_KEK`** | **secret · 本轮新增** | `.dev.vars` | `wrangler secret put` · ⛔**禁止落 `setting` 表** | **创建分享被拒**(非静默降级) | 不配时创建被拒;配了则新建分享详情页能看到链接 |
-  | **`SHARE_SEC_KEK_<kid>`** | **secret · 轮换期并存** | 同上 | 同上 | 旧 kid 行不可解 → 降级「可重新生成」 | 跨 kid 行均可查看 |
+  | **`SHARE_SEC_KEK_PREV`** + **`SHARE_SEC_KEK_PREV_KID`** | **secret+var · 轮换期并存** | 同上 | 同上 | 旧 kid 行不可解 → 降级「可重新生成」 | 跨 kid 行均可查看 |
   | **`SHARE_SEC_KEK_KID`** | **var · 本轮新增** | 默认 `v1` | 显式配置 | 轮换无法前滚 | 与新写入行的 `kek_kid` 一致 |
 
   **KEK 材料格式与多键协议**(单个变量无法支撑「新旧并存轮换」,故在此定死):
-  - **材料格式**:base64url 编码的 **32 字节随机串**(生成:`openssl rand -base64 32` 或等价 CSPRNG)。⛔ 不接受口令短语——`collectKeyedSecrets` 环里存的是密钥材料不是密码。
+  - **材料格式**:运维按 base64url 编码的 **32 字节 CSPRNG 输出**生成(`openssl rand -base64 32` 或等价)。⛔ 不接受口令短语。**实现侧不做 base64 解码**,直接把配置字符串的 UTF-8 字节作为 HKDF 的 IKM(理由与不可更改性见 ADR「KEK 材料」行)。
   - **KDF**:HKDF-SHA256,`info` 固定为 `"share-sec-kek"` 字符串常量,`salt` 用 kid,派生出 AES-256-GCM key。同一 KEK 材料在任何环境派生出的 key 必须一致(否则跨环境导数据即全部解不开)。
-  - **多键协议**:当前键读 `SHARE_SEC_KEK`,其 kid 由 `SHARE_SEC_KEK_KID` 指定;历史键按 `SHARE_SEC_KEK_<kid>` 命名逐个注册进环。**kid 的单一真源 = 数据行上的 `kek_kid` 列**,环只负责按 kid 提供材料;⛔ 不得反过来用环的顺序或变量名推断某行该用哪个键。
+  - **双键协议(2026-08-25 订正)**:⚠️ 本卡初稿写的 `SHARE_SEC_KEK_<kid>` 多键命名**是错的** —— `collectKeyedSecrets(currentKid, currentValue, prevKid, prevValue)`(`share-auth-service.js:124`)是固定的 current+prev 双键结构,现有代码里没有承载任意多键的东西。KEK 沿用与 pepper / 签名密钥**完全相同**的四变量模式(`share-auth-service.js:153-167` 是现成用法),双键足够覆盖轮换期新旧并存。**kid 的单一真源 = 数据行上的 `kek_kid` 列**,环只负责按 kid 提供材料;⛔ 不得反过来用环的顺序或变量名推断某行该用哪个键,也⛔ 不要为 KEK 单独把环扩成多键(会让三种密钥的管理方式分叉)。
   | `SHARE_MAX_DURATION_SECONDS` | var · 本轮显式化 | `.dev.vars` | `wrangler.toml` | **无上限**(当前生产即此状态) | 超上限创建被拒 |
   | `SHARE_CAPABILITY_V2` | var | `.dev.vars` = `"true"` | Dashboard,⛔ 不取消 toml 注释 · 值只能 `true`/`1` | 四类策略写入被拒 | 启用访问密钥成功 |
 
@@ -342,6 +342,38 @@
    - `SHARE_SESSION_TTL` **保持 900 秒不动**,不上调——避免放大档案 `share-session-ttl-limitation` 记录的同标签页 sessionStorage 残留窗口。
 
 ---
+
+## 6.0 端到端实测记录(2026-08-25 11:09–11:19 · 本地真跑 · 清掉此前各包的 `unverified`)
+
+环境:`wrangler dev`(8788,本地 D1 + KV)+ `vite dev`(3001),Chrome 实操。`.dev.vars` 补齐 `SHARE_SEC_KEK` / `SHARE_SEC_KEK_KID` / `SHARE_CAPABILITY_V2="true"`;`GET /api/init/{jwt_secret}` 跑迁移。
+
+| # | 验证项 | 实测结果 |
+|---|---|---|
+| 1 | 迁移建密文列 | `mail_share` 出现 `sec_cipher` / `kek_kid`,总列数 29 |
+| 2 | KEK 配齐后可创建 | 成功(**缺 KEK 时按设计 fail-closed 拒绝**,本次未复现该分支) |
+| 3 | 自定义有效期 | 下拉出现「自定义」,填 30 天 → 库中 `expires_at` = `create_time + 30d` 分秒不差 |
+| 4 | 兜底上限提示 | 创建页常驻「有效期不能超过 90 天」 |
+| 5 | 密文写入 | 新行 `sec_cipher` 非空、`kek_kid=v1`;存量行为空 |
+| 6 | **轨一 · 查看链接** | 取回 URL 与创建时**逐字相同**(`...#TgR_8E_hcz6NyJFJFwelMYInvPaMAX6Cep6q8pYGKy0`) |
+| 7 | 存量行的 `ABSENT` 分支 | 「这条分享创建于本功能上线之前,没有留下可取回的凭据。如果链接已经找不到了,请重新生成一条。」 |
+| 8 | 过期分享仍可查看链接 | `link-reveal` **未禁用**(与后端裁决一致);`link-regenerate` 正确禁用 |
+| 9 | **轨二 · 重新生成** | 二次确认含三句(旧链接作废 / 访客断开 / **有效期与可见范围不变**);新 `lid`+`sec`,详情页失效时间 `2026-09-24 11:14:03` **一秒未动** |
+| 10 | 旧链接作废 | 旧链接刷新 → 「此链接已不可用。」 |
+| 11 | 新链接可用且有效期连续 | 倒计时 `719h55m`(换链接前 `719h57m`,差值=流逝时间)。**若 regenerate 重置了有效期,这里会跳回 720h00m** |
+| 12 | **时区(用户最初报的 bug)** | 库存 UTC `21:55:33` → 管理台显 `05:55:33`;库存 UTC `03:14:03` → 列表与详情显 `11:14:03`;访客页 30 天分享倒计时 `719h57m`。**三处一致,无 8 小时偏差**(原现象:1 小时的分享显示 `8h56m`) |
+| 13 | 续期上限从创建时刻起算 | 详情页显示「最多可延长到 `2026-11-23 11:14:03`(自创建起 90 天)」,创建时间 `08-25 11:14:03` + 90d 吻合 |
+| 14 | 文案订正生效 | 创建后提示为「…日后也可以在分享详情里重新查看它」,不再是已不成立的「无法再查看」 |
+
+**仍未实测**:① KEK 缺失时的 fail-closed 拒绝(需临时移除密钥重启,会打断本次会话,由单测 + 变异验证覆盖)② 访问密钥启用路径 ③ 解密端点的限流与越权(由后端集成测试覆盖)。
+
+## 6.1 本轮发现但**不属于本轮边界**的债(登记,不顺手改)
+
+| # | 债 | 锚点 | 为什么不在本轮改 |
+|---|---|---|---|
+| D-1 | **全局错误面把内部异常消息原样返回给调用方**。`return c.json(result.fail(err.message, err.code))` —— 任何非 `BizError` 的异常,其 message(可能含路径 / SQL 片段 / 依赖库内部措辞)直接出网。CWE-209 一类。附带后果:KEK 缺失这类部署事故在 HTTP 面上回 200,外观像普通业务拒绝 | `mail-worker/src/hono/hono.js:28` | 全局错误面,**影响每一个接口**,远超分享子系统边界(§4.8 例外条款)。需单独立项并配回归 |
+| D-2 | 密文感知泄漏扫描只覆盖 `v1:` 前缀信封 + 三种无密钥编码 | `T-20c` 新增守卫 | 完全自研格式或把 sec 拆两列分存仍可绕过。属守卫的固有边界,已在 `exec-t20c-guards.md §5` 列明 |
+| D-3 | 分享模块外 6 处同根因时间裸串(`verify-record` / `user` / `public` / `email` / `security` / `analysis` service) | 见 `exec-wa-timezone.md §4` | 属其它子系统,各需独立回归面 |
+| D-4 | `ShareDetailDrawer.vue` 的 `PENDING_COPY` 兜底表已是死码(i18n key 早已落地) | `T-20a-ui` 报告 | 顺手清理会让本包 diff 混入无关改动,增大审查面 |
 
 ## 7. 工作包拆分与文件所有权(2026-08-25 · 用户裁定拆卡后开工)
 
@@ -386,9 +418,18 @@
 - [ ] T-12 分享页 Turnstile 接线(后端专用错误码 + API 层校验 + 前端挂载 + token 传递)
 
 ### 阶段 2 · 串行(共享文件)
-- [ ] T-20a 轨二 · 重新生成链接:取消 AC-SHARE-13 / AC-LIFE-05 / AC-LIFE-11 的 deprecated 标记,按 `design.md:295-297` 既有语义实现(仅 ACTIVE · 保持 `expires_at` 与 Visible Window · `cv+1` 踢在途会话 · EXPIRED/REVOKED 拒绝)· **同批完成权限双表注册 + 限流 + UI 二次确认(踢访客是用户可见副作用)** · 存量分享唯一出路,先于 T-20b
-- [ ] T-20b 轨一 · `sec` 可逆加密存储 + 解密端点(限流 + 审计)+ 管理台详情页链接展示(新分享显示链接 / 老分享显示「可重新生成」)· 复用 `collectKeyedSecrets` 加 `kek_kid` 环
-- [ ] T-20c 安全护栏补齐:现有明文子串扫描守卫对密文无效,新增「解密端点鉴权 / KEK 缺失 fail-closed / AuthKey 仍不可恢复」三条断言
+- [x] T-20a 轨二 · 重新生成链接(后端 + 管理台入口)
+  - **Evidence**:`commit pending` · `verify: pnpm --dir mail-worker test → 20 files/752 passed/EXIT=0` · `pnpm --dir mail-vue test → 23 files/323 passed/EXIT=0` · **浏览器实测**:换链接后 `lid`/`sec` 均变、失效时间 `2026-09-24 11:14:03` 一秒未动、旧链接刷新即「此链接已不可用」、新链接倒计时 `719h55m`(换前 `719h57m`,差=流逝时间) · `files: mail-share-service.js(regenerate + CAS) · mail-share-api.js · security.js 权限双表 · ShareDetailDrawer.vue(二次确认+一次性明文) · request/mail-share.js · design.md/requirements.md(取消 deprecated)` · `AC: AC-SHARE-13 / AC-LIFE-05 / AC-LIFE-11 / P-LIFE-02`
+  - **Update Log**:2026-08-25 · 语义**未重新设计**,原样兑现 R2-A2 收敛结论,只取消 deprecated 标记。动词由 R2 原文 `PUT` 改 `POST`(每次铸新凭据非幂等覆盖,与 `resetAuthKey` 同理)。幂等按 AC-SHARE-13 原文实现(取消标记却不实现 = 留一条假条款)。变异验证抓出一条弱断言:「窗口下界漏进 SET」首轮只红 1 条,因该 seed 行窗口本就是 0、「被重置成 0」与「未变」同形;改用非默认 seed 后同一变异红 2 条。
+- [x] T-20b2 轨一 · 加密写入接线 + 解密端点 + 查看链接入口
+  - **Evidence**:`commit pending` · `verify: 同上 752 / 323` · **浏览器实测**:新分享库中 `sec_cipher` 非空且 `kek_kid=v1`;详情页「查看链接」取回的 URL 与创建时**逐字相同**;存量行(无密文)给出「创建于本功能上线之前…请重新生成一条」 · `files: share-sec-cipher.js(新) · keyed-secret-ring.js(新 · 三环收敛) · mail-share-service.js(mintShareCredentials 接加密 + revealSec) · entity/mail-share.js · init.js(v3_3DB) · ShareDetailDrawer.vue · i18n` · `AC: ADR 密文持久化协议 + 四类失败可区分`
+  - **Update Log**:2026-08-25 · 三处对 ADR 的偏离**均已回写 ADR**:① AAD 从 `shareId` 改绑 `lid`(`share_id` 是 autoIncrement,绑它就必须"先插行再补密文",那个中间态与真正的存量行同形、解密端点分不出来)② 密钥环是 current+prev 双键而非我原写的"泛型多键"(`collectKeyedSecrets` 签名固定四参)③ kid 的密码学真源是 envelope 自带值,`kek_kid` 列是可查询镜像。`probeKek()` 前置于所有写入路径**含幂等重放**,创建阶段 KEK 缺失零行落库。
+- [x] T-20c 安全护栏
+  - **Evidence**:`commit pending` · `verify: 同上 752`(本包 +8 条护栏,10 次变异全部实测变红)· `files: test/share-credential-guards.spec.js(新) 等` · `AC: 决策卡 §1.4「护栏会自动让路」`
+  - **Update Log**:2026-08-25 · **盘点否证了我写在卡里的一句话**:「现有护栏对加密改动自动让路」只在**泄漏扫描**这一维成立,鉴权与 KEK fail-closed 前几包已钉得扎实,故实际补的是 2 处弱覆盖 + 4 个真空格,未为凑数重复造。两处弱覆盖:`rejects.toThrow(/kek/i)` 在把裸 `Error` 换成 `BizError` 后仍绿(而 BizError 会被翻成 200 业务码,部署事故长得像普通拒绝);AuthKey 列名守卫是黑名单两个名字且只查 entity。新增的密文感知扫描用**三环对照**(正确环必须解得开、空环与错环必须解不开)——因为"解不开"在扫描器没看到那列时也恒真。
+- [x] T-20b1 轨一 · 加密原语模块(独立交付,零接线)
+  - **Evidence**:`commit pending` · `verify: 本包 spec 17 项 红 17/17 → 绿 17/17,两处变异各精确打红 1 条与 2 条` · `files: mail-worker/src/security/share-sec-cipher.js(新建) + 其 spec` · `AC: ADR 密文持久化协议`
+  - **Update Log**:2026-08-25 · 协议逐条落实(96-bit CSPRNG nonce / AAD 绑 `v1:<shareId>` / HKDF salt=kid / 版本号在前)。两处超出要求的细节:envelope **从右往左解析**使 kid 含冒号不破坏格式;四类失败**检查顺序刻意**(`KEK_MISSING` 先于 `MALFORMED`,免得部署事故被报成良性结果)。**变异验证抓出它自己写歪的一条测试**——原断言「两个不同 shareId 的 nonce 不同」,而 shareId 派生的 nonce 恰好也满足,变异下为绿;已改为同一 shareId 连加密两次。
 - [ ] T-21 批量创建端点 + 权限双表 + 向导批量 UI + create 限流补齐
 - [x] T-22a 自定义有效期 · **前端部分**(两处入口 P-03 同改)
   - **Evidence**:`commit 344ff5d` + `ac71081`(静默失败修复)· `verify: pnpm --dir mail-vue test → 23 files/280 passed/EXIT=0` · `pnpm --dir mail-vue build 通过` · `files: share-admin/presets.js(+presets.spec.js 新建) · ShareCreateWizard.vue · email/ShareDialog.vue · i18n zh/en` · `AC: §1.2 H 项`

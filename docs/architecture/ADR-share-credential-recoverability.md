@@ -53,12 +53,13 @@ Owner 在管理台创建分享后,链接明文只在创建成功那一刻的对�
 | 项 | 契约 |
 |---|---|
 | 算法 | AES-256-GCM,密钥经 HKDF-SHA256 从 KEK 材料派生(`info` 固定常量 `"share-sec-kek"`,`salt` 用 kid) |
+| KEK 材料 | 运维按 **base64url 编码的 32 字节 CSPRNG 输出**生成(`openssl rand -base64 32` 或等价);⛔ 不接受口令短语。**实现侧把配置字符串的 UTF-8 字节原样作为 HKDF 的 IKM,不做 base64 解码** —— HKDF-Extract 本就接受任意长度 IKM,熵不受影响,而跳过解码消除了唯一一个「两个环境对同一份密钥各自解码、静默派生出不同密钥」的分歧点(`openssl rand -base64` 用标准字母表 `+/`,base64url 用 `-_`,解码器选错不会报错只会解出别的字节)。⚠️ **此决定在有生产密文之后不可更改** —— 改了旧密文就解不开。 |
 | envelope | 版本化 `v1:<kek_kid>:<base64url(nonce)>:<base64url(ciphertext‖tag)>`,版本号在最前 |
 | nonce | 每次加密独立 CSPRNG 生成 96-bit。⛔ **绝不由 shareId / 计数器 / 时间戳派生**——GCM 下 nonce 重用即机密性崩塌 |
-| AAD | 绑定 `shareId`,阻断密文被整列搬到另一行后仍可解密 |
-| kid 真源 | **数据行上的 `kek_kid` 列**。密钥环只负责按 kid 提供材料;不得反向用环顺序或变量名推断某行该用哪个键 |
+| AAD | 绑定 **`lid`**(本 ADR 初稿写的是 `shareId`,**实现时改绑 `lid`,已采纳**)。理由:`share_id` 是 `autoIncrement` 主键,INSERT 之后才存在,绑它就只能「先插行、再 UPDATE 补密文」——那个中间态里的行密文为空,**与真正的存量旧行完全同形**,解密方无法分辨「上线前创建」与「刚写了一半」。`lid` 有 `UNIQUE` 索引(`idx_mail_share_lid`)、与 `sec` 同一次铸造并在同一条 INSERT 里落库,阻断「密文被搬到另一行」的性质不变,且额外获得:regenerate 换 lid 后旧密文自然解不开,而非悄悄交回一个已失效的 `sec`。⚠️ **解密方必须传 `lid`**。 |
+| kid 真源 | **密码学真源 = envelope 内自带的 kid**;数据行上的 `kek_kid` 列是它的**可查询镜像**(供运维统计"还有多少行用旧键")。本 ADR 初稿把列写成真源,与实现不符 —— 解密必须从 envelope 取 kid,否则密文就不是自描述的、换个列值就解不开。两者由同一次加密的返回值原子写入,不会分叉。密钥环只负责按 kid 提供材料;⛔ 不得反向用环顺序或变量名推断某行该用哪个键 |
 | KEK 存放 | `wrangler secret`,⛔ **禁止落 `setting` 表**(与 Turnstile secret 的存法不同,后者不是加密密钥) |
-| 轮换 | 复用 `collectKeyedSecrets`(`share-auth-service.js:118-131`)的泛型 kid 环,加第三个环即可,**不新造轮换机制** |
+| 轮换 | 复用 `collectKeyedSecrets`(`share-auth-service.js:124`)。⚠️ **本 ADR 初稿把它写成「泛型 kid 环,加第三个环即可」,该描述有误** —— 它的签名是 `(currentKid, currentValue, prevKid, prevValue)`,是固定的 **current + prev 双键**结构,不支持任意多键。KEK 因此沿用与 pepper / 签名密钥完全相同的四变量命名:`SHARE_SEC_KEK` / `SHARE_SEC_KEK_KID` / `SHARE_SEC_KEK_PREV` / `SHARE_SEC_KEK_PREV_KID`(见 `share-auth-service.js:153-167` 的既有用法)。双键足以覆盖轮换期新旧并存,**不要为 KEK 单独扩展成多键**——那会让三种密钥的管理方式分叉。 |
 
 **四类失败必须分开**,不得折叠成同一句「不可恢复」——否则部署事故与数据损坏会被伪装成正常降级:
 
