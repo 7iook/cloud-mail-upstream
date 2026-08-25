@@ -109,9 +109,10 @@
         </button>
       </nav>
 
-      <!-- Refreshes the whole page, not one Tab, so it sits outside the tabpanel. -->
+      <!-- Refreshes the whole page, not one Tab, so it sits outside the tabpanel. Shown
+           even while auto refresh runs: a visitor waiting on a code wants to ask now
+           rather than sit out the rest of the poll interval. -->
       <button
-        v-if="!autoRefresh"
         type="button"
         class="share-refresh"
         data-share-refresh
@@ -129,7 +130,6 @@
              must not survive a Tab switch. -->
         <ShareOtpCard
           :key="activeBinding"
-          :mails="visibleMails"
           :selected="selectedMail"
           :enabled="otpEnabled"
         />
@@ -172,6 +172,30 @@
             :html="selectedMail.content || ''"
             default-mode="text"
           />
+          <!-- The code is not always the whole point: activation steps and account names
+               live in the body too, and dragging a selection inside the sandboxed iframe
+               is the only alternative the visitor has. -->
+          <div class="share-copy-all">
+            <button
+              type="button"
+              data-share-copy-all
+              :disabled="!fullMailText"
+              @click="copyFullMail"
+            >{{ tx('shareVisitCopyAll', 'Copy full email') }}</button>
+            <textarea
+              class="share-copy-all-select"
+              :class="{ 'is-visible': copyAllResult === 'manual' }"
+              :ref="bindBodySelectable"
+              readonly
+              rows="4"
+              :value="fullMailText"
+              :aria-label="tx('shareVisitCopyAll', 'Copy full email')"
+            ></textarea>
+            <p
+              v-if="copyAllResult"
+              :data-share-copy-all-result="copyAllResult"
+            >{{ copyAllResult === 'copied' ? tx('shareVisitCopiedAll', 'Full email copied') : tx('shareVisitCopyManual', 'Select the code and copy it yourself') }}</p>
+          </div>
           <p
             v-if="hasHtml(selectedMail)"
             class="share-remote-hint"
@@ -205,6 +229,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import SafeMailRenderer from '@/components/safe-mail/index.vue'
+import { useCopyWithFallback } from '@/composables/useCopyWithFallback.js'
 import { POLL_INTERVAL_MS, useSharePolling } from '@/composables/useSharePolling.js'
 import {
     createShareSession,
@@ -246,6 +271,7 @@ const MASKED_ADDRESS = '***'
 
 const route = useRoute()
 const { t, te, locale } = useI18n()
+const { copy: copyBody, selectableRef: bodySelectableRef } = useCopyWithFallback()
 
 const state = ref('loading')
 const mailbox = ref('')
@@ -271,6 +297,10 @@ const authKeyInput = ref('')
 const authError = ref(false)
 const authSubmitting = ref(false)
 let justRecovered = false
+// The watermarks drive Tab badges, which are deliberately blind to the Tab in front of
+// the visitor. This flag is the other half: it arms the toast for that Tab only after the
+// first page has landed, so the initial load is not announced as an arrival.
+let newMailToastArmed = false
 // useRoute() no longer answers once teardown starts, and by then the router may already
 // have moved on, so the lid this page owns is remembered while it is still alive.
 let ownedLid = ''
@@ -335,9 +365,26 @@ async function fetchStatus(args) {
     }
 }
 
+function maxVisibleMailId() {
+    const ids = visibleMails.value
+        .map((item) => Number(item.mailId))
+        .filter((id) => Number.isFinite(id))
+    return ids.length ? Math.max(...ids) : -1
+}
+
+// One toast per arrival, not per mail: a catch-up tick can bring back several at once and
+// a stack of identical notices tells the visitor nothing the list does not already show.
+// Only armed once the first page has settled, so opening a full mailbox stays quiet.
 function onPolledMails(list) {
     rateLimited.value = false
+    const before = maxVisibleMailId()
     mergeMails(list)
+    if (newMailToastArmed && maxVisibleMailId() > before && typeof ElMessage === 'function') {
+        ElMessage({
+            message: tx('shareVisitNewMailToast', 'New mail received'),
+            type: 'info'
+        })
+    }
 }
 
 function saveWatermarks(next) {
@@ -455,6 +502,42 @@ const selectedMail = computed(() => {
     return visible.find((item) => mailKey(item) === selectedId.value) || null
 })
 
+// text is the plain body the projection already sends in full; content is the fallback for
+// an HTML-only mail, where the raw markup is still closer to "everything in this mail"
+// than the empty string is.
+const fullMailText = computed(() => {
+    const item = selectedMail.value
+    if (!item) {
+        return ''
+    }
+    return String(item.text || item.content || '')
+})
+
+const copyAllResult = ref('')
+
+function bindBodySelectable(el) {
+    bodySelectableRef.value = el
+}
+
+async function copyFullMail() {
+    if (!fullMailText.value) {
+        return
+    }
+    const result = await copyBody(fullMailText.value)
+    copyAllResult.value = result.copied ? 'copied' : 'manual'
+    if (result.copied && typeof ElMessage === 'function') {
+        ElMessage({
+            message: tx('shareVisitCopiedAll', 'Full email copied'),
+            type: 'success'
+        })
+    }
+}
+
+// The confirmation belongs to one mail's body, exactly as the code card's does.
+watch(selectedMail, () => {
+    copyAllResult.value = ''
+})
+
 function tabId(bindingId) {
     return `share-tab-${bindingId}`
 }
@@ -517,10 +600,15 @@ async function selectTab(bindingId) {
     }
     const box = mailboxes.value.find((item) => item.bindingId === bindingId)
     const unread = Boolean(box && hasNew(watermarks.value, box.bindingId, box.latestEmailId))
+    // Mail this Tab was already holding is not news to the visitor who just asked to see
+    // it. Only a visitor-driven switch disarms: the status frame reassigning the active
+    // Binding is bookkeeping, and silencing the toast for it would lose real arrivals.
+    newMailToastArmed = false
     setActiveBinding(bindingId)
     const cached = mails.value.filter((item) => item.bindingId === bindingId)
     if (cached.length && !unread) {
         advanceFromPage(bindingId, cached)
+        newMailToastArmed = true
         return
     }
     try {
@@ -532,6 +620,8 @@ async function selectTab(bindingId) {
         const list = page && Array.isArray(page.list) ? page.list : []
         mergeMails(list)
         advanceFromPage(bindingId, list)
+        // Whatever this Tab was carrying is now on screen; the next arrival is real news.
+        newMailToastArmed = true
     } catch (err) {
         await noteShareFailure(err)
     }
@@ -816,6 +906,7 @@ function exitShare() {
     polling.stop()
     pageSecret.value = ''
     justRecovered = false
+    newMailToastArmed = false
     const lid = currentLid()
     if (lid) {
         clearShareSession(lid)
@@ -833,6 +924,7 @@ function exitShare() {
 function resetMailbox() {
     polling.stop()
     polling.unavailable.value = false
+    newMailToastArmed = false
     mails.value = []
     selectedId.value = ''
     rateLimited.value = false
@@ -867,6 +959,7 @@ async function beginMailbox() {
         }
         justRecovered = false
         rateLimited.value = false
+        newMailToastArmed = true
         if (autoRefresh.value) {
             polling.start()
         }
@@ -1181,6 +1274,59 @@ defineExpose({
 .share-detail h2 {
     margin: 4px 0 16px;
     font-size: 20px;
+}
+
+.share-copy-all {
+    position: relative;
+    margin: 12px 0 0;
+}
+
+.share-copy-all button {
+    padding: 6px 10px;
+    font: inherit;
+    color: #1f2328;
+    background: #f6f8fa;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.share-copy-all button:disabled {
+    color: #8c959f;
+    cursor: default;
+}
+
+.share-copy-all p {
+    margin: 8px 0 0;
+    color: #4b5563;
+    font-size: 13px;
+}
+
+/* Offscreen until the clipboard turns out to be unusable, then it becomes the thing the
+   visitor selects by hand. */
+.share-copy-all-select {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+}
+
+.share-copy-all-select.is-visible {
+    position: static;
+    width: 100%;
+    height: auto;
+    margin: 8px 0 0;
+    padding: 8px;
+    clip: auto;
+    overflow: auto;
+    box-sizing: border-box;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    font: inherit;
 }
 
 .share-atts {

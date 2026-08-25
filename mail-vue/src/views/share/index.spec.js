@@ -17,13 +17,23 @@ const {
     createShareSession: createShareSessionMock,
     listShareMails,
     getShareAttachment,
-    getShareMailboxesStatus
+    getShareMailboxesStatus,
+    elMessage
 } = vi.hoisted(() => ({
     createShareSession: vi.fn(),
     listShareMails: vi.fn(),
     getShareAttachment: vi.fn(),
-    getShareMailboxesStatus: vi.fn()
+    getShareMailboxesStatus: vi.fn(),
+    elMessage: vi.fn()
 }))
+
+// ElMessage reaches the SFC through unplugin-auto-import, which rewrites the bare
+// identifier into a real element-plus import — so the toast is observable here and not
+// through a global stub.
+vi.mock('element-plus', async (importOriginal) => {
+    const actual = await importOriginal()
+    return { ...actual, ElMessage: elMessage }
+})
 
 vi.mock('@/request/share.js', async (importOriginal) => {
     const actual = await importOriginal()
@@ -1387,7 +1397,8 @@ describe('share view refresh policy', () => {
         })
 
         const wrapper = await mountShare('lid-a', 'sec-a')
-        expect(wrapper.find('[data-share-refresh]').exists()).toBe(false)
+        // 常显:自动刷新开着也给"现在就查"的入口,等码的人不该被轮询间隔困住。
+        expect(wrapper.find('[data-share-refresh]').exists()).toBe(true)
         listShareMails.mockClear()
         getShareMailboxesStatus.mockClear()
 
@@ -1430,7 +1441,7 @@ describe('share view refresh policy', () => {
         expect(createShareSession).not.toHaveBeenCalled()
         expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
         expect(wrapper.find('[data-share-expires]').exists()).toBe(false)
-        expect(wrapper.find('[data-share-refresh]').exists()).toBe(false)
+        expect(wrapper.find('[data-share-refresh]').exists()).toBe(true)
 
         await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
         await flushPromises()
@@ -1592,5 +1603,103 @@ describe('share view expiry countdown and cleanup', () => {
         expect(sessionStorage.getItem('share:session:lid-a')).toBeNull()
         expect(sessionStorage.getItem('share:est-key:lid-a')).toBeNull()
         expect(sessionStorage.getItem('share:status:lid-a')).toBe('{"0":7}')
+    })
+})
+
+// W-3 · 等码的人盯着的是这一页,不是 Tab 角标。
+describe('share view arrival notice and full-body copy', () => {
+    const toast = elMessage
+
+    beforeEach(() => {
+        setActivePinia(createPinia())
+        sessionStorage.clear()
+        createShareSession.mockReset()
+        listShareMails.mockReset()
+        getShareAttachment.mockReset()
+        getShareMailboxesStatus.mockReset()
+        listShareMails.mockResolvedValue({ list: [], nextCursor: null })
+        getShareAttachment.mockResolvedValue(new Blob(['x']))
+        getShareMailboxesStatus.mockResolvedValue({ mailboxes: [{ bindingId: 0, latestEmailId: null }] })
+        toast.mockReset()
+    })
+
+    afterEach(() => {
+        while (wrappers.length) {
+            wrappers.pop().unmount()
+        }
+        sessionStorage.clear()
+        vi.clearAllMocks()
+        vi.useRealTimers()
+        vi.unstubAllGlobals()
+    })
+
+    it('announces mail that lands on the tab in front of the visitor, once per arrival', async () => {
+        vi.useFakeTimers()
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+        listShareMails
+            .mockResolvedValueOnce({ list: [mail({ mailId: 1, subject: 'Already here' })], nextCursor: null })
+            .mockResolvedValueOnce({
+                list: [
+                    mail({ mailId: 2, subject: 'Arrived A' }),
+                    mail({ mailId: 3, subject: 'Arrived B' })
+                ],
+                nextCursor: null
+            })
+            .mockResolvedValue({ list: [], nextCursor: null })
+
+        await mountShare('lid-a', 'sec-a')
+        // 首屏那封不是"新到",不该弹。
+        expect(toast).not.toHaveBeenCalled()
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        // 一拍回来两封 = 一条 toast,不是一串。
+        expect(toast).toHaveBeenCalledTimes(1)
+        expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+            message: en.shareVisitNewMailToast
+        }))
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+        expect(toast).toHaveBeenCalledTimes(1)
+    })
+
+    it('copies the whole body of the selected mail, not just the code', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined)
+        vi.stubGlobal('navigator', { ...navigator, language: 'en', clipboard: { writeText } })
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+        listShareMails.mockResolvedValue({
+            list: [mail({
+                mailId: 7,
+                code: '482917',
+                text: 'Your code is 482917. Activate at Settings > Security with account ada@example.com.'
+            })],
+            nextCursor: null
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        await wrapper.get('[data-share-copy-all]').trigger('click')
+        await flushPromises()
+
+        expect(writeText).toHaveBeenCalledWith(expect.stringContaining('ada@example.com'))
+        expect(wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-result')).toBe('copied')
+    })
+
+    it('offers a selectable body instead of claiming success when the clipboard is unusable', async () => {
+        vi.stubGlobal('navigator', { ...navigator, language: 'en', clipboard: undefined })
+        document.execCommand = () => false
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+        listShareMails.mockResolvedValue({
+            list: [mail({ mailId: 7, text: 'Full body here' })],
+            nextCursor: null
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        await wrapper.get('[data-share-copy-all]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-result')).toBe('manual')
+        expect(wrapper.get('.share-copy-all-select').classes()).toContain('is-visible')
     })
 })

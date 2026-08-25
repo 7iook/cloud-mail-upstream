@@ -1,38 +1,71 @@
 <template>
   <section
-    v-if="enabled && featuredMail"
+    v-if="enabled && selected"
     class="share-otp"
-    data-share-code
+    data-share-otp-card
   >
-    <p class="share-otp-label">{{ tx('shareVisitCode', 'Verification code') }}</p>
-    <div class="share-otp-row">
-      <strong class="share-otp-value">{{ featuredMail.code }}</strong>
-      <button
-        type="button"
-        data-share-copy
-        @click="copyFeaturedCode"
+    <template v-if="code || linkHref">
+      <div
+        v-if="code"
+        data-share-code
       >
-        {{ tx('shareVisitCopy', 'Copy') }}
-      </button>
-    </div>
-    <p data-share-code-from>{{ tx('shareVisitFrom', 'From') }} {{ senderLine(featuredMail) }}</p>
-    <input
-      class="share-otp-select"
-      :class="{ 'is-visible': copyResult === 'manual' }"
-      :ref="bindSelectable"
-      readonly
-      :value="featuredMail.code"
-      :aria-label="tx('shareVisitCode', 'Verification code')"
-    >
+        <p class="share-otp-label">{{ tx('shareVisitCode', 'Verification code') }}</p>
+        <div class="share-otp-row">
+          <strong class="share-otp-value">{{ code }}</strong>
+          <button
+            type="button"
+            data-share-copy
+            @click="copyCode"
+          >
+            {{ tx('shareVisitCopy', 'Copy') }}
+          </button>
+        </div>
+        <input
+          class="share-otp-select"
+          :class="{ 'is-visible': copyResult === 'manual' }"
+          :ref="bindSelectable"
+          readonly
+          :value="code"
+          :aria-label="tx('shareVisitCode', 'Verification code')"
+        >
+        <p
+          v-if="copyResult"
+          :data-share-copy-result="copyResult"
+        >{{ copyResult === 'copied' ? tx('shareVisitCopied', 'Copied') : tx('shareVisitCopyManual', 'Select the code and copy it yourself') }}</p>
+      </div>
+
+      <!-- The whole URL is the link text on purpose: hiding it behind a button would turn
+           "found in this mail" into an endorsement the page cannot make, since the body it
+           came from is written by whoever sent the mail. -->
+      <div
+        v-if="linkHref"
+        class="share-otp-link"
+        data-share-link
+      >
+        <p class="share-otp-label">{{ tx('shareVisitLink', 'Verification link') }}</p>
+        <a
+          class="share-otp-url"
+          data-share-link-url
+          :href="linkHref"
+          target="_blank"
+          rel="noopener noreferrer"
+          :aria-label="`${tx('shareVisitLinkOpen', 'Open')} ${linkHref}`"
+        >{{ linkHref }}</a>
+      </div>
+
+      <p data-share-code-from>{{ tx('shareVisitFrom', 'From') }} {{ senderLine(selected) }}</p>
+    </template>
+
     <p
-      v-if="copyResult"
-      :data-share-copy-result="copyResult"
-    >{{ copyResult === 'copied' ? tx('shareVisitCopied', 'Copied') : tx('shareVisitCopyManual', 'Select the code and copy it yourself') }}</p>
+      v-else
+      class="share-otp-empty"
+      data-share-nothing-found
+    >{{ tx('shareVisitNothingFound', 'No verification code or link found') }}</p>
   </section>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCopyWithFallback } from '@/composables/useCopyWithFallback.js'
 import { senderLine } from './mail-fields.js'
@@ -42,10 +75,6 @@ defineOptions({
 })
 
 const props = defineProps({
-    mails: {
-        type: Array,
-        default: () => []
-    },
     selected: {
         type: Object,
         default: null
@@ -65,32 +94,44 @@ function tx(key, fallback) {
     return te(key) ? t(key) : fallback
 }
 
-function hasShareCode(code) {
-    return code != null && String(code) !== ''
-}
+// Only ever the mail in front of the visitor. Scanning the rest of the list for a code to
+// show would put another mail's code under this mail's sender line.
+const code = computed(() => {
+    const value = props.selected && props.selected.code
+    return value == null ? '' : String(value)
+})
 
-const featuredMail = computed(() => {
-    const selected = props.selected
-    if (selected && hasShareCode(selected.code)) {
-        return selected
+// The body is attacker-controlled, so the protocol allow list is this page's own defence
+// and does not lean on the projection having filtered already. A relative or unparsable
+// href has no origin to show the visitor either, so it is not offered as a link.
+const linkHref = computed(() => {
+    const raw = props.selected && props.selected.link
+    const value = raw == null ? '' : String(raw).trim()
+    if (!value) {
+        return ''
     }
-    for (let i = props.mails.length - 1; i >= 0; i--) {
-        if (hasShareCode(props.mails[i].code)) {
-            return props.mails[i]
-        }
+    let parsed
+    try {
+        parsed = new URL(value)
+    } catch {
+        return ''
     }
-    return null
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? value : ''
+})
+
+watch(() => props.selected, () => {
+    copyResult.value = ''
 })
 
 function bindSelectable(el) {
     selectableRef.value = el
 }
 
-async function copyFeaturedCode() {
-    if (!featuredMail.value) {
+async function copyCode() {
+    if (!code.value) {
         return
     }
-    const result = await copy(featuredMail.value.code)
+    const result = await copy(code.value)
     copyResult.value = result.copied ? 'copied' : 'manual'
     if (result.copied && typeof ElMessage === 'function') {
         ElMessage({
@@ -132,6 +173,25 @@ async function copyFeaturedCode() {
     font-size: 32px;
     letter-spacing: 0.12em;
     font-variant-numeric: tabular-nums;
+}
+
+.share-otp-link {
+    margin-top: 16px;
+}
+
+/* Wraps rather than truncates: a URL cut off mid-host is exactly the part a visitor
+   needs to read before deciding to follow it. */
+.share-otp-url {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    color: #0969da;
+}
+
+.share-otp-empty {
+    margin: 0;
+    color: #4b5563;
 }
 
 .share-otp-select {
