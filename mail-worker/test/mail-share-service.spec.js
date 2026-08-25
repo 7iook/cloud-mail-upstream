@@ -6,12 +6,12 @@ import jwtUtils from '../src/utils/jwt-utils';
 import shareAuthService from '../src/service/share-auth-service';
 import mailShareService, {
 	SHARE_BINDING_LIMIT,
-	SHARE_EVENT,
 	SHARE_V2_INTENT,
 	assertCapabilityV2,
-	logShareEvent,
 	syncPrimaryAccountId
 } from '../src/service/mail-share-service';
+import { SHARE_EVENT, logShareEvent, shareRequestId } from '../src/service/share-event';
+import { Hono } from 'hono';
 import shareResult from '../src/model/share-result';
 import initSource from '../src/init/init.js?raw';
 import worker from '../src/index.js';
@@ -1253,11 +1253,11 @@ describe('create under SHARE_CAPABILITY_V2=false (AC-LIFE-11)', () => {
 		['AuthKey enable', { authKeyEnabled: true }],
 		['a finite maxSessions', { maxSessions: 5 }],
 		['a finite messageLimit', { messageLimit: 5 }]
-	])('rejects %s with SHARE_INVALID_CONFIG and leaves zero rows', async (_label, overrides) => {
+	])('rejects %s with SHARE_CAPABILITY_NOT_ENABLED and leaves zero rows', async (_label, overrides) => {
 		await seedOwners();
 		const message = await catchBiz(mailShareService.create(ctx(), createParams(overrides), USER_A));
 
-		expect(message).toBe('SHARE_INVALID_CONFIG');
+		expect(message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
 	});
 
@@ -1310,6 +1310,30 @@ function catchBizSync(fn) {
 	throw new Error('expected BizError');
 }
 
+function captureLog(fn) {
+	const lines = [];
+	const log = console.log;
+	console.log = (...args) => lines.push(args.map(String).join(' '));
+	try {
+		fn();
+	} finally {
+		console.log = log;
+	}
+	return lines;
+}
+
+// 带请求上下文的最小 hono 替身:`req.header` 供 requestId 取平台标识,`get`/`set` 供它
+// 在一次请求内只算一次 —— 同一请求的多条事件必须落在同一个 requestId 上才能串成时间线。
+function reqCtx(ray, overrides = {}) {
+	const store = new Map();
+	return {
+		env: shareEnv(overrides),
+		req: { header: (name) => (String(name).toLowerCase() === 'cf-ray' ? ray : undefined) },
+		get: (key) => store.get(key),
+		set: (key, value) => store.set(key, value)
+	};
+}
+
 const GATED_INTENTS = ['multi_create', 'binding_expand', 'auth_key_enable', 'finite_max_sessions', 'message_limit'];
 
 describe('SHARE_CAPABILITY_V2 capability fence (AC-LIFE-11)', () => {
@@ -1326,16 +1350,18 @@ describe('SHARE_CAPABILITY_V2 capability fence (AC-LIFE-11)', () => {
 		expect(Object.values(SHARE_V2_INTENT).sort()).toEqual([...GATED_INTENTS].sort());
 	});
 
-	it.each(GATED_INTENTS)('rejects %s with SHARE_INVALID_CONFIG when the flag is missing', (intent) => {
+	// 栅栏是暂时的发布态,前两种 SHARE_INVALID_CONFIG(状态不匹配 / 配置越域)是永久领域错误。
+	// 共用一个码时管理台只能靠语句顺序猜,所以栅栏单独占一个可辨识的码。
+	it.each(GATED_INTENTS)('rejects %s with SHARE_CAPABILITY_NOT_ENABLED when the flag is missing', (intent) => {
 		const err = catchBizSync(() => assertCapabilityV2({ env: {} }, intent));
-		expect(err.message).toBe('SHARE_INVALID_CONFIG');
+		expect(err.message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect(err.code).toBe(501);
 	});
 
 	it.each(GATED_INTENTS)('rejects %s when the flag is explicitly off', (intent) => {
 		for (const flag of ['false', '0', 0, false, '']) {
 			const err = catchBizSync(() => assertCapabilityV2(ctx({ SHARE_CAPABILITY_V2: flag }), intent));
-			expect(err.message).toBe('SHARE_INVALID_CONFIG');
+			expect(err.message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		}
 	});
 
@@ -1350,7 +1376,20 @@ describe('SHARE_CAPABILITY_V2 capability fence (AC-LIFE-11)', () => {
 		const c = ctx({ SHARE_CAPABILITY_V2: 'false' });
 		c.get = () => ({ share: 0, shareCapabilityV2: 1 });
 		const err = catchBizSync(() => assertCapabilityV2(c, SHARE_V2_INTENT.MULTI_CREATE));
-		expect(err.message).toBe('SHARE_INVALID_CONFIG');
+		expect(err.message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
+	});
+
+	// 防「图省事全改成新码」:栅栏拆码后,永久领域错误必须仍是 SHARE_INVALID_CONFIG,
+	// 否则管理台会把一个写错的取值读成「平台没开这项能力」,指向完全错误的自助动作。
+	it('leaves the two permanent domain errors on SHARE_INVALID_CONFIG', async () => {
+		const c = v2ctx();
+		const { shareId } = await seedShareRow({ userId: USER_A, accountId: ACC_A, authKeyEnabled: 0 });
+		// ① 状态不匹配:已是「未启用」还要再 disable。
+		expect(await catchBiz(mailShareService.resetAuthKey(c, { shareId, action: 'disable' }, USER_A)))
+			.toBe('SHARE_INVALID_CONFIG');
+		// ② 配置越域:刷新间隔低于下限。
+		expect(await catchBiz(mailShareService.update(c, { shareId, refreshIntervalMs: 1 }, USER_A)))
+			.toBe('SHARE_INVALID_CONFIG');
 	});
 });
 
@@ -1367,15 +1406,10 @@ describe('structured share observability events (R2-F2 / R3-A7)', () => {
 	});
 
 	it('emits one JSON line carrying requestId and shareId even when unset', () => {
-		const lines = [];
-		const log = console.log;
-		console.log = (...args) => lines.push(args.map(String).join(' '));
-		try {
-			logShareEvent(SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId: 42, reason: 'quota_exhausted' });
-			logShareEvent(SHARE_EVENT.SYSTEM_ERROR, {});
-		} finally {
-			console.log = log;
-		}
+		const lines = captureLog(() => {
+			logShareEvent(ctx(), SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId: 42, reason: 'quota_exhausted' });
+			logShareEvent(ctx(), SHARE_EVENT.SYSTEM_ERROR, {});
+		});
 		expect(lines).toHaveLength(2);
 		for (const line of lines) {
 			expect(line).not.toContain('\n');
@@ -1396,27 +1430,107 @@ describe('structured share observability events (R2-F2 / R3-A7)', () => {
 	});
 
 	it('never lets a diagnostic field overwrite the canonical envelope', () => {
-		const lines = [];
-		const log = console.log;
-		console.log = (...args) => lines.push(args.map(String).join(' '));
-		try {
-			logShareEvent(SHARE_EVENT.SESSION_DENIED_AUTH, {
+		const lines = captureLog(() => {
+			logShareEvent(ctx(), SHARE_EVENT.SESSION_DENIED_AUTH, {
 				event: 'overridden',
 				ts: 'overridden',
+				requestId: 'overridden',
 				shareId: 7,
 				reason: 'bad_sec'
 			});
-		} finally {
-			console.log = log;
-		}
+		});
 		const parsed = JSON.parse(lines[0]);
 		expect(parsed.event).toBe('share.session.denied_auth');
 		expect(parsed.ts).not.toBe('overridden');
 		expect(parsed).toMatchObject({ requestId: null, shareId: 7, reason: 'bad_sec' });
 	});
 
-	it('keeps init.js on its own literal instead of importing service constants', () => {
-		expect(initSource).toContain("event: 'share.migrate.invalid_row'");
+	// 成功状态①的可验证形式:运维按 requestId 过滤,一次请求产生的多条事件必须全部落在
+	// 同一个值上。`requestId` 恒为 null 时这条时间线根本不存在(线上实际就是这样)。
+	it('stamps every event of one request with the same requestId', () => {
+		const c = reqCtx('8f1c2d3e4a5b6071-SJC');
+		const lines = captureLog(() => {
+			logShareEvent(c, SHARE_EVENT.SESSION_DENIED_AUTH, { shareId: 11, reason: 'auth_key_mismatch' });
+			logShareEvent(c, SHARE_EVENT.SYSTEM_ERROR, { shareId: 11, reason: 'replay_cache_read_failed' });
+		});
+		const [first, second] = lines.map((line) => JSON.parse(line));
+		expect(first.requestId).toBe('8f1c2d3e4a5b6071-SJC');
+		expect(second.requestId).toBe(first.requestId);
+	});
+
+	// 两个请求之间必须可分辨,否则「串成一条时间线」会把并发访客的事件混进同一条。
+	it('gives two different requests two different requestIds', () => {
+		const lines = captureLog(() => {
+			logShareEvent(reqCtx('aaa1-SJC'), SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId: 1, reason: 'quota_race' });
+			logShareEvent(reqCtx('bbb2-SJC'), SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId: 2, reason: 'quota_race' });
+		});
+		const [first, second] = lines.map((line) => JSON.parse(line));
+		expect(first.requestId).toBe('aaa1-SJC');
+		expect(second.requestId).toBe('bbb2-SJC');
+	});
+
+	// 本地 wrangler dev 不经边缘,没有 cf-ray。此时仍要能串起来,否则交付契约里那次
+	// e2e(本地起 dev、按 requestId 对齐多条事件)根本没法做。
+	it('still correlates one request when the platform header is absent', () => {
+		const c = reqCtx(undefined);
+		const lines = captureLog(() => {
+			logShareEvent(c, SHARE_EVENT.SESSION_DENIED_CV, { shareId: 3, reason: 'credentials_version_mismatch' });
+			logShareEvent(c, SHARE_EVENT.SYSTEM_ERROR, { shareId: 3, reason: 'replay_cache_write_failed' });
+		});
+		const [first, second] = lines.map((line) => JSON.parse(line));
+		expect(typeof first.requestId).toBe('string');
+		expect(first.requestId).not.toHaveLength(0);
+		expect(second.requestId).toBe(first.requestId);
+	});
+
+	// 定时清理与迁移没有请求可关联。此时 requestId 是 null 而不是「缺这个键」——
+	// 按字段过滤的告警规则漏掉的是缺字段的那类,不是值为 null 的那类。
+	it('keeps the requestId key present as null outside any request', () => {
+		const lines = captureLog(() => {
+			logShareEvent({ env: {} }, SHARE_EVENT.BINDING_CASCADE, { shareId: 9, reason: 'expired' });
+		});
+		const parsed = JSON.parse(lines[0]);
+		expect(parsed).toHaveProperty('requestId', null);
+	});
+
+	// 上面几条用的是手搓 context。这条换成**真的 hono Context**:`shareRequestId` 依赖
+	// `c.req.header` / `c.get` / `c.set` 三个真实 API,假替身把它们实现成什么样都能自证。
+	// 缺这条,「恒带 requestId」可以在单测全绿的同时线上仍恒为 null —— 那正是本轮的原状。
+	it('reads the platform id off a real hono context (R2-F2 · design.md:451)', async () => {
+		const probe = new Hono();
+		probe.get('/probe', (c) => c.json({
+			first: shareRequestId(c),
+			// 同一个 context 上第二次调用必须复用,否则一次请求里的多条事件各带一个值。
+			second: shareRequestId(c)
+		}));
+		const ray = '9a1b2c3d4e5f6071-SJC';
+		const answer = await probe.request('/probe', { headers: { 'CF-Ray': ray } });
+		const body = await answer.json();
+
+		expect(body.first).toBe(ray);
+		expect(body.second).toBe(ray);
+	});
+
+	it('mints and reuses one id per real request when cf-ray is absent', async () => {
+		const probe = new Hono();
+		probe.get('/probe', (c) => c.json({ first: shareRequestId(c), second: shareRequestId(c) }));
+
+		const one = await (await probe.request('/probe')).json();
+		const two = await (await probe.request('/probe')).json();
+
+		expect(one.first).toEqual(expect.any(String));
+		expect(one.second).toBe(one.first);
+		// 两次独立请求不能撞在同一个值上,否则并发访客的事件会混进同一条时间线。
+		expect(two.first).not.toBe(one.first);
+	});
+
+	// init.js 原来手写 console.log,字段形状与其余五个事件不同,按字段过滤的告警规则会整类
+	// 漏掉它。收归统一出口,但**不能**让迁移路径依赖 share 服务(原断言刻意钉住的边界,
+	// 且那条依赖会与 share-auth-service 形成回环),所以出口自己是一个无依赖模块。
+	it('routes the migration event through the shared emitter, not its own literal', () => {
+		expect(initSource).toMatch(/from\s+['"][^'"]*share-event/);
+		expect(initSource).toContain('SHARE_EVENT.MIGRATE_INVALID_ROW');
+		expect(initSource).not.toContain("event: 'share.migrate.invalid_row'");
 		expect(initSource).not.toMatch(/from\s+['"].*mail-share-service/);
 	});
 });
@@ -1810,7 +1924,7 @@ describe('mailShareService.updateBindings (T-13)', () => {
 			add: [ACC_C]
 		}, USER_A));
 
-		expect(message).toBe('SHARE_INVALID_CONFIG');
+		expect(message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect(await bindingAccountIds(share.shareId)).toEqual([ACC_A]);
 	});
 
@@ -2469,10 +2583,10 @@ describe('mailShareService.update (T-15)', () => {
 
 		expect(await catchBiz(mailShareService.update(ctx(), {
 			shareId: share.shareId, maxSessions: 3
-		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		}, USER_A))).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect(await catchBiz(mailShareService.update(ctx(), {
 			shareId: share.shareId, messageLimit: 3
-		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		}, USER_A))).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect(await readShareRow(share.shareId)).toMatchObject({ max_sessions: null, message_limit: null });
 
 		// 白名单里其余六项与栅栏无关：V2=false 下必须照常落库。
@@ -3104,7 +3218,7 @@ describe('mailShareService.resetAuthKey state machine (T-16)', () => {
 
 		expect(await catchBiz(mailShareService.resetAuthKey(ctx(), {
 			shareId: off.shareId, action: 'enable'
-		}, USER_A))).toBe('SHARE_INVALID_CONFIG');
+		}, USER_A))).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect(authKeyColumns(await readShareRow(off.shareId))).toEqual({
 			auth_key_enabled: 0, auth_key_hash: null, auth_key_kid: null, credentials_version: 3
 		});
@@ -3280,7 +3394,7 @@ describe('owner API surface for resetAuthKey (T-16)', () => {
 		const refused = await ownerApi('POST', '/mailShare/resetAuthKey', {
 			jwt, body: { shareId: share.shareId, action: 'enable' }
 		});
-		expect(refused.json.message).toBe('SHARE_INVALID_CONFIG');
+		expect(refused.json.message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect((await readShareRow(share.shareId)).auth_key_enabled).toBe(0);
 
 		// Worker env 的基线是栅栏关闭态（`wrangler-vitest.toml:41`）；用例自己临时放行再还原，

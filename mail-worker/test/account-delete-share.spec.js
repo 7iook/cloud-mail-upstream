@@ -47,7 +47,7 @@ function ctx(overrides = {}) {
 }
 
 // 多邮箱 create 在 AC-LIFE-11 的栅栏后面,shareEnv() 没有 SHARE_CAPABILITY_V2 ——
-// 不显式放行,`accountIds: [X, Y]` 会被拒成 SHARE_INVALID_CONFIG。
+// 不显式放行,`accountIds: [X, Y]` 会被拒成 SHARE_CAPABILITY_NOT_ENABLED。
 function v2ctx(overrides = {}) {
 	return ctx({ SHARE_CAPABILITY_V2: 'true', ...overrides });
 }

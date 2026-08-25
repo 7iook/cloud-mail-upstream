@@ -1,4 +1,5 @@
 import settingService from '../service/setting-service';
+import { SHARE_EVENT, logShareEvent } from '../service/share-event';
 import emailUtils from '../utils/email-utils';
 import {emailConst, isDel} from "../const/entity-const";
 
@@ -123,15 +124,16 @@ const dbInit = {
 		`).all();
 
 		const revoked = results || [];
+		// 走统一出口而不是自己拼 JSON:这是发布门槛点名必须告警的三个事件之一,手写时字段形状
+		// 与其余五个事件不同,按 requestId 过滤的规则会把它整类漏掉。出口是无依赖的
+		// `share-event`,迁移路径因此仍然不依赖 share 服务。
 		revoked.forEach((row) => {
-			console.log(JSON.stringify({
-				event: 'share.migrate.invalid_row',
+			logShareEvent(c, SHARE_EVENT.MIGRATE_INVALID_ROW, {
 				migration: 'v3_2DB',
 				shareId: row.share_id,
 				accountId: row.account_id,
-				reason: 'account_gate_failed',
-				ts: new Date().toISOString()
-			}));
+				reason: 'account_gate_failed'
+			});
 		});
 		return revoked.length;
 	},

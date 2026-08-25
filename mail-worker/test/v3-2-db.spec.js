@@ -216,6 +216,15 @@ describe('v3_2DB backfill gate (R2-A4 · AC-BIND-09/11)', () => {
 		const logged = migrateLogs(logSpy);
 		const loggedShareIds = logged.map((entry) => entry.shareId);
 		expect(loggedShareIds).toEqual(expect.arrayContaining([deletedShare, mismatchShare, missingShare]));
+		// 发布门槛点名必须告警的三个事件之一。它曾绕过统一出口手写 console.log,字段形状与
+		// 其余五个事件不同,按 requestId 过滤的规则会把它整类漏掉 —— 迁移确实没有请求可关联,
+		// 所以要的是「键在、值为 null」,不是「没这个键」。
+		for (const entry of logged) {
+			expect(entry).toHaveProperty('requestId');
+			expect(entry.ts).toEqual(expect.any(String));
+			expect(entry.migration).toBe('v3_2DB');
+			expect(entry.reason).toBe('account_gate_failed');
+		}
 		expect(await illegalBindingCount()).toBe(0);
 	});
 

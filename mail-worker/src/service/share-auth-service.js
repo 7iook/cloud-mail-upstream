@@ -10,7 +10,7 @@ import { toUtc } from '../utils/date-uitil';
 // Known cycle with mail-share-service: it imports this module too. Both directions
 // are dereferenced inside function bodies only, so neither module evaluation hits a
 // TDZ. The event names stay in one place until W2 extracts them.
-import { SHARE_EVENT, logShareEvent } from './mail-share-service';
+import { SHARE_EVENT, logShareEvent } from './share-event';
 
 const SHARE_UNAVAILABLE = 'SHARE_UNAVAILABLE';
 // The only business code a visitor can ever tell apart from SHARE_UNAVAILABLE, and
@@ -417,8 +417,8 @@ function buildSessionPayload(row, bindings, sessionToken) {
 
 // Only shareId and reason: this line goes through console.log and is covered by the
 // AC-LEAK-05 fence, so no lid, sec or token may reach it.
-function denyQuota(shareId, reason) {
-	logShareEvent(SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId, reason });
+function denyQuota(c, shareId, reason) {
+	logShareEvent(c, SHARE_EVENT.SESSION_DENIED_QUOTA, { shareId, reason });
 	throwUnavailable();
 }
 
@@ -474,7 +474,7 @@ async function readReplayCache(c, lid, key, row) {
 			}
 		}
 	} catch {
-		logShareEvent(SHARE_EVENT.SYSTEM_ERROR, { shareId: row.shareId, reason: 'replay_cache_read_failed' });
+		logShareEvent(c, SHARE_EVENT.SYSTEM_ERROR, { shareId: row.shareId, reason: 'replay_cache_read_failed' });
 	}
 	return null;
 }
@@ -492,7 +492,7 @@ async function writeReplayCache(c, lid, key, shareId, result, exp) {
 			expirationTtl: Math.min(ESTABLISH_REPLAY_TTL, remaining)
 		});
 	} catch {
-		logShareEvent(SHARE_EVENT.SYSTEM_ERROR, { shareId, reason: 'replay_cache_write_failed' });
+		logShareEvent(c, SHARE_EVENT.SYSTEM_ERROR, { shareId, reason: 'replay_cache_write_failed' });
 	}
 }
 
@@ -526,7 +526,7 @@ async function establishSession(c, lid, sec, options = {}) {
 		if (!matchedKey) {
 			// No counter, no lockout, no per-IP state (AC-AUTH-05 / R2-A6): one line of
 			// telemetry carrying nothing but the share id and a fixed reason.
-			logShareEvent(SHARE_EVENT.SESSION_DENIED_AUTH, {
+			logShareEvent(c, SHARE_EVENT.SESSION_DENIED_AUTH, {
 				shareId: row.shareId,
 				reason: 'auth_key_mismatch'
 			});
@@ -546,7 +546,7 @@ async function establishSession(c, lid, sec, options = {}) {
 	// assertAllowed throws rather than returning the capped state, so recompute it here
 	// to keep the everyday "cap already reached" refusal observable.
 	if (effectiveStatus(row, nowText()) === 'ACCESS_LIMIT_REACHED') {
-		denyQuota(row.shareId, 'quota_snapshot');
+		denyQuota(c, row.shareId, 'quota_snapshot');
 	}
 	assertAllowed(row, ESTABLISH_ALLOWED);
 	const now = nowText();
@@ -563,7 +563,7 @@ async function establishSession(c, lid, sec, options = {}) {
 		throwUnavailable();
 	}
 	if (!applied.length) {
-		denyQuota(row.shareId, 'quota_race');
+		denyQuota(c, row.shareId, 'quota_race');
 	}
 	// Only now is the slot ours. A state change committing between here and the
 	// response is the documented TOCTOU window (AC-EDGE-13): the token dies on its
@@ -593,7 +593,7 @@ async function resolveSession(c, sessionToken) {
 	// every row that was never reset still holds. Once resetAuthKey bumps the row, the
 	// mismatch kills the session on its very next request (AC-AUTH-04 / AC-EDGE-05).
 	if ((payload.cv == null ? 0 : payload.cv) !== row.credentialsVersion) {
-		logShareEvent(SHARE_EVENT.SESSION_DENIED_CV, {
+		logShareEvent(c, SHARE_EVENT.SESSION_DENIED_CV, {
 			shareId: row.shareId,
 			reason: 'credentials_version_mismatch'
 		});

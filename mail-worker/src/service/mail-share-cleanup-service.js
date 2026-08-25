@@ -1,6 +1,6 @@
 import { isDel } from '../const/entity-const';
 import { toUtc } from '../utils/date-uitil';
-import { SHARE_EVENT, logShareEvent } from './mail-share-service';
+import { SHARE_EVENT, logShareEvent } from './share-event';
 
 const IDEMPOTENCY_TTL_HOURS = 24;
 
@@ -100,14 +100,16 @@ const mailShareCleanupService = {
 
 		// 每个受影响 share 一行。`reason` 与级联侧的 `account_deleted` 区分开,
 		// 便于排障时分辨「谁清的」。字段只放行号与计数,无 PII。
+		// 定时入口传的是 `{ env }`,没有请求可关联,所以这两条的 requestId 恒为 null ——
+		// 键仍在信封里,按字段过滤的告警规则不会把它们整类漏掉。
 		const revoked = new Set((results[1].results || []).map((row) => row.share_id));
 		for (const [shareId, removedBindings] of groupByShare(results[0])) {
-			logShareEvent(SHARE_EVENT.BINDING_CASCADE, {
+			logShareEvent(c, SHARE_EVENT.BINDING_CASCADE, {
 				shareId, reason: 'share_expired', removedBindings, revoked: false
 			});
 		}
 		for (const [shareId, removedBindings] of groupByShare(results[2])) {
-			logShareEvent(SHARE_EVENT.BINDING_CASCADE, {
+			logShareEvent(c, SHARE_EVENT.BINDING_CASCADE, {
 				shareId, reason: 'orphan_sweep', removedBindings, revoked: revoked.has(shareId)
 			});
 		}

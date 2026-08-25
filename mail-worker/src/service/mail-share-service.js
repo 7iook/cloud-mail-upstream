@@ -1,6 +1,7 @@
 import { isDel } from '../const/entity-const';
 import BizError from '../error/biz-error';
 import { toUtc } from '../utils/date-uitil';
+import { SHARE_EVENT, logShareEvent } from './share-event';
 import shareAuthService from './share-auth-service';
 
 const CREATE_OP = 'create';
@@ -37,15 +38,6 @@ export const SHARE_V2_INTENT = {
 };
 
 // design.md「结构化观测」固定事件名清单,拒绝/异常路径共用。
-export const SHARE_EVENT = {
-	SESSION_DENIED_QUOTA: 'share.session.denied_quota',
-	SESSION_DENIED_AUTH: 'share.session.denied_auth',
-	SESSION_DENIED_CV: 'share.session.denied_cv',
-	BINDING_CASCADE: 'share.binding.cascade',
-	MIGRATE_INVALID_ROW: 'share.migrate.invalid_row',
-	SYSTEM_ERROR: 'share.system.error'
-};
-
 // 恒 UTC。落库的 create_time / expires_at / delete_at 都是不带时区标记的裸串，
 // 前端(访客页倒计时、管理台失效时间)一律按 UTC 解析，所以写入方不能跟随进程时区 ——
 // 否则同一份代码在 Cloudflare(恒 UTC)与本地开发(UTC+8)会写出相差 8 小时的行。
@@ -77,25 +69,14 @@ function isCapabilityV2Enabled(c) {
 // 一条策略降级入口,所以拦在写入侧而不是读取侧。
 // `intent` 取 SHARE_V2_INTENT 之一,标记是哪一条受限写入路径;判定与 intent 无关,
 // 它只为调用点自述与后续排障保留(create 侧已接线,bindings/update 见 T-13/T-15/T-16)。
+// 抛 `SHARE_CAPABILITY_NOT_ENABLED` 而不是 `SHARE_INVALID_CONFIG`:后者还承载「状态不匹配」
+// 与「配置越域」两种永久领域错误,而栅栏只是暂时的发布态。三者共用一个码时管理台只能靠
+// 语句顺序猜,把「平台还没开这项能力」显示成「你的配置写错了」,指向完全错误的自助动作。
 export function assertCapabilityV2(c, intent) {
 	if (isCapabilityV2Enabled(c)) {
 		return;
 	}
-	throw new BizError('SHARE_INVALID_CONFIG');
-}
-
-// 结构化观测的唯一出口:一行 JSON,恒带 requestId 与 shareId(R2-F2 请求关联字段约定)。
-// 调用方只传诊断字段,禁止传 sec / authKey / token / IP / 邮箱地址等 PII 与凭据。
-export function logShareEvent(event, fields = {}) {
-	const { requestId = null, shareId = null, ...rest } = fields;
-	// 诊断字段先铺，规范字段后写：调用方传进来的 event / ts 只能被覆盖，不能反过来改写信封。
-	console.log(JSON.stringify({
-		...rest,
-		event,
-		requestId,
-		shareId,
-		ts: new Date().toISOString()
-	}));
+	throw new BizError('SHARE_CAPABILITY_NOT_ENABLED');
 }
 
 function randomToken(byteLength) {
@@ -1329,8 +1310,8 @@ const mailShareService = {
 	// 条件 UPDATE,`update` 的白名单里没有、也不许有这四列(design.md:328)。
 	// 顺序即语义,与 `assertCreateBody` / `assertUpdatePatch` 同构:
 	// ① action 值域 → ② 归属 + ACTIVE → ③ 迁移合法性 → ④ V2 栅栏。
-	// 前三条是永久领域错误,栅栏只是暂时的发布态;三者共用 `SHARE_INVALID_CONFIG` 一个码,
-	// 语义只能靠语句顺序保住。
+	// 前三条是永久领域错误,共用 `SHARE_INVALID_CONFIG`;栅栏只是暂时的发布态,已拆出
+	// `SHARE_CAPABILITY_NOT_ENABLED`,管理台不必再靠语句顺序反推该找管理员还是改自己的值。
 	async resetAuthKey(c, params, userId) {
 		const move = toAuthKeyTransition(params == null ? undefined : params.action);
 		const shareId = toShareId(params && params.shareId);
@@ -1465,7 +1446,7 @@ const mailShareService = {
 			removed.set(row.share_id, (removed.get(row.share_id) || 0) + 1);
 		}
 		for (const [shareId, removedBindings] of removed) {
-			logShareEvent(SHARE_EVENT.BINDING_CASCADE, {
+			logShareEvent(c, SHARE_EVENT.BINDING_CASCADE, {
 				shareId,
 				reason: 'account_deleted',
 				removedBindings,

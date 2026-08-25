@@ -1152,7 +1152,7 @@ describe('multi mailbox share over HTTP (T-19)', () => {
 		const refused = await ownerApi('POST', '/mailShare/create', {
 			body: { accountIds: [boxA, boxB], durationSeconds: 3600, name: 't24-gated', remark: '' }
 		});
-		expect(refused.json?.message).toBe('SHARE_INVALID_CONFIG');
+		expect(refused.json?.message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect(await countRows('SELECT COUNT(*) AS n FROM mail_share WHERE user_id = ?', [ownerUser.userId]))
 			.toBe(0);
 		expect(await countRows('SELECT COUNT(*) AS n FROM mail_share_binding')).toBe(0);
@@ -1162,7 +1162,7 @@ describe('multi mailbox share over HTTP (T-19)', () => {
 		const expand = await ownerApi('PUT', '/mailShare/bindings', {
 			body: { shareId, add: [boxB] }
 		});
-		expect(expand.json?.message).toBe('SHARE_INVALID_CONFIG');
+		expect(expand.json?.message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect((await bindingRows(shareId)).map((row) => row.account_id)).toEqual([boxA]);
 	});
 
@@ -1491,7 +1491,7 @@ describe('AuthKey over HTTP (T-19)', () => {
 		const refused = await ownerApi('POST', '/mailShare/resetAuthKey', {
 			body: { shareId, action: 'enable' }
 		});
-		expect(refused.json?.message).toBe('SHARE_INVALID_CONFIG');
+		expect(refused.json?.message).toBe('SHARE_CAPABILITY_NOT_ENABLED');
 		expect((await mailShareRow(shareId)).auth_key_enabled).toBe(0);
 
 		expect((await ownerV2('POST', '/mailShare/resetAuthKey', {
