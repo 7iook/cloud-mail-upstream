@@ -369,7 +369,9 @@
   - **Evidence**:`commit 0733b6b` · `verify: git check-ignore -v mail-worker/.dev.vars → .gitignore:33:.dev.vars EXIT=0`(修复前 EXIT=1)· `files: .gitignore:28-34 · mail-worker/.dev.vars.example(新建)` · `AC: 决策卡 §1.2 A 项负向条件「密钥被 commit 进仓库」`
   - **Update Log**:2026-08-25 · 规则含 `!.dev.vars.example` 例外以保留模板;同 diff 内的 `.ace-tool/` 一行非本轮产物,已在 commit message 中标注。
 - [ ] T-01 栅栏四项激活前置逐项核实(§1.6 四条运维命令),缺项则停下报告 · **零项可从代码判定,必须真跑命令,禁止推定已满足**
-- [ ] T-03 告警可用性缺口(第 4 项前置的代码侧障碍):8 个 `logShareEvent` 调用点补传 `requestId` + `init.js:127` 的 `share.migrate.invalid_row` 收归 SSOT
+- [x] T-03 告警可用性缺口 + T-03b 栅栏错误码可辨识(§1.2 E 项)
+  - **Evidence**:`commit 06263c3` · `verify: pnpm --dir mail-worker test → 18 files/636 passed/EXIT=0` · `files: mail-worker/src/service/share-event.js(新建) · mail-share-service.js · share-auth-service.js · mail-share-cleanup-service.js · init.js · 4 份后端 spec` · `AC: §1.6 第 4 项前置 + §1.2 E 项`
+  - **Update Log**:2026-08-25 · 执行者**正确偏离了指令**:原指令是「8 个调用点补传 requestId」,它指出照字面做等于把「没人记得传」这个根因原地保留,改为 `c` 设为必参、由日志出口自己从 `CF-Ray` 取(本地兜底 uuid,memoize 在 context)。指令停在症状层,采纳其改法。另抽出无依赖模块 `share-event.js`(既有测试禁止 `init.js` import `mail-share-service`),顺带解开旧注释里将就着的 "Known cycle" 循环依赖。栅栏码拆为 `SHARE_CAPABILITY_NOT_ENABLED`,另两种领域错误一行未动 + 守卫测试防后人图省事全换。**`unverified`**:`wrangler dev` 手动 e2e 未跑(替代证据:走真实 HTTP `ownerApi` 的三条栅栏集成断言)。⚠️ **最终 sink 仍在仓库外** —— Cloudflare 告警规则须按 `event` + `requestId` 配置才真正吃到本轮成果,**开栅栏前必须与运维确认**,否则这条链路是死产出。
 - [x] T-02 `ADR-share-credential-recoverability.md` 落 Proposed
   - **Evidence**:`commit pending` · `verify: 人工核对 ADR 六段结构与仓库现有 ADR 一致 + 被取代 ADR 已留反向指针` · `files: docs/architecture/ADR-share-credential-recoverability.md(新建) · docs/architecture/ADR-mail-share-capability-boundary.md:37(追加取代指针)` · `AC: 决策卡 §1.7 ADR 准入`
   - **Update Log**:2026-08-25 · 记录了推翻 `requirements.md:75`「`sec` 不可再次读取是安全不变量」的理由与代价;写明**轨二不可撤销、轨一可撤销**,这是两轨先后顺序的依据;补了实现期停止条件(KEK 无法与 D1 分离则轨一停止)。五条替代方案含用户初次裁决时未知的两条硬事实。
@@ -388,7 +390,11 @@
 - [ ] T-20b 轨一 · `sec` 可逆加密存储 + 解密端点(限流 + 审计)+ 管理台详情页链接展示(新分享显示链接 / 老分享显示「可重新生成」)· 复用 `collectKeyedSecrets` 加 `kek_kid` 环
 - [ ] T-20c 安全护栏补齐:现有明文子串扫描守卫对密文无效,新增「解密端点鉴权 / KEK 缺失 fail-closed / AuthKey 仍不可恢复」三条断言
 - [ ] T-21 批量创建端点 + 权限双表 + 向导批量 UI + create 限流补齐
-- [ ] T-22 自定义有效期(两处下拉 P-03 同改)+ `SHARE_MAX_DURATION_SECONDS` 显式化 + 测试夹具
+- [x] T-22a 自定义有效期 · **前端部分**(两处入口 P-03 同改)
+  - **Evidence**:`commit 344ff5d` + `ac71081`(静默失败修复)· `verify: pnpm --dir mail-vue test → 23 files/280 passed/EXIT=0` · `pnpm --dir mail-vue build 通过` · `files: share-admin/presets.js(+presets.spec.js 新建) · ShareCreateWizard.vue · email/ShareDialog.vue · i18n zh/en` · `AC: §1.2 H 项`
+  - **Update Log**:2026-08-25 · 档位收敛到 `presets.js` 共享常量,加源码级断言防 P-03 复发(两个 `.vue` 不许再出现档位字面量)。自定义哨兵用字符串 `'custom'`,类型上不可能与档位秒数相撞。**顺带修了一个被本功能放大的既有缺陷**:两个入口的 catch 原本只 `console.error`,业务错误完全不上屏,管理员看到「点了没反应」——以前档位固定不可能超限所以撞不上,自定义有效期让它变成常规路径。已做红绿验证(移除赋值 → 守卫红 → 恢复 → 绿,探针无残留)。
+- [ ] T-22b 自定义有效期 · **后端部分**:I-2 兜底上限 90 天落地 + `SHARE_MAX_DURATION_SECONDS` 显式化 + 测试夹具评估 + 续期(`expiresAt` 进 `UPDATE_FIELDS`)+ 配额排除自动重建
+  - ⚠️ **前端上限当前是镜像常量,构成第二真源**:`presets.js` 的 `MAX_DURATION_DAYS = 90` 镜像后端兜底值(沿用文件内既有的 "Mirrors of backend constants" 约定,`BINDING_LIMIT` 同源)。`websiteConfig` 带不出它——该接口只读 `setting` 表,而上限住在 Worker env。**部署者若配置更低的上限,前端不知情会放行、由后端拒绝**(现已有可读提示,不再静默)。彻底消除需把上限下发到前端,归本 task 一并评估。
 
 ### 阶段 3 · 收口
 - [ ] T-30 栅栏开启 + e2e 真跑一遍 + 存量打红用例处理。**e2e 必含**:存量分享重新生成 / 批量部分失败后只重试失败项 / 无权限调解密端点 / 未知 kid / Turnstile 上游故障 / 告警真的触达
