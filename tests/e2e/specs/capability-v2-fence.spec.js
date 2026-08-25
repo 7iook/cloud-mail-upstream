@@ -30,9 +30,9 @@ test('the flag refuses all four restricted writes and lets the same four through
 	const multi = await call('POST', '/mailShare/create', { token, body: createBody({ accountIds: [seed.accountId, seed.accountId2] }) })
 	const keyed = await call('POST', '/mailShare/create', { token, body: createBody({ authKeyEnabled: true }) })
 	const capped = await call('POST', '/mailShare/create', { token, body: createBody({ maxSessions: 1 }) })
-	expect(multi.json.message).toBe('SHARE_INVALID_CONFIG')
-	expect(keyed.json.message).toBe('SHARE_INVALID_CONFIG')
-	expect(capped.json.message).toBe('SHARE_INVALID_CONFIG')
+	expect(multi.json.message).toBe('SHARE_CAPABILITY_NOT_ENABLED')
+	expect(keyed.json.message).toBe('SHARE_CAPABILITY_NOT_ENABLED')
+	expect(capped.json.message).toBe('SHARE_CAPABILITY_NOT_ENABLED')
 	// Refused means nothing landed, not that it landed and was hidden.
 	expect(await listTotal()).toBe(before)
 
@@ -43,17 +43,17 @@ test('the flag refuses all four restricted writes and lets the same four through
 
 	// ② bindings 1 → N
 	const expand = await call('PUT', '/mailShare/bindings', { token, body: { shareId: plain.shareId, add: [seed.accountId2] } })
-	expect(expand.json.message).toBe('SHARE_INVALID_CONFIG')
+	expect(expand.json.message).toBe('SHARE_CAPABILITY_NOT_ENABLED')
 	expect((await world.api.getShare(seed, plain.shareId)).bindings.length).toBe(1)
 
 	// ③ AuthKey through its only write entry point
 	const enable = await call('POST', '/mailShare/resetAuthKey', { token, body: { shareId: plain.shareId, action: 'enable' } })
-	expect(enable.json.message).toBe('SHARE_INVALID_CONFIG')
+	expect(enable.json.message).toBe('SHARE_CAPABILITY_NOT_ENABLED')
 	expect((await world.api.getShare(seed, plain.shareId)).authKeyEnabled).toBe(false)
 
 	// ④ finite maxSessions through update
 	const cap = await call('PUT', '/mailShare/update', { token, body: { shareId: plain.shareId, maxSessions: 1 } })
-	expect(cap.json.message).toBe('SHARE_INVALID_CONFIG')
+	expect(cap.json.message).toBe('SHARE_CAPABILITY_NOT_ENABLED')
 	expect((await world.api.getShare(seed, plain.shareId)).maxSessions).toBe(null)
 
 	// WHEN the flag is on, the same four are allowed.
