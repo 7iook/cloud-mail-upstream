@@ -19,7 +19,9 @@ import {
     getMailShare,
     isShareForbidden,
     listMailShares,
+    regenerateMailShare,
     resetMailShareAuthKey,
+    revealMailShareSec,
     revokeMailShare,
     updateMailShare,
     updateMailShareBindings
@@ -155,6 +157,46 @@ describe('owner mail-share request (logged-in axios)', () => {
 
         await resetMailShareAuthKey({ shareId: 9, action: 'reset' })
         expect(http.post).toHaveBeenLastCalledWith('/mailShare/resetAuthKey', { shareId: 9, action: 'reset' })
+    })
+
+    // regenerate mints a brand-new sec on every call, so a retried request that the server
+    // already applied must come back as the same link rather than rotate a second time and
+    // strand the link the owner just copied. The backend keys that off this header.
+    it('sends Idempotency-Key on regenerate so a retry cannot rotate the link twice', async () => {
+        await regenerateMailShare(9, 'owner-regen-key-1')
+
+        expect(http.post).toHaveBeenCalledTimes(1)
+        const [url, body, config] = http.post.mock.calls[0]
+        expect(url).toBe('/mailShare/regenerate')
+        expect(body).toEqual({ shareId: 9 })
+        expect(config.headers['Idempotency-Key']).toBe('owner-regen-key-1')
+    })
+
+    it('mints its own Idempotency-Key when the caller supplies none', async () => {
+        await regenerateMailShare(9)
+        await regenerateMailShare(9)
+
+        const first = http.post.mock.calls[0][2].headers['Idempotency-Key']
+        const second = http.post.mock.calls[1][2].headers['Idempotency-Key']
+        expect(first).toBeTruthy()
+        // Two deliberate rotations are two different commands: reusing one key would make the
+        // second call replay the first one's response and silently skip the rotation.
+        expect(second).not.toBe(first)
+    })
+
+    // POST rather than GET, and no Idempotency-Key: revealing is a read that mints nothing, so
+    // a retry is harmless -- but the shareId must stay out of the URL, or "which share was
+    // looked at" lands in browser history, proxy logs and the referer of the next request.
+    it('reveals over POST with the shareId in the body, never in the URL', async () => {
+        await revealMailShareSec(9)
+
+        expect(http.post).toHaveBeenCalledTimes(1)
+        const [url, body, config] = http.post.mock.calls[0]
+        expect(url).toBe('/mailShare/revealSec')
+        expect(body).toEqual({ shareId: 9 })
+        expect(config === undefined || config.headers === undefined
+            || config.headers['Idempotency-Key'] === undefined).toBe(true)
+        expect(http.get).not.toHaveBeenCalled()
     })
 
     it('recognises the body-403 envelope so the admin page can separate it from a 401 bounce', () => {

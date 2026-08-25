@@ -290,6 +290,79 @@
       </section>
 
       <section class="panel">
+        <h4 class="panel-title">{{ tf('shareLinkTitle') }}</h4>
+
+        <p class="config-hint" data-test="link-hint">{{ tf('shareLinkHint') }}</p>
+
+        <div class="authkey-state">
+          <!-- 刻意不看 writable:那个计算属性说的是「可编辑」。已过期 / 已撤销的行恰恰是
+               管理员要排查「当初发出去的是哪条」的地方,后端也为此没给这条路加状态门。 -->
+          <el-button
+              data-test="link-reveal"
+              :disabled="revealBusy"
+              :loading="revealBusy"
+              @click="submitReveal"
+          >
+            {{ tf('shareLinkReveal') }}
+          </el-button>
+          <el-button
+              data-test="link-regenerate"
+              :disabled="!writable || linkBusy"
+              :loading="linkBusy"
+              @click="askRegenerate"
+          >
+            {{ tf('shareLinkRegenerate') }}
+          </el-button>
+        </div>
+
+        <p v-if="linkError" class="notice notice-danger" data-test="link-error" role="alert">
+          {{ linkError }}
+        </p>
+
+        <p v-if="revealError" class="notice notice-danger" data-test="link-reveal-error" role="alert">
+          {{ revealError }}
+        </p>
+
+        <div v-if="revealedLink" class="authkey-once" data-test="link-reveal-once">
+          <p class="authkey-once-warning">{{ tf('shareLinkRevealed') }}</p>
+          <div class="authkey-once-row">
+            <input
+                ref="revealSelectableRef"
+                class="authkey-input"
+                data-test="link-reveal-url"
+                type="text"
+                readonly
+                :aria-label="tf('shareLinkTitle')"
+                :value="revealedLink"
+            />
+            <el-button data-test="link-reveal-copy" @click="copyRevealedLink">{{ $t('copy') }}</el-button>
+            <el-button data-test="link-reveal-hide" @click="revealedLink = ''">
+              {{ tf('shareLinkRevealHide') }}
+            </el-button>
+          </div>
+        </div>
+
+        <div v-if="linkOnce" class="authkey-once" data-test="link-once">
+          <p class="authkey-once-warning">{{ tf('shareLinkOnce') }}</p>
+          <div class="authkey-once-row">
+            <input
+                ref="linkSelectableRef"
+                class="authkey-input"
+                data-test="link-url"
+                type="text"
+                readonly
+                :aria-label="tf('shareLinkTitle')"
+                :value="linkOnce"
+            />
+            <el-button data-test="link-copy" @click="copyLink">{{ $t('copy') }}</el-button>
+            <el-button type="primary" data-test="link-ack" @click="linkOnce = ''">
+              {{ tf('shareLinkSaved') }}
+            </el-button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
         <h4 class="panel-title">{{ tf('shareAuthKey') }}</h4>
 
         <div class="authkey-state">
@@ -366,7 +439,9 @@ import {useCopyWithFallback} from "@/composables/useCopyWithFallback.js"
 import {accountList} from "@/request/account.js"
 import {
   getMailShare,
+  regenerateMailShare,
   resetMailShareAuthKey,
+  revealMailShareSec,
   updateMailShare,
   updateMailShareBindings
 } from "@/request/mail-share.js"
@@ -390,6 +465,12 @@ const emit = defineEmits(['update:shareId', 'changed'])
 
 const {t, te} = useI18n()
 const {copy, selectableRef} = useCopyWithFallback()
+// A second instance rather than a shared one: the two one-shot blocks can be on screen at the
+// same time, and one selectableRef cannot point at both inputs.
+const {copy: copyLinkText, selectableRef: linkSelectableRef} = useCopyWithFallback()
+// A third instance for the same reason: the revealed link lives in its own input, and one
+// selectableRef cannot point at two of them.
+const {copy: copyRevealText, selectableRef: revealSelectableRef} = useCopyWithFallback()
 
 // T-28/T-29 are the only writers of i18n/zh.js and i18n/en.js. Until they land the keys
 // registered in exec-t21-note.md, fall back to the agreed copy instead of painting a raw key
@@ -472,6 +553,16 @@ const authKeyError = ref('')
 // The only place the new key ever exists in this app. Not storage, not pinia, not the URL:
 // the detail endpoint never returns it again, so persisting it would void "shown once".
 const authKeyOnce = ref('')
+const linkBusy = ref(false)
+const linkError = ref('')
+// Same discipline as authKeyOnce: the sec half of the URL is never stored server-side and the
+// detail endpoint never returns it, so keeping it anywhere but this ref would void "shown once".
+const linkOnce = ref('')
+const revealBusy = ref(false)
+const revealError = ref('')
+// Same discipline as authKeyOnce / linkOnce. This one *can* be fetched again, but that is the
+// server's business: on this side it still never reaches storage, pinia or the URL.
+const revealedLink = ref('')
 // Drop stale reads/writes after the owner switches shares. Same idea as the list page reqSeq.
 let reqGen = 0
 function bumpGen() {
@@ -628,6 +719,8 @@ function applyDetail(data) {
 function close() {
   bumpGen()
   authKeyOnce.value = ''
+  linkOnce.value = ''
+  revealedLink.value = ''
   emit('update:shareId', 0)
 }
 
@@ -967,6 +1060,133 @@ function askAuthKey(action) {
   })
 }
 
+// AC-LIFE-05:链接外泄或丢失时的「换一条继续用」。有效期与绑定邮箱不动,只轮换凭据。
+async function submitRegenerate() {
+  if (!writable.value || linkBusy.value) {
+    return
+  }
+  const opened = props.shareId
+  const gen = reqGen
+  linkError.value = ''
+  linkBusy.value = true
+  try {
+    const data = await regenerateMailShare(opened) || {}
+    if (!isCurrent(gen, opened)) {
+      return
+    }
+    linkOnce.value = data.shareUrl || ''
+    // 这次轮换刚把取回的那条作废。继续挂着它,管理员会把一条死链接复制出去。
+    revealedLink.value = ''
+    revealError.value = ''
+    ElMessage({message: tf('shareLinkRegenerated'), type: 'success', plain: true})
+    emit('changed')
+  } catch (err) {
+    if (!isCurrent(gen, opened)) {
+      return
+    }
+    if (isGone(err)) {
+      closeGone()
+      return
+    }
+    // 与 submitSave 的末支同一条理由:没有兜底时,服务端新加的码在界面上什么都不会发生,
+    // 管理员分辨不出「被拒了」和「按钮是死的」。
+    linkError.value = err && err.message === 'SHARE_CAPABILITY_NOT_ENABLED'
+      ? tf('shareCapabilityNotEnabled')
+      : tf('shareLinkRegenerateFailed')
+    console.error('mail share regenerate failed', {code: err && err.code, message: err && err.message})
+    return
+  } finally {
+    linkBusy.value = false
+  }
+  // regenerate 回的是 create 形状(没有 name / effectiveStatus / authKeyEnabled),灌进 applyDetail
+  // 会把表头清空。详情接口是唯一带这些字段的形状,而库里的 lid 已经换了,必须重读。
+  await load(opened)
+}
+
+function askRegenerate() {
+  if (!writable.value) {
+    return
+  }
+  // 踢掉在途访客是管理员事后无法撤销、也无法自行发现的副作用:文案必须把它说出来,
+  // 而不是只问一句「确定要重新生成吗」。
+  ElMessageBox.confirm(
+      tf('shareLinkRegenerateConfirm'),
+      {
+        confirmButtonText: t('confirm'),
+        cancelButtonText: t('cancel'),
+        type: 'warning'
+      }
+  ).then(() => submitRegenerate()).catch((err) => {
+    if (isDismissal(err)) {
+      return
+    }
+    console.error('mail share regenerate confirm failed', {err})
+  })
+}
+
+// 后端把取不回来的五种成因收敛成四个码,每个对应一个不同的下一步动作。前两个是
+// 「你可以自助解决」(重新生成一条),后两个是「系统有问题」(找管理员/运维)。
+// ⛔ 不要把它们折回一句「获取失败」—— 那等于把判断又推回给管理员。
+const REVEAL_ERROR_KEYS = {
+  SHARE_SEC_ABSENT: 'shareSecAbsent',
+  SHARE_SEC_UNAVAILABLE: 'shareSecUnavailable',
+  SHARE_SEC_KEY_RETIRED: 'shareSecKeyRetired',
+  SHARE_SEC_CORRUPTED: 'shareSecCorrupted'
+}
+
+// 轨一的读取端(ADR-share-credential-recoverability):把当初发出去的那条链接原样取回。
+// 与 askRegenerate 不同,这里没有确认框 —— 它不改任何状态,而且失败远比成功常见,
+// 先弹一个「确定要查看吗」只会让管理员在四种成因面前多点一次。
+async function submitReveal() {
+  if (revealBusy.value) {
+    return
+  }
+  const opened = props.shareId
+  const gen = reqGen
+  revealError.value = ''
+  revealBusy.value = true
+  try {
+    const data = await revealMailShareSec(opened) || {}
+    if (!isCurrent(gen, opened)) {
+      return
+    }
+    // 两块链接同屏时,管理员没有任何办法看出哪条是现在有效的那条。取回的这条是当前
+    // 有效的,刚铸的那条已经被它取代 —— 让位的必须是「只显示这一次」的那块。
+    linkOnce.value = ''
+    linkError.value = ''
+    revealedLink.value = data.shareUrl || ''
+  } catch (err) {
+    if (!isCurrent(gen, opened)) {
+      return
+    }
+    if (isGone(err)) {
+      closeGone()
+      return
+    }
+    // 兜底不可省:没有它时,服务端新加的码在界面上什么都不会发生,管理员分辨不出
+    // 「被拒了」和「按钮是死的」。本轮这个缺陷已在三处出现过。
+    const key = REVEAL_ERROR_KEYS[err && err.message] || 'shareLinkRevealFailed'
+    revealError.value = tf(key)
+    console.error('mail share reveal failed', {code: err && err.code, message: err && err.message})
+  } finally {
+    revealBusy.value = false
+  }
+}
+
+async function copyRevealedLink() {
+  const result = await copyRevealText(revealedLink.value)
+  if (result.copied) {
+    ElMessage({message: t('copySuccessMsg'), type: 'success', plain: true})
+  }
+}
+
+async function copyLink() {
+  const result = await copyLinkText(linkOnce.value)
+  if (result.copied) {
+    ElMessage({message: t('copySuccessMsg'), type: 'success', plain: true})
+  }
+}
+
 async function copyAuthKey() {
   const result = await copy(authKeyOnce.value)
   if (result.copied) {
@@ -982,6 +1202,10 @@ watch(() => props.shareId, (shareId) => {
   bindingError.value = ''
   authKeyError.value = ''
   authKeyOnce.value = ''
+  linkError.value = ''
+  linkOnce.value = ''
+  revealError.value = ''
+  revealedLink.value = ''
   accounts.value = []
   accountsDone.value = false
   addAccountId.value = null

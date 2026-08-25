@@ -206,7 +206,11 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         const urlField = wrapper.get('[data-test="share-url"]')
         expect(urlField.element.value).toBe(SHARE_URL)
         expect(urlField.element.value).toContain(`#${SECRET}`)
-        expect(wrapper.get('[data-test="secret-once"]').text()).toMatch(/only time|cannot be retrieved/i)
+        // Was /only time|cannot be retrieved/. Since the reveal endpoint landed the link *is*
+        // retrievable from the detail drawer, so the old copy was telling the owner something
+        // false — and a hint he cannot trust is worse than no hint. It still has to push him to
+        // copy now, which is what this asserts.
+        expect(wrapper.get('[data-test="secret-once"]').text()).toMatch(/copy .*now/i)
         expect(createMailShare).toHaveBeenCalledTimes(1)
         const listText = wrapper.findAll('[data-test="share-row"]').map((row) => row.text()).join(' ')
         expect(listText).not.toContain(SECRET)

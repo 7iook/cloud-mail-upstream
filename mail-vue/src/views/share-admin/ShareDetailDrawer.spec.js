@@ -11,6 +11,8 @@ const {
     updateMailShare,
     updateMailShareBindings,
     resetMailShareAuthKey,
+    regenerateMailShare,
+    revealMailShareSec,
     accountList,
     confirm,
     message
@@ -19,6 +21,8 @@ const {
     updateMailShare: vi.fn(),
     updateMailShareBindings: vi.fn(),
     resetMailShareAuthKey: vi.fn(),
+    regenerateMailShare: vi.fn(),
+    revealMailShareSec: vi.fn(),
     accountList: vi.fn(),
     confirm: vi.fn(),
     message: vi.fn()
@@ -33,7 +37,9 @@ vi.mock('@/request/mail-share.js', async (importOriginal) => {
         getMailShare,
         updateMailShare,
         updateMailShareBindings,
-        resetMailShareAuthKey
+        resetMailShareAuthKey,
+        regenerateMailShare,
+        revealMailShareSec
     }
 })
 
@@ -73,6 +79,12 @@ import { tzText } from '@/utils/day.js'
 import ShareDetailDrawer from './ShareDetailDrawer.vue'
 
 const AUTH_KEY = 'Ab3dEf0123456789_-xyQ'
+const NEW_SEC = 'sEc0123456789abcdefGHI'
+const NEW_LID = 'lid-rotated'
+const NEW_SHARE_URL = `https://mail.example.com/s/${NEW_LID}#${NEW_SEC}`
+// The link as it was handed out at creation time -- what revealSec gives back, verbatim.
+const ORIGINAL_SEC = 'origSec9876543210zyxwVU'
+const ORIGINAL_SHARE_URL = `https://mail.example.com/s/lid-7#${ORIGINAL_SEC}`
 
 const stubs = {
     Icon: { template: '<i />' },
@@ -196,6 +208,39 @@ function plaintextTrace(wrapper) {
     return {
         inputs: wrapper.findAll('input').filter((node) => String(node.element.value || '').includes(AUTH_KEY)),
         inText: wrapper.text().includes(AUTH_KEY)
+    }
+}
+
+// The rotated link carries the sec in its fragment, so the same "one readonly input, never
+// rendered as text" rule the AuthKey lives under applies to the whole URL.
+function linkTrace(wrapper) {
+    return {
+        inputs: wrapper.findAll('input').filter((node) => String(node.element.value || '').includes(NEW_SEC)),
+        inText: wrapper.text().includes(NEW_SEC)
+    }
+}
+
+// Same rule as linkTrace, for the link handed back by revealSec.
+function revealTrace(wrapper) {
+    return {
+        inputs: wrapper.findAll('input').filter((node) => String(node.element.value || '').includes(ORIGINAL_SEC)),
+        inText: wrapper.text().includes(ORIGINAL_SEC)
+    }
+}
+
+// firstCreateResponse: regenerate answers with the create shape, not a detail. It has no
+// name / effectiveStatus / authKeyEnabled, so feeding it into the drawer's detail would blank
+// the header -- the drawer has to re-read instead.
+function regenerateResponse(overrides = {}) {
+    return {
+        shareId: 7,
+        lid: NEW_LID,
+        sec: NEW_SEC,
+        expiresAt: '2026-08-18 01:00:00',
+        shareUrl: NEW_SHARE_URL,
+        shareType: 'single',
+        bindings: [{ bindingId: 91, accountId: 11 }],
+        ...overrides
     }
 }
 
@@ -905,6 +950,400 @@ describe('share detail drawer · access key (AC-ADMIN-05 / AC-AUTH-07 / AC-AUTH-
     })
 })
 
+// 交付契约:管理员发现链接可能外泄、或者自己弄丢了,能在管理台当场换一条新链接继续用 ——
+// 有效期、可见邮件范围、各项配置全部原样保留;而且他在点下去之前就清楚知道旧链接会立刻作废。
+describe('share detail drawer · link rotation (AC-LIFE-05 / AC-SHARE-13)', () => {
+    beforeEach(() => {
+        getMailShare.mockReset()
+        updateMailShare.mockReset()
+        updateMailShareBindings.mockReset()
+        resetMailShareAuthKey.mockReset()
+        regenerateMailShare.mockReset()
+        accountList.mockReset()
+        confirm.mockReset()
+        message.mockReset()
+        getMailShare.mockResolvedValue(sampleDetail())
+        updateMailShare.mockImplementation(async () => sampleDetail())
+        regenerateMailShare.mockResolvedValue(regenerateResponse())
+        accountList.mockResolvedValue([])
+        confirm.mockResolvedValue('confirm')
+    })
+
+    it('rotates the link after a confirm and shows the new one exactly once (L1)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        expect(confirm).toHaveBeenCalledTimes(1)
+        expect(regenerateMailShare).toHaveBeenCalledTimes(1)
+        expect(regenerateMailShare).toHaveBeenCalledWith(7)
+        expect(wrapper.get('[data-test="link-url"]').element.value).toBe(NEW_SHARE_URL)
+        expect(wrapper.get('[data-test="link-copy"]').exists()).toBe(true)
+        expect(wrapper.emitted('changed')).toBeTruthy()
+    })
+
+    // 「踢掉在途访客」是用户可见的副作用,确认文案必须说出来 —— 只问「确定要重新生成吗」
+    // 等于让管理员在不知道会断线的情况下按下去。
+    it('spells out that open visits are cut off, not just "are you sure" (L2 copy)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        const copy = confirm.mock.calls[0][0]
+        expect(copy).toBe(en.shareLinkRegenerateConfirm)
+        // The two consequences the owner cannot discover afterwards: the old link dies, and
+        // whoever is reading right now is disconnected.
+        expect(copy).toMatch(/old link|previous link/i)
+        expect(copy).toMatch(/disconnect|cut off|stop working|signed out/i)
+    })
+
+    it('sends nothing when the confirm is dismissed (L3)', async () => {
+        confirm.mockRejectedValue('cancel')
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        expect(confirm).toHaveBeenCalledTimes(1)
+        expect(regenerateMailShare).not.toHaveBeenCalled()
+        expect(wrapper.find('[data-test="link-once"]').exists()).toBe(false)
+    })
+
+    // regenerate 回的是 create 形状(没有 name / effectiveStatus),直接灌进详情会把表头清空。
+    it('re-reads the detail instead of painting the create-shaped response into it (L4)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        expect(getMailShare).toHaveBeenCalledTimes(2)
+        expect(wrapper.get('[data-test="detail-name"]').text()).toBe('front desk')
+        // 有效期原样保留:换链接不是续期,详情里的时刻不该动。
+        expectSameInstant(wrapper.get('[data-test="detail-expires"]').text(), '2026-08-18 01:00:00')
+        expect(wrapper.get('[data-test="detail-status"]').attributes('data-status')).toBe('ACTIVE')
+    })
+
+    it('keeps the new secret in one readonly input and drops it on acknowledge (L5)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        // 明文只此一次:详情接口永不再返回它,所以它不进 storage、不进 pinia、不进 URL,
+        // 只活在一个组件内的 ref 里。
+        const survived = linkTrace(wrapper)
+        expect(survived.inputs).toHaveLength(1)
+        expect(survived.inputs[0].attributes('data-test')).toBe('link-url')
+        expect(survived.inText).toBe(false)
+        const stored = { ...localStorage, ...sessionStorage }
+        expect(JSON.stringify(stored)).not.toContain(NEW_SEC)
+        expect(window.location.href).not.toContain(NEW_SEC)
+
+        await wrapper.get('[data-test="link-ack"]').trigger('click')
+        expect(wrapper.find('[data-test="link-once"]').exists()).toBe(false)
+        expect(linkTrace(wrapper).inputs).toHaveLength(0)
+    })
+
+    it('copies the new link through the shared fallback helper (L6)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        message.mockClear()
+        await wrapper.get('[data-test="link-copy"]').trigger('click')
+        await flushPromises()
+
+        expect(message).toHaveBeenCalledTimes(1)
+    })
+
+    it('names the capability when the fence refuses the rotation (L7)', async () => {
+        regenerateMailShare.mockRejectedValue({ code: 500, message: 'SHARE_CAPABILITY_NOT_ENABLED' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="link-error"]').text()).toBe(en.shareCapabilityNotEnabled)
+        expect(wrapper.find('[data-test="link-once"]').exists()).toBe(false)
+    })
+
+    // 与 R10 同一条思路:没有兜底分支时,服务端新加的错误码在界面上什么都不会发生,
+    // 管理员分辨不出「被拒了」和「按钮是死的」。本轮这个缺陷已在三处出现过。
+    it('never leaves a business refusal off the screen, whatever the code (L8)', async () => {
+        regenerateMailShare.mockRejectedValue({ code: 500, message: 'SHARE_SOME_FUTURE_CODE' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="link-error"]').text()).toBe(en.shareLinkRegenerateFailed)
+    })
+
+    it('closes and refreshes the list when the share vanished mid-rotation (L9)', async () => {
+        regenerateMailShare.mockRejectedValue({ code: 500, message: 'SHARE_NOT_FOUND' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.emitted('update:shareId')).toEqual([[0]])
+        expect(wrapper.find('[data-test="link-once"]').exists()).toBe(false)
+    })
+
+    it('does not paint share A new link onto share B after a late rotation (L10)', async () => {
+        getMailShare.mockImplementation(async (shareId) => sampleDetail({
+            shareId,
+            name: shareId === 8 ? 'share B' : 'share A'
+        }))
+        const rotate = deferred()
+        regenerateMailShare.mockImplementationOnce(() => rotate.promise)
+        const wrapper = await openDrawer({ shareId: 7 })
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await wrapper.setProps({ shareId: 8 })
+        await flushPromises()
+
+        rotate.resolve(regenerateResponse({ shareId: 7 }))
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="detail-name"]').text()).toBe('share B')
+        expect(wrapper.find('[data-test="link-once"]').exists()).toBe(false)
+        expect(linkTrace(wrapper).inputs).toHaveLength(0)
+    })
+})
+
+// 轨一的读取端(ADR-share-credential-recoverability):管理员点开任意一条分享的详情,
+// 都能知道「这条链接现在还能不能拿回来」—— 能就当场拿回并复制,不能就看到一句说清
+// 原因、并告诉他下一步该干什么的话。「上线前建的可以重新生成」与「服务配置异常要找
+// 管理员」是两件不同的事,后端花了一整包把它们分开,前端折成一句就等于白做。
+describe('share detail drawer · link reveal (ADR track 1)', () => {
+    beforeEach(() => {
+        getMailShare.mockReset()
+        updateMailShare.mockReset()
+        updateMailShareBindings.mockReset()
+        resetMailShareAuthKey.mockReset()
+        regenerateMailShare.mockReset()
+        revealMailShareSec.mockReset()
+        accountList.mockReset()
+        confirm.mockReset()
+        message.mockReset()
+        getMailShare.mockResolvedValue(sampleDetail())
+        updateMailShare.mockImplementation(async () => sampleDetail())
+        regenerateMailShare.mockResolvedValue(regenerateResponse())
+        revealMailShareSec.mockResolvedValue({ shareId: 7, lid: 'lid-7', shareUrl: ORIGINAL_SHARE_URL })
+        accountList.mockResolvedValue([])
+        confirm.mockResolvedValue('confirm')
+    })
+
+    it('hands back the link that was issued at creation, ready to copy (V1)', async () => {
+        const wrapper = await openDrawer()
+
+        expect(wrapper.find('[data-test="link-reveal-url"]').exists()).toBe(false)
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        expect(revealMailShareSec).toHaveBeenCalledTimes(1)
+        expect(revealMailShareSec).toHaveBeenCalledWith(7)
+        // 逐字相同:后端 shareUrlOf 是 create / regenerate / reveal 的唯一拼装点,前端不得
+        // 自己再拼一遍,否则交回的是一条看不出坏在哪的链接。
+        expect(wrapper.get('[data-test="link-reveal-url"]').element.value).toBe(ORIGINAL_SHARE_URL)
+        expect(wrapper.find('[data-test="link-reveal-copy"]').exists()).toBe(true)
+        expect(wrapper.find('[data-test="link-reveal-error"]').exists()).toBe(false)
+    })
+
+    it('copies the revealed link through the shared fallback helper (V2)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+        message.mockClear()
+        await wrapper.get('[data-test="link-reveal-copy"]').trigger('click')
+        await flushPromises()
+
+        expect(message).toHaveBeenCalledTimes(1)
+    })
+
+    // 四个码 = 四种不同的管理员动作。前两个「你可以自助解决」(重新生成一条),后两个
+    // 「系统有问题」(找管理员/运维)。折叠成一句「获取失败」就把这个判断推回给了他。
+    const FAILURES = [
+        ['SHARE_SEC_ABSENT', 'shareSecAbsent'],
+        ['SHARE_SEC_UNAVAILABLE', 'shareSecUnavailable'],
+        ['SHARE_SEC_KEY_RETIRED', 'shareSecKeyRetired'],
+        ['SHARE_SEC_CORRUPTED', 'shareSecCorrupted']
+    ]
+
+    it.each(FAILURES)('says what %s means and what to do next (V3)', async (code, key) => {
+        revealMailShareSec.mockRejectedValue({ code: 500, message: code })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="link-reveal-error"]').text()).toBe(en[key])
+        expect(wrapper.find('[data-test="link-reveal-url"]').exists()).toBe(false)
+    })
+
+    // 逐条断言还不够:四条都渲染出来但文案相同,上面四个用例照样全绿。
+    it('gives the four codes four different answers, not one "failed" (V4)', async () => {
+        const texts = []
+        for (const [code] of FAILURES) {
+            revealMailShareSec.mockRejectedValue({ code: 500, message: code })
+            const wrapper = await openDrawer()
+            await wrapper.get('[data-test="link-reveal"]').trigger('click')
+            await flushPromises()
+            texts.push(wrapper.get('[data-test="link-reveal-error"]').text())
+        }
+
+        expect(new Set(texts).size).toBe(4)
+        // 自助 vs 找人:前两个码告诉他自己能解决,后两个明确说不是他的操作问题。
+        expect(texts[0]).toMatch(/重新生成|regenerate/i)
+        expect(texts[2]).toMatch(/重新生成|regenerate/i)
+        expect(texts[1]).toMatch(/管理员|运维|administrator|operator/i)
+        expect(texts[3]).toMatch(/管理员|运维|administrator|operator/i)
+    })
+
+    // 与 R10 / L8 同一条思路:没有兜底分支时,服务端新加的码在界面上什么都不会发生,
+    // 管理员分辨不出「被拒了」和「按钮是死的」。本轮这个缺陷已在三处出现过。
+    it('never leaves a business refusal off the screen, whatever the code (V5)', async () => {
+        revealMailShareSec.mockRejectedValue({ code: 500, message: 'SHARE_SOME_FUTURE_CODE' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="link-reveal-error"]').text()).toBe(en.shareLinkRevealFailed)
+    })
+
+    it('keeps the revealed link in one readonly input and drops it on acknowledge (V6)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        const survived = revealTrace(wrapper)
+        expect(survived.inputs).toHaveLength(1)
+        expect(survived.inputs[0].attributes('data-test')).toBe('link-reveal-url')
+        expect(survived.inText).toBe(false)
+        // 取回的明文和新铸的一样,不进 storage、不进 pinia、不进 URL —— 只活在组件内的 ref 里。
+        const stored = { ...localStorage, ...sessionStorage }
+        expect(JSON.stringify(stored)).not.toContain(ORIGINAL_SEC)
+        expect(window.location.href).not.toContain(ORIGINAL_SEC)
+
+        await wrapper.get('[data-test="link-reveal-hide"]').trigger('click')
+        expect(wrapper.find('[data-test="link-reveal-url"]').exists()).toBe(false)
+        expect(revealTrace(wrapper).inputs).toHaveLength(0)
+    })
+
+    // 后端刻意不给这条路加状态门:非 ACTIVE 行的链接在访客侧恒被拒,而管理员恰恰要在
+    // 这些行上排查「当初发出去的是哪条」。用 writable 禁掉入口就把这一半砍没了。
+    it.each(['EXPIRED', 'REVOKED'])('still reveals a %s share: viewing is not using (V7)', async (effectiveStatus) => {
+        getMailShare.mockResolvedValue(sampleDetail({ effectiveStatus, status: effectiveStatus }))
+        const wrapper = await openDrawer()
+
+        expect(wrapper.get('[data-test="link-reveal"]').attributes('disabled')).toBeUndefined()
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        expect(revealMailShareSec).toHaveBeenCalledWith(7)
+        expect(wrapper.get('[data-test="link-reveal-url"]').element.value).toBe(ORIGINAL_SHARE_URL)
+        // 换链接仍然不行:那是写,会在一条死行上原地复活凭据。
+        expect(wrapper.get('[data-test="link-regenerate"]').attributes('disabled')).toBeDefined()
+    })
+
+    // 两个入口同屏。同时挂两条链接,管理员没有任何办法看出哪条是现在有效的那条。
+    it('shows the rotated link alone after a regenerate that follows a reveal (V8)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.find('[data-test="link-reveal-url"]').exists()).toBe(true)
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="link-url"]').element.value).toBe(NEW_SHARE_URL)
+        // 旧链接刚被这次轮换作废,继续挂着就是一条会被复制出去的死链接。
+        expect(wrapper.find('[data-test="link-reveal-url"]').exists()).toBe(false)
+        expect(revealTrace(wrapper).inputs).toHaveLength(0)
+    })
+
+    it('shows the revealed link alone after a reveal that follows a regenerate (V9)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.find('[data-test="link-url"]').exists()).toBe(true)
+
+        revealMailShareSec.mockResolvedValue({ shareId: 7, lid: NEW_LID, shareUrl: ORIGINAL_SHARE_URL })
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="link-reveal-url"]').element.value).toBe(ORIGINAL_SHARE_URL)
+        // 「只显示这一次」的那块必须让位:两块同屏时它已经不是仅有的一次了。
+        expect(wrapper.find('[data-test="link-url"]').exists()).toBe(false)
+    })
+
+    it('clears a stale reveal error once the next attempt succeeds (V10)', async () => {
+        revealMailShareSec.mockRejectedValueOnce({ code: 500, message: 'SHARE_SEC_CORRUPTED' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+        expect(wrapper.get('[data-test="link-reveal-error"]').text()).toBe(en.shareSecCorrupted)
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="link-reveal-error"]').exists()).toBe(false)
+        expect(wrapper.get('[data-test="link-reveal-url"]').element.value).toBe(ORIGINAL_SHARE_URL)
+    })
+
+    it('does not paint share A revealed link onto share B after a late reveal (V11)', async () => {
+        getMailShare.mockImplementation(async (shareId) => sampleDetail({
+            shareId,
+            name: shareId === 8 ? 'share B' : 'share A'
+        }))
+        const pending = deferred()
+        revealMailShareSec.mockImplementationOnce(() => pending.promise)
+        const wrapper = await openDrawer({ shareId: 7 })
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await wrapper.setProps({ shareId: 8 })
+        await flushPromises()
+
+        pending.resolve({ shareId: 7, lid: 'lid-7', shareUrl: ORIGINAL_SHARE_URL })
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="detail-name"]').text()).toBe('share B')
+        expect(wrapper.find('[data-test="link-reveal-url"]').exists()).toBe(false)
+        expect(revealTrace(wrapper).inputs).toHaveLength(0)
+    })
+
+    it('closes and refreshes the list when the share vanished before the reveal (V12)', async () => {
+        revealMailShareSec.mockRejectedValue({ code: 500, message: 'SHARE_NOT_FOUND' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="link-reveal"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.emitted('update:shareId')).toEqual([[0]])
+        expect(wrapper.find('[data-test="link-reveal-url"]').exists()).toBe(false)
+    })
+
+    // 面板顶部那句话是管理员在点任何按钮之前读到的唯一说明。轨一落地后「已有链接
+    // 无法再次查看」变成了假话,留着它会让他压根不去点「查看链接」。
+    it('no longer tells the owner the existing link can never be seen again (V13)', async () => {
+        const wrapper = await openDrawer()
+
+        const hint = wrapper.get('[data-test="link-hint"]').text()
+        expect(hint).not.toMatch(/cannot be shown again|never stored|无法再次查看/i)
+        expect(hint).toMatch(/regenerate|重新生成/i)
+    })
+})
+
 describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', () => {
     const WRITE_HOOKS = [
         'config-save',
@@ -912,7 +1351,8 @@ describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', (
         'binding-add-select',
         'config-name',
         'authkey-enable',
-        'renew-choice'
+        'renew-choice',
+        'link-regenerate'
     ]
 
     beforeEach(() => {
@@ -920,6 +1360,7 @@ describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', (
         updateMailShare.mockReset()
         updateMailShareBindings.mockReset()
         resetMailShareAuthKey.mockReset()
+        regenerateMailShare.mockReset()
         accountList.mockReset()
         confirm.mockReset()
         message.mockReset()
@@ -940,12 +1381,15 @@ describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', (
 
         await wrapper.get('[data-test="config-save"]').trigger('click')
         await wrapper.get('[data-test="authkey-enable"]').trigger('click')
+        await wrapper.get('[data-test="link-regenerate"]').trigger('click')
         await wrapper.findAll('[data-test="binding-remove"]')[0].trigger('click')
         await flushPromises()
 
         expect(updateMailShare).not.toHaveBeenCalled()
         expect(updateMailShareBindings).not.toHaveBeenCalled()
         expect(resetMailShareAuthKey).not.toHaveBeenCalled()
+        // EXPIRED / REVOKED 的凭据不得原地复活:后端也会拒,但入口本身就不该可用。
+        expect(regenerateMailShare).not.toHaveBeenCalled()
         // Read side survives: the owner still audits a dead share.
         expect(wrapper.get('[data-test="binding-row"]').text()).toContain('otp@example.com')
         expect(wrapper.get('[data-test="detail-quota"]').text()).toContain('2')

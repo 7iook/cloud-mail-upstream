@@ -50,6 +50,11 @@
 
         <div v-if="createdAuthKey" class="secret" data-test="authkey-once">
           <label class="row-label" for="wizard-created-authkey">{{ tf('shareAuthKey') }}</label>
+          <!-- The link above is retrievable from the detail drawer, the key is not: it is stored
+               as a one-way hash and nothing can bring it back. This warning used to be carried by
+               shareSecretOnce, which spoke for both; once that stopped claiming "gone forever"
+               the key needed to say it for itself. -->
+          <p class="notice notice-warning" data-test="wizard-authkey-once">{{ tf('shareAuthKeyOnce') }}</p>
           <div class="secret-row">
             <input
                 id="wizard-created-authkey"

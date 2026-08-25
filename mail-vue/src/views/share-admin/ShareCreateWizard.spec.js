@@ -498,6 +498,16 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / AC-LIFE-11)', () =>
         expect(wrapper.find('[data-test="authkey-once"]').exists()).toBe(true)
         expect(wrapper.get('[data-test="authkey-value"]').element.value).toBe('Ab3dEf0123456789_-xyQ')
 
+        // The link and the key stopped sharing a fate: the link can be retrieved later, the key
+        // is a one-way hash and cannot. shareSecretOnce used to warn for both, so when it stopped
+        // claiming "gone forever" the key was briefly left with no warning of its own. Asserting
+        // both texts here means neither can be rewritten into speaking for the other again.
+        const keyWarning = wrapper.get('[data-test="wizard-authkey-once"]').text()
+        const linkHint = wrapper.get('[data-test="secret-once"]').text()
+        expect(keyWarning).toBe(en.shareAuthKeyOnce)
+        expect(keyWarning).toMatch(/cannot be viewed again/i)
+        expect(linkHint).not.toMatch(/cannot be viewed again/i)
+
         await wrapper.get('[data-test="created-saved"]').trigger('click')
         await submit(wrapper)
 

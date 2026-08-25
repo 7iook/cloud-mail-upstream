@@ -105,6 +105,27 @@ export function resetMailShareAuthKey(body) {
     return http.post('/mailShare/resetAuthKey', body)
 }
 
+// POST rather than PUT for the same reason as resetAuthKey: every call mints a fresh sec, so
+// it is not an idempotent field overwrite. The header is what makes a retried request safe --
+// without it a dropped response would rotate a second time and strand the link just copied.
+// The response carries the new lid / sec / shareUrl, and that plaintext never comes back again.
+export function regenerateMailShare(shareId, idempotencyKey) {
+    const key = idempotencyKey || newIdempotencyKey()
+    return http.post('/mailShare/regenerate', { shareId }, {
+        headers: {
+            'Idempotency-Key': key
+        }
+    })
+}
+
+// POST rather than GET even though nothing is minted: this is a credential exposure, and a GET
+// would write "which share was looked at" into browser history, proxy logs and the referer of
+// whatever loads next. No Idempotency-Key -- a repeated reveal returns the same link, so a
+// retry has nothing to guard against.
+export function revealMailShareSec(shareId) {
+    return http.post('/mailShare/revealSec', { shareId })
+}
+
 export function revokeMailShare(shareId) {
     return http.delete('/mailShare/revoke', {
         params: { shareId }
