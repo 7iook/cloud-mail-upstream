@@ -31,5 +31,6 @@ SHARE_SEC_PEPPER = "e2e-share-sec-pepper"
 SHARE_SEC_PEPPER_KID = "v1"
 SHARE_SESSION_SIGNING_KEY = "e2e-share-session-signing-key"
 SHARE_SESSION_SIGNING_KID = "v1"
-SHARE_MAX_DURATION_SECONDS = "86400"
+# SHARE_MAX_DURATION_SECONDS 刻意不配，与生产 wrangler.toml 一致：
+# e2e 要跑的就是真实部署形态，而真实部署没有这一项，上限来自代码兜底(I-2，90 天)。
 E2E_CONTROL_SECRET = "e2e-local-control-secret"

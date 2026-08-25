@@ -28,8 +28,8 @@ SHARE_SESSION_SIGNING_KEY="replace-me-with-another-32-byte-random"
 SHARE_SEC_PEPPER_KID="v1"
 SHARE_SESSION_SIGNING_KID="v1"
 
-# 分享有效期上限(秒)。不填即【没有上限】,创建方可以填任意长的有效期。
-# 想约束就填一个正整数,例如 86400 = 1 天。
+# 分享有效期上限(秒)。不填即走代码内置兜底上限 90 天,不会变成没有上限。
+# 想收紧或放宽就填一个正整数,例如 86400 = 1 天;非数字 / 0 / 负数一律视同没填。
 #SHARE_MAX_DURATION_SECONDS="86400"
 
 # 分享全能力发布栅栏。不填 = 关闭。

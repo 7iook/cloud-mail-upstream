@@ -8,6 +8,9 @@ const CREATE_OP = 'create';
 const IDEMPOTENCY_TTL_HOURS = 24;
 const DEFAULT_RETENTION_SECONDS = 604800;
 const UNBOUNDED_ACTIVE_LIMIT = 1000000000;
+// I-2 兜底上限 90 天。前端 `share-admin/presets.js:77` 的 `MAX_DURATION_DAYS = 90` 是它的镜像,
+// 权威在这里;两处不一致时以本常量为准(前端过得去、后端拒,而不是反过来)。
+const MAX_DURATION_FALLBACK_SECONDS = 7776000;
 // AC-CAP-06 / Decision 13:写入侧拒绝小于这个值,下发侧的钳制归 T-08。
 const MIN_REFRESH_INTERVAL_MS = 3000;
 const encoder = new TextEncoder();
@@ -250,12 +253,17 @@ function activeLimit(c) {
 	return UNBOUNDED_ACTIVE_LIMIT;
 }
 
+// 不变量 I-2:任何部署下都存在有效期上限。`SHARE_MAX_DURATION_SECONDS` 是可选变量,
+// 生产 `wrangler.toml` 从来没写过它 —— 缺失时返回 null(= 跳过校验)等于把「运维忘了配」
+// 这个最常见的部署形态直接变成「不设防」,而这正是当前生产的真实状态。
+// 兜底不是默认值:配了就以配置为准(可宽可严),没配也绝不退化为无上限。
+// 非数字 / 0 / 负数与「没配」同义 —— 它们不是解除上限的暗门。
 function maxDurationSeconds(c) {
 	const max = Number(c.env && c.env.SHARE_MAX_DURATION_SECONDS);
 	if (Number.isFinite(max) && max > 0) {
 		return Math.floor(max);
 	}
-	return null;
+	return MAX_DURATION_FALLBACK_SECONDS;
 }
 
 function retentionSeconds(c) {
@@ -319,9 +327,8 @@ function assertCreateBody(c, body) {
 	if (!body.accountIds.length || !body.accountIds.every(isRowId)) {
 		throw new BizError('SHARE_ACCOUNT_FORBIDDEN');
 	}
-	const maxDuration = maxDurationSeconds(c);
 	if (!Number.isFinite(body.durationSeconds) || body.durationSeconds <= 0
-		|| (maxDuration != null && body.durationSeconds > maxDuration)) {
+		|| body.durationSeconds > maxDurationSeconds(c)) {
 		throw new BizError('SHARE_DURATION_EXCEEDED');
 	}
 	if (body.accountIds.length > SHARE_BINDING_LIMIT) {
@@ -911,11 +918,36 @@ function toPatchText(value) {
 	return value == null ? '' : String(value);
 }
 
+// 续期只接受绝对时刻,不接受「再加 N 秒」:后者的基准是服务端收到请求时的 now,
+// 管理台上看到的到期时刻与真正落库的值会随往返延迟漂移,而这一列是访客侧倒计时的唯一来源。
+// 形状锁死为 API 自己发出去的那一种(`YYYY-MM-DD HH:mm:ss`,容许 `T` 分隔与结尾 `Z`)。
+// 带偏移量的写法(`+08:00`)一律拒:本模块全部裸串恒按 UTC 解析(见 `nowText`),
+// 放行偏移量等于允许写入方按本地时区提交、读取方按 UTC 解释 —— 一次静默的 8 小时错位。
+// 末尾的往返比对不是冗余:`2026-13-45` 会被 dayjs 悄悄滚成一个合法时刻,
+// 只有把格式化结果与输入逐字比对才认得出来。
+const EXPIRES_AT_SHAPE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}Z?$/;
+
+function toPatchExpiresAt(value) {
+	if (typeof value !== 'string' || !EXPIRES_AT_SHAPE.test(value)) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	const text = value.replace('T', ' ').replace(/Z$/, '');
+	const parsed = toUtc(text);
+	if (!parsed.isValid() || parsed.format('YYYY-MM-DD HH:mm:ss') !== text) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	return text;
+}
+
 // design.md:303 的可变字段白名单,一字不多。SET 子句只从这张表生成 ——
-// 禁止 `Object.keys(patch)` 拼 SQL,否则 lid / sec_hmac / expires_at / auth_key_* /
+// 禁止 `Object.keys(patch)` 拼 SQL,否则 lid / sec_hmac / auth_key_* /
 // credentials_version / status / user_id / account_id / window_start_email_id
 // 全都成了可写列。`onlyMessagesAfterCreated` 刻意不在表内:改它会让主表与 Binding 的
 // window 下界与新口径失配,而重算窗口是 create/bindings 两条写入口的语义。
+// `expiresAt`(T-22b-1b 续期)是表里唯一一个还要过行级判据的字段 —— `read` 只管值域,
+// 上限与 `delete_at` 顺延在 `applyRenewal` 里,它拿得到行上下文。
+// `delete_at` 本身永远不进表:它恒是派生列(到期 + 保留期),开放给调用方就等于允许
+// 「到期后立刻被删」或「永不被删」两种越界。
 const UPDATE_FIELDS = [
 	{ key: 'name', column: 'name', read: toPatchText },
 	{ key: 'remark', column: 'remark', read: toPatchText },
@@ -924,7 +956,8 @@ const UPDATE_FIELDS = [
 	{ key: 'otpExtractionEnabled', column: 'otp_extraction_enabled', read: toPatchFlag },
 	{ key: 'autoRefresh', column: 'auto_refresh', read: toPatchFlag },
 	{ key: 'refreshIntervalMs', column: 'refresh_interval_ms', read: toPatchInterval },
-	{ key: 'showFullAddress', column: 'show_full_address', read: toPatchFlag }
+	{ key: 'showFullAddress', column: 'show_full_address', read: toPatchFlag },
+	{ key: 'expiresAt', column: 'expires_at', read: toPatchExpiresAt }
 ];
 
 function normalizeUpdateBody(params) {
@@ -938,12 +971,45 @@ function normalizeUpdateBody(params) {
 	return patch;
 }
 
+// 续期的两条判据都需要行上下文,进不了 `UPDATE_FIELDS` 的 `read`:
+// ① **上限从 create_time 起算,不是从续期时刻起算**。按后者算的话,每次快到期续一下
+//    就能把一条分享续成事实上的永久分享,I-2 形同虚设。
+// ② 到期时刻必须仍在未来。落在过去是一次不可逆的自锁:行立刻变 EXPIRED,而 EXPIRED 行
+//    连 `loadMutableShare` 都过不去,管理员再也改不回来。要立即失效请走 revoke ——
+//    那条路径写 status='REVOKED' + revoked_at,在飞 Session 由 `consumeSessionQuota` 的
+//    `status = 'ACTIVE'` 谓词当场掐断(它不动 credentials_version,也不需要动)。
+// `create_time` 解析不出来时按超限处置(fail-closed):这一列 NOT NULL,真解析失败说明
+// 行已经不可信,此时放行等于把兜底上限让给一条脏数据。
+// `delete_at` 在这里派生,与 create 同式(`:1126` 的 `duration + retention`)——
+// 不同步顺延的话,续期后的分享会在还没到期时就被清理任务删掉。
+function applyRenewal(c, patch, share) {
+	const renewal = patch.find((item) => item.key === 'expiresAt');
+	if (!renewal) {
+		return patch;
+	}
+	const expiresAt = toUtc(renewal.value);
+	if (!expiresAt.isAfter(toUtc())) {
+		throw new BizError('SHARE_INVALID_CONFIG');
+	}
+	const createdAt = toUtc(share.create_time);
+	if (!createdAt.isValid() || expiresAt.diff(createdAt, 'second') > maxDurationSeconds(c)) {
+		throw new BizError('SHARE_DURATION_EXCEEDED');
+	}
+	return [...patch, {
+		key: 'deleteAt',
+		column: 'delete_at',
+		value: expiresAt.add(retentionSeconds(c), 'second').format('YYYY-MM-DD HH:mm:ss')
+	}];
+}
+
 // 顺序即语义,与 `assertCreateBody` 同构:值域(已在 normalize 里逐字段抛出)在前,
 // 栅栏在后。update 侧恰好且只有两条 intent —— AuthKey 归 resetAuthKey 单入口、
 // accountIds 归 bindings,都不在白名单里。
 // 触发条件是「设为有限值」而不是「键出现在 patch 里」:显式 null 是取消限制,
 // 旧 Worker 语义完全兼容,放行。少接 MESSAGE_LIMIT 这条就是绕过栅栏写 message_limit
 // 的后门 —— 旧 Worker 不认识该列,落库即可见集被放宽到窗口内全部邮件。
+// `expiresAt` 不在这里门控:`expires_at` 是 v1 就有的列,旧 Worker 认得,不属于
+// AC-LIFE-11 的「滚动发布窗口内旧 Worker 执行不了的策略写入」。
 function assertUpdatePatch(c, patch) {
 	const setsFinite = (key) => patch.some((item) => item.key === key && item.value != null);
 	if (setsFinite('maxSessions')) {
@@ -957,6 +1023,19 @@ function assertUpdatePatch(c, patch) {
 // AC-EDGE-14:配额纪元基线只建立一次。判据取**旧值** —— SQLite 单条 UPDATE 的所有 SET
 // 表达式都读更新前的行值,所以 `max_sessions IS NULL` 在这条语句里恒指旧值,与 SET 子句
 // 的先后顺序无关。别把它「优化」成先 SELECT 再判:那就是一次先读后写。
+// CAS(T-22b P0-2):预读到的 `credentials_version` 与 `expires_at` 原样进 WHERE,与
+// `prepareAuthKeyUpdate:1153-1154` 的迁移守卫、`share-auth-service` 的 `consumeSessionQuota`
+// 同款 —— 本模块所有敏感写入共用「预读到的事实必须进写入谓词」这一条。少了它,预读之后、
+// 这条语句之前发生的 resetAuthKey/disable 会被本次写入无声盖过,而两次并发续期会各按各的
+// 旧快照判上限、由到达次序决定最终到期时刻。
+// CAS 两列都不能省:`credentials_version` 认凭据轮换,`expires_at` 认另一次续期
+// (续期不动 cv,所以 cv 拦不住它)。撤销由既有的 `status = 'ACTIVE'` 认。
+// `expires_at > ?` 仍单独保留:CAS 只证明「没人动过这一行」,证明不了「此刻还没过期」——
+// 预读与写入之间流逝的真实时间只有它能拦。
+// 谓词覆盖整张 `UPDATE_FIELDS` 白名单而不只是续期:`prepareUpdate` 是 `update` 的唯一
+// 写入语句,name/remark/配额/开关与 expiresAt 共用它。让改名也输给并发的凭据轮换是刻意的 ——
+// 它们同样是「先读后写」,同样会盖掉期间的安全状态变化;放宽到只在 patch 含 expiresAt 时
+// 才 CAS,等于给其余八个字段留一条无守卫的写入路径。
 function prepareUpdate(c, values) {
 	const assignments = values.patch.map((item) => `${item.column} = ?`);
 	if (values.resetUsedSessions) {
@@ -966,7 +1045,28 @@ function prepareUpdate(c, values) {
 		UPDATE mail_share
 		SET ${assignments.join(', ')}
 		WHERE share_id = ? AND user_id = ? AND status = 'ACTIVE' AND expires_at > ?
-	`).bind(...values.patch.map((item) => item.value), values.shareId, values.userId, nowText());
+			AND credentials_version = ? AND expires_at = ?
+	`).bind(
+		...values.patch.map((item) => item.value),
+		values.shareId,
+		values.userId,
+		nowText(),
+		values.credentialsVersion,
+		values.expiresAt
+	);
+}
+
+// 零命中有两种成因,对管理员的下一步动作恰好相反:行真的没了(撤销 / 过期 / 易主)只能收工,
+// 而行还在、只是预读快照被并发写入取代,重读后重发就能成。回查一次活跃谓词把两者分开,
+// 免得把一次「重试即可」报成「这条分享不存在」。
+// 这次回查只是**解释**,不是判据 —— 判据永远是那条 CAS UPDATE 自己的谓词;回查本身也会被
+// 下一次并发赶上,所以它只负责挑错误码,不负责决定写不写,更不允许据此重发写入。
+// 放出可区分的 `SHARE_UPDATE_CONFLICT` 不重开存在性探针:能走到这里的调用方早已过了
+// `loadMutableShare` 的归属门,行的存在与归属对它不是秘密。这与 `:1105` 那条「不新增可区分
+// 错误码」不冲突 —— 那条约束的是预读**之前**的探测面。
+async function throwUpdateMiss(c, shareId, userId) {
+	await loadMutableShare(c, shareId, userId);
+	throw new BizError('SHARE_UPDATE_CONFLICT');
 }
 
 // 入参抗污染:`size='abc'` / `0` / `-1` / `page=true` 一律钳到默认或上限,而不是抛错 ——
@@ -1006,9 +1106,12 @@ function normalizeListStatus(params) {
 // 已过期共用 revoke 的 `SHARE_NOT_FOUND`,不新增可区分错误码。
 // `auth_key_enabled` 只为 resetAuthKey 选错误码而取:并发下的正确性由写入语句自己的
 // 同款守卫谓词负责,预读不是防线。
+// `credentials_version` / `expires_at` 反过来正是要当防线用的:它们随 `update` 的 CAS
+// 谓词原样进写入语句(`prepareUpdate:1046-1047`)。取列本身不设防 —— 设防在 WHERE 里。
 async function loadMutableShare(c, shareId, userId) {
 	const row = isRowId(shareId) ? await c.env.db.prepare(`
-		SELECT share_id, lid, only_messages_after_created, auth_key_enabled FROM mail_share
+		SELECT share_id, lid, only_messages_after_created, auth_key_enabled, create_time,
+			credentials_version, expires_at FROM mail_share
 		WHERE share_id = ? AND user_id = ? AND status = 'ACTIVE' AND expires_at > ?
 	`).bind(shareId, userId, nowText()).first() : null;
 	if (!row) {
@@ -1258,16 +1361,25 @@ const mailShareService = {
 		const shareId = toShareId(params && params.shareId);
 		// 改配置只对活分享有意义,与 updateBindings 同一把锁;他人/已撤销/已过期共用
 		// SHARE_NOT_FOUND(存在性探针封闭)。
-		await loadMutableShare(c, shareId, userId);
-		const patch = normalizeUpdateBody(params);
+		const share = await loadMutableShare(c, shareId, userId);
+		// 顺序即语义,与 `assertCreateBody` 同构:值域(normalize 里逐字段抛出)→ 上限 → 栅栏。
+		const patch = applyRenewal(c, normalizeUpdateBody(params), share);
 		assertUpdatePatch(c, patch);
 		if (patch.length) {
 			const resetUsedSessions = patch.some((item) => item.key === 'maxSessions' && item.value != null)
 				&& toFlag(params.resetUsedSessions, 1) === 1;
-			const applied = await prepareUpdate(c, { patch, resetUsedSessions, shareId, userId }).run();
-			// 预检与写入之间被并发 revoke / 过期赶上:零变更,按不存在处置。
+			// 预读到的两列原样回到 WHERE:期间的凭据轮换 / 另一次续期必须让本次零命中。
+			const applied = await prepareUpdate(c, {
+				patch,
+				resetUsedSessions,
+				shareId,
+				userId,
+				credentialsVersion: share.credentials_version,
+				expiresAt: share.expires_at
+			}).run();
+			// 零命中分流:行没了 → SHARE_NOT_FOUND;行还在但快照过时 → SHARE_UPDATE_CONFLICT。
 			if (!applied.meta.changes) {
-				throw new BizError('SHARE_NOT_FOUND');
+				await throwUpdateMiss(c, shareId, userId);
 			}
 		}
 		return loadOwnerDetail(c, shareId, userId);

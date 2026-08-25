@@ -491,11 +491,15 @@ describe('T-11 mail share HTTP routes', () => {
 		expect(afterCount.n).toBe(beforeCount.n);
 	});
 
-	it('rejects owner create when duration exceeds the configured max', async () => {
+	// 这个 worker 的 env 里没有 SHARE_MAX_DURATION_SECONDS（wrangler-vitest.toml 刻意留空，
+	// 与生产 wrangler.toml 一致），所以本条走的是代码兜底上限（I-2，90 天）——
+	// 钉的是「运维忘了配也照样拒」，而不是「配了才拒」。后者由 mail-share-service.spec.js
+	// 的 `rejects duration above the configured max` 用 env 覆写单独覆盖。
+	it('rejects owner create above the built-in ceiling with nothing configured', async () => {
 		const accountId = await insertAccount(MAILBOX, ownerUser.userId);
 		const created = await jsonApi('POST', '/mailShare/create', {
 			token: ownerJwt,
-			body: { accountId, durationSeconds: 999999 }
+			body: { accountId, durationSeconds: 91 * 24 * 3600 }
 		});
 		expect(created.json?.message).toBe('SHARE_DURATION_EXCEEDED');
 	});

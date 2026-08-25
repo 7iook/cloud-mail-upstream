@@ -36,6 +36,9 @@ SHARE_SEC_PEPPER = "vitest-share-sec-pepper"
 SHARE_SEC_PEPPER_KID = "v1"
 SHARE_SESSION_SIGNING_KEY = "vitest-share-session-signing-key"
 SHARE_SESSION_SIGNING_KID = "v1"
-SHARE_MAX_DURATION_SECONDS = "86400"
+# SHARE_MAX_DURATION_SECONDS 刻意不配：这个 worker 的 env 就是「生产实际长什么样」，
+# 而生产 wrangler.toml 从来没写过这一项。留空即让 HTTP 层用例跑在兜底上限（I-2，90 天）上，
+# 那正是 share-api.spec.js「超长有效期被拒」那条断言要证的东西。
+# 需要验证「显式配置被尊重」的用例自己在 shareEnv 覆盖，不靠这里。
 # 测试基线跑在栅栏关闭态（AC-LIFE-11 默认值）；需要放行的用例自己覆盖 env。
 SHARE_CAPABILITY_V2 = "false"

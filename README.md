@@ -170,7 +170,7 @@ npx wrangler secret put SHARE_SESSION_SIGNING_KEY
 | `SHARE_SEC_PEPPER` | 是 | 创建分享失败,响应体 `{"code":500,"message":"share create pepper missing"}` |
 | `SHARE_SESSION_SIGNING_KEY` | 是 | 分享能建出来,但访客打开链接时签发会话失败,响应体 `{"code":501,"message":"SHARE_UNAVAILABLE"}` |
 | `SHARE_SEC_PEPPER_KID` | 否 | 默认 `v1`,只有轮换密钥时才需要显式指定 |
-| `SHARE_MAX_DURATION_SECONDS` | 否 | **不配即分享有效期无上限**。要约束就填正整数秒数,如 `86400`(1 天) |
+| `SHARE_MAX_DURATION_SECONDS` | 否 | 不配即走代码内置兜底上限 **90 天**,不会变成无上限。要收紧或放宽就填正整数秒数,如 `86400`(1 天);非数字/0/负数一律视同没填 |
 | `SHARE_CAPABILITY_V2` | 否 | 缺失即关闭,见下方取值陷阱 |
 
 > **排查时别只看 HTTP 状态码。** 本项目的接口即使出错,HTTP 状态码也是 `200`,真正的错误在响应体的 `code` 字段里。上面两条都是实测结果。Worker 侧的日志(`npx wrangler tail`)会额外打出 `share create sec pepper missing` / `share-auth session signing key missing`。

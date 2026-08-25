@@ -308,6 +308,33 @@ describe('mailShareService owner write path', () => {
 		expect(message).toBe('SHARE_DURATION_EXCEEDED');
 	});
 
+	// I-2:上限不是「配了才有」。生产 `wrangler.toml` 从来没写过这一项,所以在兜底落地之前
+	// 生产是彻底无上限的 —— 这条用例钉的正是「运维忘了配」这个真实部署形态。
+	// 非数字 / 0 / 负数一并走兜底:它们与「没配」是同一件事,不是「解除上限」的暗门。
+	it('falls back to the built-in 90-day ceiling when SHARE_MAX_DURATION_SECONDS is absent (I-2)', async () => {
+		await seedOwners();
+		const ninetyDays = 90 * 24 * 3600;
+		for (const absent of [undefined, '', 'abc', '0', '-1']) {
+			const message = await catchBiz(mailShareService.create(ctx({
+				SHARE_MAX_DURATION_SECONDS: absent
+			}), createParams({ durationSeconds: ninetyDays + 1 }), USER_A));
+			expect([absent, message]).toEqual([absent, 'SHARE_DURATION_EXCEEDED']);
+		}
+		const created = await mailShareService.create(ctx({
+			SHARE_MAX_DURATION_SECONDS: undefined
+		}), createParams({ name: 'at-fallback-ceiling', durationSeconds: ninetyDays }), USER_A);
+		expect(created.shareId).toEqual(expect.any(Number));
+	});
+
+	// 兜底只在缺失时接管:显式配置仍然是权威,不会把一个配得更宽的部署压回 90 天。
+	it('lets an explicit SHARE_MAX_DURATION_SECONDS raise the ceiling above the fallback', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx({
+			SHARE_MAX_DURATION_SECONDS: String(120 * 24 * 3600)
+		}), createParams({ name: 'above-fallback', durationSeconds: 100 * 24 * 3600 }), USER_A);
+		expect(created.shareId).toEqual(expect.any(Number));
+	});
+
 	it('sets expires_at to create time plus duration and delete_at later (AC-SHARE-08, AC-LIFE-06)', async () => {
 		await seedOwners();
 		const created = await mailShareService.create(ctx({
@@ -1294,6 +1321,16 @@ describe('create under SHARE_CAPABILITY_V2=false (AC-LIFE-11)', () => {
 		const active = wranglerToml
 			.split('\n')
 			.filter((line) => line.trim().startsWith('SHARE_CAPABILITY_V2'));
+		expect(active).toEqual([]);
+	});
+
+	// 同一条 keep_vars 教训(`wrangler.toml:72`):toml 里显式写出的值会覆盖 Dashboard 配的值,
+	// 所以「把上限写进生产 toml」看着是显式化,实际是把运维在 Dashboard 上调好的上限
+	// 硬压回仓库里的字面量。I-2 的兜底让这一项不必再写进 toml —— 缺失已经不等于不设防。
+	it('keeps the production wrangler.toml from pinning the duration ceiling (keep_vars)', () => {
+		const active = wranglerToml
+			.split('\n')
+			.filter((line) => line.trim().startsWith('SHARE_MAX_DURATION_SECONDS'));
 		expect(active).toEqual([]);
 	});
 });
@@ -2443,6 +2480,9 @@ describe('mailShareService.update (T-15)', () => {
 		});
 	});
 
+	// T-22b-1b 起 `expiresAt` 是白名单里的合法字段(续期),所以它从这袋「劫持尝试」里
+	// 移出、单独成组用例;`expires_at` 蛇形别名留在袋里 —— 白名单只认驼峰键,
+	// 别名仍然必须是死路,否则等于给同一列开了第二个未校验入口。
 	it('leaves lid, sec, expiry, AuthKey, cv and the binding-derived columns untouched (AC-AUTH-07)', async () => {
 		await seedOwners();
 		const share = await seedConfigured({
@@ -2461,7 +2501,6 @@ describe('mailShareService.update (T-15)', () => {
 			secHmac: 'hijacked',
 			sec_hmac: 'hijacked',
 			pepperKid: 'hijacked',
-			expiresAt: '2099-01-01 00:00:00',
 			expires_at: '2099-01-01 00:00:00',
 			deleteAt: '2099-01-01 00:00:00',
 			status: 'REVOKED',
@@ -2641,6 +2680,313 @@ describe('mailShareService.update (T-15)', () => {
 			}, USER_A))).toBe('SHARE_NOT_FOUND');
 		}
 		expect((await readShareRow(theirs.shareId)).name).toBe('theirs');
+	});
+
+	// ── T-22b-1b 续期 ────────────────────────────────────────────────────────
+	// 全部用例走 `ctx()` 而不是 `v2ctx()`:`expires_at` 是 v1 就有的列,旧 Worker 认得,
+	// 不该落在 AC-LIFE-11 栅栏后面 —— 当前生产 `SHARE_CAPABILITY_V2` 就是关的,
+	// 续期在那里必须可用,否则「不必删掉重建」这个目标在生产上根本不成立。
+	const DAY = 24 * 3600;
+
+	// 夹具的 `SHARE_MAX_DURATION_SECONDS='86400'` 会把续期窗口压到 1 天,
+	// 「上限从 create_time 起算」这条判据就没有观测空间了。续期用例统一取
+	// 「运维没配上限」的生产形态 = 兜底 90 天。
+	function renewCtx(overrides = {}) {
+		return ctx({ SHARE_MAX_DURATION_SECONDS: undefined, ...overrides });
+	}
+
+	it('extends expires_at and carries delete_at along, leaving credentials untouched (T-22b-1b)', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+		const before = await readShareRow(share.shareId);
+		const target = sqlTime(30 * DAY);
+
+		const detail = await mailShareService.update(renewCtx({ SHARE_RETENTION_SECONDS: '3600' }), {
+			shareId: share.shareId, expiresAt: target
+		}, USER_A);
+
+		const after = await readShareRow(share.shareId);
+		expect(after.expires_at).toBe(target);
+		expect(detail.expiresAt).toBe(target);
+		// delete_at 必须同步顺延,否则续期后的分享还没到期就被清理任务删掉。
+		expect(utcTextToMs(after.delete_at) - utcTextToMs(after.expires_at)).toBe(3600000);
+		// 链接不变、在看的访客不掉线 = 这四列一个都不许动。
+		for (const column of ['lid', 'sec_hmac', 'pepper_kid', 'credentials_version', 'status', 'access_count']) {
+			expect([column, after[column]]).toEqual([column, before[column]]);
+		}
+	});
+
+	it('accepts the ISO form the API hands out and stores it canonically', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+		const target = sqlTime(10 * DAY);
+
+		await mailShareService.update(renewCtx(), {
+			shareId: share.shareId, expiresAt: `${target.replace(' ', 'T')}Z`
+		}, USER_A);
+
+		expect((await readShareRow(share.shareId)).expires_at).toBe(target);
+	});
+
+	// 本项最容易写错的地方:上限从**创建时刻**起算。若按「续期时刻 + 90 天」算,
+	// 每次快到期续一下就能把一条分享续成永久分享,I-2 形同虚设。
+	it('measures the renewal ceiling from create_time, not from now (I-2)', async () => {
+		await seedOwners();
+		const createdAt = sqlTime(-80 * DAY);
+		const share = await seedConfigured({ createTime: createdAt, expiresAt: sqlTime(3600) });
+
+		expect(await catchBiz(mailShareService.update(renewCtx(), {
+			shareId: share.shareId, expiresAt: sqlTime(30 * DAY)
+		}, USER_A))).toBe('SHARE_DURATION_EXCEEDED');
+		expect((await readShareRow(share.shareId)).expires_at).toBe(share.expiresAt);
+
+		// 恰好落在 create_time + 90 天 上仍然允许:与 create 侧 `> maxDuration` 才拒同一口径。
+		// 从 createdAt 精确推算而不是写 `sqlTime(10 * DAY)` —— 后者会随秒级时钟推进
+		// 越过上限一秒,把这条判据变成偶发红。
+		const atCeiling = new Date(utcTextToMs(createdAt) + 90 * DAY * 1000)
+			.toISOString().replace('T', ' ').slice(0, 19);
+		await mailShareService.update(renewCtx(), { shareId: share.shareId, expiresAt: atCeiling }, USER_A);
+		expect((await readShareRow(share.shareId)).expires_at).toBe(atCeiling);
+	});
+
+	it('stops the second renewal once the ceiling from create_time is used up (I-2)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ createTime: sqlTime(0), expiresAt: sqlTime(3600) });
+
+		await mailShareService.update(renewCtx(), {
+			shareId: share.shareId, expiresAt: sqlTime(89 * DAY)
+		}, USER_A);
+		expect(await catchBiz(mailShareService.update(renewCtx(), {
+			shareId: share.shareId, expiresAt: sqlTime(91 * DAY)
+		}, USER_A))).toBe('SHARE_DURATION_EXCEEDED');
+	});
+
+	// 过期后原地复活是被规格明确禁止的(AC-LIFE-11 同类语义):EXPIRED / REVOKED 一律
+	// 走 `loadMutableShare` 的状态门,与 resetAuthKey 同构,共用 SHARE_NOT_FOUND。
+	it('refuses to resurrect an expired or revoked share by renewing it', async () => {
+		await seedOwners();
+		const expired = await seedConfigured({ expiresAt: '2001-01-01 00:00:00' });
+		const revoked = await seedConfigured({ status: 'REVOKED' });
+
+		for (const share of [expired, revoked]) {
+			expect(await catchBiz(mailShareService.update(renewCtx(), {
+				shareId: share.shareId, expiresAt: sqlTime(30 * DAY)
+			}, USER_A))).toBe('SHARE_NOT_FOUND');
+		}
+		expect((await readShareRow(expired.shareId)).expires_at).toBe('2001-01-01 00:00:00');
+		expect((await readShareRow(revoked.shareId)).status).toBe('REVOKED');
+	});
+
+	// 落在过去的到期时刻是一次不可逆的自锁:行立刻变 EXPIRED,而 EXPIRED 行连 update
+	// 都进不来,管理员再也救不回来。想立即失效请用 revoke,那条路径有 revoked_at 与 cv。
+	it('rejects a non-future or malformed expiresAt', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+		const before = await readShareRow(share.shareId);
+
+		for (const value of [
+			sqlTime(-60), '2001-01-01 00:00:00', 'tomorrow', '', null, 42, {},
+			'2026-13-45 00:00:00', '2099-01-01', '2099-01-01 10:00:00+08:00'
+		]) {
+			expect([value, await catchBiz(mailShareService.update(renewCtx(), {
+				shareId: share.shareId, expiresAt: value
+			}, USER_A))]).toEqual([value, 'SHARE_INVALID_CONFIG']);
+		}
+		expect(await readShareRow(share.shareId)).toEqual(before);
+	});
+
+	// 缩短允许:它与 revoke 同向(只收窄暴露面),而禁止它只会把管理员推回
+	// 「删掉重建再重新分发一次」—— 恰是本轮要消灭的动作。
+	it('allows shortening the window and pulls delete_at back with it', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ expiresAt: sqlTime(30 * DAY), deleteAt: sqlTime(37 * DAY) });
+		const target = sqlTime(2 * DAY);
+
+		await mailShareService.update(renewCtx({ SHARE_RETENTION_SECONDS: '3600' }), {
+			shareId: share.shareId, expiresAt: target
+		}, USER_A);
+
+		const after = await readShareRow(share.shareId);
+		expect(after.expires_at).toBe(target);
+		expect(utcTextToMs(after.delete_at) - utcTextToMs(target)).toBe(3600000);
+	});
+
+	it('renews together with the other whitelisted fields in one statement', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+		const target = sqlTime(20 * DAY);
+		const probe = batchProbe();
+
+		await mailShareService.update({ env: shareEnv({ db: probe.db, SHARE_MAX_DURATION_SECONDS: undefined }) }, {
+			shareId: share.shareId, name: 'renewed', expiresAt: target
+		}, USER_A);
+
+		expect(await readShareRow(share.shareId)).toMatchObject({ name: 'renewed', expires_at: target });
+		const updates = probe.seen.filter((sql) => /UPDATE\s+mail_share\b/i.test(sql));
+		expect(updates).toHaveLength(1);
+		expect(updates[0]).toMatch(/delete_at\s*=\s*\?/i);
+	});
+
+	// 真跑一次的姿势:走真实 HTTP 入口,而且 `SELF.fetch` 打的是 workerd 自己那份 env ——
+	// `wrangler-vitest.toml` 里没有 SHARE_MAX_DURATION_SECONDS,所以这条同时证明
+	// 「运维没配上限的部署」上续期照样受兜底约束、且照常可用。
+	// 最后一条断言是本任务的用户可见目标:续期前发出去的 session token,续期后仍然取得到信 ——
+	// 「已经拿着链接在看的访客不受影响」。
+	it('renews over the real HTTP route without dropping a live visitor (T-22b-1b)', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const created = await mailShareService.create(workerCtx(), createParams(), USER_A);
+		const established = await postSession({ lid: created.lid, sec: created.sec });
+		expect(established.code).toBe(200);
+
+		const target = sqlTime(60 * DAY);
+		const renewed = await ownerApi('PUT', '/mailShare/update', {
+			jwt, body: { shareId: created.shareId, expiresAt: target }
+		});
+
+		expect(renewed.json.code).toBe(200);
+		expect(renewed.json.data.expiresAt).toBe(target);
+		const row = await readShareRow(created.shareId);
+		expect(row.lid).toBe(created.lid);
+		expect(row.credentials_version).toBe(0);
+		expect(utcTextToMs(row.delete_at)).toBeGreaterThan(utcTextToMs(target));
+		expect((await getShareMails(established.data.sessionToken)).code).toBe(200);
+
+		// 同一条路由上,超出兜底上限的续期仍然被拒 —— 上限不是只在 create 侧成立。
+		const tooFar = await ownerApi('PUT', '/mailShare/update', {
+			jwt, body: { shareId: created.shareId, expiresAt: sqlTime(91 * DAY) }
+		});
+		expect(tooFar.json.message).toBe('SHARE_DURATION_EXCEEDED');
+		expect((await readShareRow(created.shareId)).expires_at).toBe(target);
+	});
+
+	// ── T-22b P0-2 · 续期写入的 CAS 守卫 ─────────────────────────────────────
+	// 干扰必须精确钉在「预读之后、UPDATE 之前」那条缝上。拿 `Promise.all` 撞两条真命令
+	// 撞不出这条缝:resetAuthKey 比 update 多几个 await(mint key + digest),它稳定地后写,
+	// 那样测到的是一次完全合法的线性化,而不是 CAS 守卫 —— 守卫拆掉用例照样绿,取证为零。
+	// 只拦第一条 `UPDATE mail_share`(就是 `prepareUpdate` 那条),随后放行,好让 update
+	// 收尾的 `loadOwnerDetail` 与干扰方自己的写入照常走。
+	function ctxStallingUpdate(interfere, overrides = {}) {
+		let armed = true;
+		const prepare = env.db.prepare.bind(env.db);
+		const db = new Proxy(env.db, {
+			get(target, prop) {
+				if (prop !== 'prepare') {
+					const value = target[prop];
+					return typeof value === 'function' ? value.bind(target) : value;
+				}
+				return (sql) => {
+					const statement = prepare(sql);
+					if (!armed || !/UPDATE\s+mail_share\b/i.test(String(sql))) {
+						return statement;
+					}
+					armed = false;
+					return {
+						bind: (...args) => {
+							const bound = statement.bind(...args);
+							return { run: async () => { await interfere(); return bound.run(); } };
+						}
+					};
+				};
+			}
+		});
+		return renewCtx({ db, ...overrides });
+	}
+
+	async function seedKeyedConfigured(overrides = {}) {
+		return seedConfigured({
+			authKeyEnabled: 1, authKeyHash: 't22b-old-hash', authKeyKid: 'v9', credentialsVersion: 3, ...overrides
+		});
+	}
+
+	// 本项的用户可见目标:管理员点「延长有效期」的同时另一个管理员在重置访问密钥,续期
+	// 不能假装无事发生地成功 —— 那等于把一次凭据轮换静默回滚成「密钥换了但旧会话仍按新到期时刻活着」。
+	it('refuses the renewal when credentials rotate between the pre-read and the write (P0-2)', async () => {
+		await seedOwners();
+		const share = await seedKeyedConfigured();
+		const stalled = ctxStallingUpdate(() => mailShareService.resetAuthKey(ctx(), {
+			shareId: share.shareId, action: 'reset'
+		}, USER_A));
+
+		expect(await catchBiz(mailShareService.update(stalled, {
+			shareId: share.shareId, expiresAt: sqlTime(30 * DAY)
+		}, USER_A))).toBe('SHARE_UPDATE_CONFLICT');
+
+		// 轮换赢了:cv 前进一格,到期时刻一秒没动。续期是零变更,不是「成功但被覆盖」。
+		const after = await readShareRow(share.shareId);
+		expect([after.credentials_version, after.expires_at]).toEqual([4, share.expiresAt]);
+	});
+
+	// 撤销这一路本来就被既有的 `status = 'ACTIVE'` 谓词挡住,CAS 两列都不是它的判据 ——
+	// 所以拆掉 CAS 这条用例仍然绿。留着它是回归护栏(别哪天把活跃谓词一起"优化"掉),
+	// 同时钉住错误码分流:行真的没了要报 NOT_FOUND,不能报成「重试就好」的 CONFLICT。
+	it('refuses the renewal when the share is revoked between the pre-read and the write', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+		const stalled = ctxStallingUpdate(() => mailShareService.revoke(ctx(), {
+			shareId: share.shareId
+		}, USER_A));
+
+		expect(await catchBiz(mailShareService.update(stalled, {
+			shareId: share.shareId, expiresAt: sqlTime(30 * DAY)
+		}, USER_A))).toBe('SHARE_NOT_FOUND');
+
+		const after = await readShareRow(share.shareId);
+		expect([after.status, after.expires_at]).toEqual(['REVOKED', share.expiresAt]);
+	});
+
+	// 续期不动 cv,所以 cv 拦不住另一次续期 —— 这一条是 `expires_at` 那半个 CAS 的取证。
+	// 没有它,两条命令各按各的旧快照判 create_time 上限,最终到期时刻由到达次序决定。
+	it('lets exactly one of two concurrent renewals win, on the row and not by arrival order', async () => {
+		await seedOwners();
+		const share = await seedConfigured();
+		const winner = sqlTime(20 * DAY);
+		const loser = sqlTime(40 * DAY);
+		const stalled = ctxStallingUpdate(() => mailShareService.update(renewCtx(), {
+			shareId: share.shareId, expiresAt: winner
+		}, USER_A));
+
+		expect(await catchBiz(mailShareService.update(stalled, {
+			shareId: share.shareId, expiresAt: loser
+		}, USER_A))).toBe('SHARE_UPDATE_CONFLICT');
+
+		// 后到的那条零变更:最终状态由「谁先落库」解释,而不是「谁最后写」。
+		expect((await readShareRow(share.shareId)).expires_at).toBe(winner);
+	});
+
+	// `prepareUpdate` 是 `update` 的唯一写入语句,白名单九个字段共用它 —— CAS 一并作用到
+	// 改名这类字段上是刻意的,不是溢出:它们同样先读后写,同样会盖掉期间的凭据轮换。
+	it('applies the same guard to a non-renewal field on the shared statement (P0-2 blast radius)', async () => {
+		await seedOwners();
+		const share = await seedKeyedConfigured();
+		const stalled = ctxStallingUpdate(() => mailShareService.resetAuthKey(ctx(), {
+			shareId: share.shareId, action: 'disable'
+		}, USER_A));
+
+		expect(await catchBiz(mailShareService.update(stalled, {
+			shareId: share.shareId, name: 'after'
+		}, USER_A))).toBe('SHARE_UPDATE_CONFLICT');
+		expect((await readShareRow(share.shareId)).name).toBe('before');
+	});
+
+	// 主路径不能被守卫修坏,且守卫必须在 WHERE 里而不是预读里 —— 与 resetAuthKey 的
+	// R2-F1 取证同款:预读只决定错误码,WHERE 才决定并发下的正确性。
+	it('keeps the plain renewal working and carries both CAS columns in the WHERE (P0-2)', async () => {
+		await seedOwners();
+		const share = await seedConfigured({ credentialsVersion: 3 });
+		const target = sqlTime(30 * DAY);
+		const probe = sqlProbe();
+
+		await mailShareService.update({ env: shareEnv({ db: probe.db, SHARE_MAX_DURATION_SECONDS: undefined }) }, {
+			shareId: share.shareId, expiresAt: target
+		}, USER_A);
+
+		expect((await readShareRow(share.shareId)).expires_at).toBe(target);
+		const [, predicates] = probe.seen
+			.find((sql) => /UPDATE\s+mail_share\b/i.test(sql))
+			.split(/\bWHERE\b/i);
+		expect(predicates).toMatch(/credentials_version\s*=\s*\?/i);
+		expect(predicates).toMatch(/expires_at\s*=\s*\?/i);
 	});
 });
 

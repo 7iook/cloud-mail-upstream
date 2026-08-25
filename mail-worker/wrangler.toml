@@ -64,8 +64,10 @@ crons = ["0 16 * * *"]	#每天晚上12点执行每日任务,刷新分析缓存
 #SHARE_SESSION_SIGNING_KEY	#必需。访客会话令牌签名密钥。缺失时分享能建出来,但访客换会话失败,响应体 {"code":501,"message":"SHARE_UNAVAILABLE"}
 
 #SHARE_SEC_PEPPER_KID = "v1"	#可选。上面那把盐的版本号,不填默认 v1,轮换时才需要显式指定
-#SHARE_MAX_DURATION_SECONDS = "86400"	#可选,但不填即【分享有效期无上限】(代码返回 null 时跳过校验)
-						#当前生产未配置,等于没有上限;要约束就填正整数秒数,86400 = 1 天
+#SHARE_MAX_DURATION_SECONDS = "86400"	#可选。不填即走代码内置兜底上限【90 天】(不变量 I-2),不会退化成无上限
+						#要收得更紧或放得更宽就填正整数秒数,86400 = 1 天;非数字/0/负数一律视同没填
+						#此处保持注释:同 SHARE_CAPABILITY_V2 那条,keep_vars 拦不住 toml 里显式写的值,
+						#取消注释会把 Dashboard 上配的值覆盖回这里的字面量。要设上限请在 Dashboard 配
 #SHARE_CAPABILITY_V2 = "false"	#分享全能力发布栅栏(AC-LIFE-11),缺省即 false,代码把「缺失」当 false
 						#取值严格匹配 "1" / "true" / 1 / true 四种之一,大小写敏感:写成 "TRUE"/"True" 会被静默判为关闭且不报错
 						#只在 Dashboard 置 "true",且须先满足激活前置:迁移完成 + 回填重跑 + 无旧 Worker 在途 + 关键日志事件已有告警消费者

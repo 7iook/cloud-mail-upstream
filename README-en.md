@@ -164,7 +164,7 @@ Do **not** put secrets in the `[vars]` block of `wrangler.toml` — that block i
 | `SHARE_SEC_PEPPER` | Yes | Creating a share fails with the response body `{"code":500,"message":"share create pepper missing"}` |
 | `SHARE_SESSION_SIGNING_KEY` | Yes | The share is created fine, but issuing a visitor session fails when someone opens the link: `{"code":501,"message":"SHARE_UNAVAILABLE"}` |
 | `SHARE_SEC_PEPPER_KID` | No | Defaults to `v1`; only needs an explicit value during key rotation |
-| `SHARE_MAX_DURATION_SECONDS` | No | **Unset means share lifetime is unbounded.** Set a positive number of seconds to cap it, e.g. `86400` (1 day) |
+| `SHARE_MAX_DURATION_SECONDS` | No | Unset falls back to the built-in **90-day** ceiling — never unbounded. Set a positive number of seconds to tighten or loosen it, e.g. `86400` (1 day); a non-numeric, zero or negative value counts as unset |
 | `SHARE_CAPABILITY_V2` | No | Absent means disabled; see the pitfalls below |
 
 > **Do not go by the HTTP status code when troubleshooting.** This project's API returns HTTP `200` even on failure; the real error lives in the `code` field of the response body. Both rows above are measured behaviour. The Worker log (`npx wrangler tail`) additionally prints `share create sec pepper missing` / `share-auth session signing key missing`.
