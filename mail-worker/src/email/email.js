@@ -92,7 +92,7 @@ export async function email(message, env, ctx) {
 		}
 
 		const toName = email.to.find(item => item.address === message.to)?.name || '';
-		const code = await aiService.extractCode({ env }, email, { aiCode, aiCodeFilter });
+		const { code, link } = await aiService.extract({ env }, email, { aiCode, aiCodeFilter });
 
 		const params = {
 			toEmail: message.to,
@@ -101,6 +101,7 @@ export async function email(message, env, ctx) {
 			name: email.from.name || emailUtils.getName(email.from.address),
 			subject: email.subject,
 			code,
+			verifyLink: link,
 			content: email.html,
 			text: email.text,
 			cc: email.cc ? JSON.stringify(email.cc) : '[]',
@@ -128,7 +129,10 @@ export async function email(message, env, ctx) {
 			}
 		}
 
-		let emailRow = await emailService.receive({ env }, params, cidAttachments, r2Domain);
+		let emailRow = await insertWithVerifyLinkFallback(
+			row => emailService.receive({ env }, row, cidAttachments, r2Domain),
+			params
+		);
 
 		attachments.forEach(attachment => {
 			attachment.emailId = emailRow.emailId;
@@ -182,6 +186,27 @@ export async function email(message, env, ctx) {
 	} catch (e) {
 		console.error('邮件接收异常: ', e);
 		throw e
+	}
+}
+
+/**
+ * `verify_link` 是 v3_4DB 新增的列,而本项目的迁移由人工访问 `GET /api/init/{jwt_secret}`
+ * 触发,不随部署自动执行(决策卡 §3.3)。于是「新代码已上、迁移还没跑」是一个真实可达的
+ * 窗口,窗口内这一列并不存在,整条 INSERT 会失败 —— 连带把邮件本身丢掉。
+ *
+ * 邮件比提取结果重要,所以这里只丢提取结果:降级成不带该列再写一次。降级后仍失败就如实
+ * 抛出(那已经不是这一列的问题),没有 `verifyLink` 可丢时不做无意义的重试。
+ */
+export async function insertWithVerifyLinkFallback(insert, params) {
+	try {
+		return await insert(params);
+	} catch (e) {
+		if (!params.verifyLink) {
+			throw e;
+		}
+		console.error('verify_link 写入失败，降级为不带该列重试（迁移可能尚未执行）: ', e);
+		const { verifyLink, ...withoutVerifyLink } = params;
+		return await insert(withoutVerifyLink);
 	}
 }
 

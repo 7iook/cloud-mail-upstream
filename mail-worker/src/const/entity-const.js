@@ -128,9 +128,13 @@ export const settingConst = {
 		OPEN: 0,
 		CLOSE: 1
 	},
+	// 三态。`OPEN`/`CLOSE` 的数值不动 —— 它们已经躺在存量部署的 setting 行里,
+	// 换值等于把别人的配置读成另一个意思。语义上 `OPEN` 升级为「规则优先 + AI 补位」,
+	// `CLOSE` 保持「完全不提取」(它是列默认值,改语义会给所有存量部署静默开启新功能)。
 	aiCode: {
 		OPEN: 0,
-		CLOSE: 1
+		CLOSE: 1,
+		RULE_ONLY: 2
 	},
 	authRefresh: {
 		OPEN: 1,

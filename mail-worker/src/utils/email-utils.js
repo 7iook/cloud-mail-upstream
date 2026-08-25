@@ -28,6 +28,28 @@ const emailUtils = {
 			.trim();
 	},
 
+	// 锚点候选集。链接提取只认 DOM 里真实存在的 <a href>,不用正则从正文扒 URL ——
+	// 后者会把纯文本里被引用的地址也算进来,而那不是发件人放的可点击入口。
+	// 协议白名单不在这里施加:候选集保持「邮件里有什么」的原貌,取舍交给打分层。
+	extractAnchors(content) {
+		if (!content || typeof content !== 'string') return [];
+		try {
+			const wrappedContent = content.includes('<body')
+				? content
+				: `<!DOCTYPE html><html><body>${content}</body></html>`;
+			const { document } = parseHTML(wrappedContent);
+			return Array.from(document.querySelectorAll('a[href]'))
+				.map(el => ({
+					href: (el.getAttribute('href') || '').trim(),
+					text: (el.textContent || '').replace(/\s+/g, ' ').trim()
+				}))
+				.filter(anchor => anchor.href);
+		} catch (e) {
+			console.error(e);
+			return [];
+		}
+	},
+
 	htmlToText(content) {
 		if (!content) return ''
 		try {
