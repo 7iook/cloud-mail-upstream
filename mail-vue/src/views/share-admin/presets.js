@@ -107,6 +107,28 @@ export function durationError(seconds) {
     return ''
 }
 
+// Both entries used to swallow create failures into console.error, so a rejected create read as
+// "the button does nothing". Custom durations made that reachable in normal use: the ceiling above
+// is a mirror, and a deployment configuring a lower SHARE_MAX_DURATION_SECONDS gets past the
+// browser and is refused by the Worker.
+//
+// Shared so the two entries cannot drift again (they already had drifted on the rungs, P-03).
+// SHARE_DURATION_EXCEEDED deliberately does NOT reuse shareDurationTooLong: that string names
+// MAX_DURATION_DAYS, and quoting our own mirror at the owner when the server enforced a different
+// number is worse than saying nothing.
+export function createErrorKey(err) {
+    switch (err && err.message) {
+        case 'SHARE_CAPABILITY_NOT_ENABLED':
+            return 'shareCapabilityNotEnabled'
+        case 'SHARE_DURATION_EXCEEDED':
+            return 'shareDurationServerRejected'
+        case 'SHARE_INVALID_CONFIG':
+            return 'shareConfigRejected'
+        default:
+            return 'shareCreateFailed'
+    }
+}
+
 // Prefill only. Every value here is a form default the owner can still change, and the
 // single-mailbox row is deliberately identical to the DDL defaults so its normalized body
 // still matches legacyCompatibleBody and keeps the rolling-deploy fingerprint.

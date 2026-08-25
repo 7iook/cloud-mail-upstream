@@ -7,9 +7,12 @@ import {
     MAX_DURATION_DAYS,
     MAX_DURATION_SECONDS,
     SHARE_DURATION_PRESETS,
+    createErrorKey,
     customDurationSeconds,
     durationError
 } from './presets.js'
+import en from '@/i18n/en.js'
+import zh from '@/i18n/zh.js'
 
 describe('share duration (W-E1)', () => {
     it('keeps the four rungs both create entries used to hardcode separately', () => {
@@ -80,5 +83,55 @@ describe('share duration (W-E1)', () => {
         expect(dialog).not.toMatch(/labelKey:\s*'shareDuration1h'/)
         expect(wizard).toMatch(/SHARE_DURATION_PRESETS/)
         expect(dialog).toMatch(/SHARE_DURATION_PRESETS/)
+    })
+})
+
+describe('create failure reporting', () => {
+    it('names the fence and the server ceiling apart, and falls back for anything else', () => {
+        expect(createErrorKey({ message: 'SHARE_CAPABILITY_NOT_ENABLED' })).toBe('shareCapabilityNotEnabled')
+        expect(createErrorKey({ message: 'SHARE_DURATION_EXCEEDED' })).toBe('shareDurationServerRejected')
+        expect(createErrorKey({ message: 'SHARE_INVALID_CONFIG' })).toBe('shareConfigRejected')
+        expect(createErrorKey({ message: 'SHARE_ACCOUNT_FORBIDDEN' })).toBe('shareCreateFailed')
+        expect(createErrorKey(null)).toBe('shareCreateFailed')
+        expect(createErrorKey({})).toBe('shareCreateFailed')
+    })
+
+    // The browser ceiling is a mirror of the backend default. Quoting it back at the owner when
+    // the deployment enforced a different number would state a figure we cannot vouch for, so the
+    // server-side rejection gets its own string that names no number.
+    it('does not answer a server-side rejection with the browser mirror string', () => {
+        expect(createErrorKey({ message: 'SHARE_DURATION_EXCEEDED' })).not.toBe('shareDurationTooLong')
+        expect(zh.shareDurationServerRejected).not.toMatch(/90/)
+        expect(en.shareDurationServerRejected).not.toMatch(/90/)
+    })
+
+    it('has every key it can return translated in both locales', () => {
+        const codes = [
+            'SHARE_CAPABILITY_NOT_ENABLED',
+            'SHARE_DURATION_EXCEEDED',
+            'SHARE_INVALID_CONFIG',
+            'SHARE_ACCOUNT_FORBIDDEN'
+        ]
+        codes.forEach((code) => {
+            const key = createErrorKey({ message: code })
+            expect(zh[key], `zh is missing ${key}`).toBeTruthy()
+            expect(en[key], `en is missing ${key}`).toBeTruthy()
+        })
+    })
+
+    // Both entries used to drop business failures into console.error, which reads as a dead
+    // button. Custom durations made that reachable in normal use, so assert against the source:
+    // an entry that stops reporting is the bug, not a refactor.
+    it('leaves neither create entry swallowing a business rejection', async () => {
+        const wizard = await readFile(
+            path.join(process.cwd(), 'src/views/share-admin/ShareCreateWizard.vue'),
+            'utf8'
+        )
+        const dialog = await readFile(
+            path.join(process.cwd(), 'src/views/email/ShareDialog.vue'),
+            'utf8'
+        )
+        expect(wizard).toMatch(/createErrorKey\(err\)/)
+        expect(dialog).toMatch(/createErrorKey\(err\)/)
     })
 })

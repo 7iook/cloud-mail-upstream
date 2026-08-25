@@ -467,6 +467,8 @@ const en = {
     shareConfigNoChange: 'Nothing to save.',
     shareConfigRejected: 'This setting was not accepted: it is outside the currently allowed range. Adjust it and try again.',
     shareCapabilityNotEnabled: 'This capability is not open on this platform yet. Ask an administrator to turn it on.',
+    shareDurationServerRejected: 'The server rejected this duration: it exceeds the limit configured for this deployment. Shorten it and try again.',
+    shareCreateFailed: 'Could not create the share. Try again in a moment.',
     shareResetUsedSessionsTitle: 'Reset the used session count to zero?',
     shareResetUsedSessionsHint: 'This is the first session limit ever set on this share. Resetting counts again from zero under the new limit; keeping the count may put it over the limit right away.',
     shareResetUsedSessionsYes: 'Reset and save',

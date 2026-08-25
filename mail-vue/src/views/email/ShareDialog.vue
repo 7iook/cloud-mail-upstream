@@ -128,6 +128,7 @@ import {
   DURATION_UNITS,
   MAX_DURATION_DAYS,
   SHARE_DURATION_PRESETS,
+  createErrorKey,
   customDurationSeconds,
   durationError
 } from '@/views/share-admin/presets.js'
@@ -278,6 +279,10 @@ async function submitCreate() {
       rotateIdempotencyKey()
     }
   } catch (err) {
+    // Was console.error only, so a refused create was indistinguishable from a dead button.
+    // Uses the same mapping as the wizard: the two entries are one feature and already drifted
+    // apart once on the duration rungs.
+    ElMessage({ message: t(createErrorKey(err)), type: 'error', plain: true })
     console.error('mail share create failed', { code: err && err.code })
   } finally {
     creating.value = false

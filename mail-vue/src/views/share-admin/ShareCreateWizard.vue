@@ -370,6 +370,7 @@ import {
   SHARE_DURATION_PRESETS,
   SHARE_PRESETS,
   capabilityV2,
+  createErrorKey,
   customDurationSeconds,
   durationError,
   findPreset,
@@ -765,6 +766,11 @@ async function submit() {
       if (fenceIntent && err.message === 'SHARE_CAPABILITY_NOT_ENABLED') {
         degradeToInactive()
       }
+      // Every business rejection needs to reach the screen. Without this the owner sees the
+      // button settle and nothing else -- indistinguishable from a no-op. Reachable in normal
+      // use since custom durations landed: MAX_DURATION_SECONDS is a mirror of the backend
+      // default, so a deployment with a lower ceiling refuses a duration the browser allowed.
+      formError.value = tf(createErrorKey(err))
     } else {
       unknownResult.value = true
     }

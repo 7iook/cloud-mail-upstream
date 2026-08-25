@@ -467,6 +467,8 @@ const zh = {
     shareConfigNoChange: '没有需要保存的改动。',
     shareConfigRejected: '这项配置未被接受：超出了当前允许的取值。请调整后重试。',
     shareCapabilityNotEnabled: '该能力尚未开放，请联系管理员开启。',
+    shareDurationServerRejected: '服务端拒绝了这个有效期：超出了本部署允许的上限。请缩短后重试。',
+    shareCreateFailed: '创建分享失败，请稍后重试。',
     shareResetUsedSessionsTitle: '是否把已用会话数清零？',
     shareResetUsedSessionsHint: '这是这个分享第一次设置会话上限。清零后按新上限重新计数；保留计数可能让它立刻触顶。',
     shareResetUsedSessionsYes: '清零并保存',
