@@ -62,7 +62,13 @@ vi.mock('@/composables/useCopyWithFallback.js', async () => {
     return { useCopyWithFallback: copyFactory }
 })
 
-import { CREATE_BODY_KEYS, capabilityV2 } from './presets.js'
+import {
+    CREATE_BODY_KEYS,
+    DURATION_CUSTOM,
+    MAX_DURATION_DAYS,
+    MAX_DURATION_SECONDS,
+    capabilityV2
+} from './presets.js'
 import ShareCreateWizard from './ShareCreateWizard.vue'
 
 // A select stub that carries its model as JSON keeps one shape for both pickers: the duration
@@ -356,7 +362,7 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / AC-LIFE-11)', () =>
 
     // W8
     it('greys all four gated groups after a real fence rejection (AC-LIFE-11)', async () => {
-        createMailShare.mockRejectedValueOnce({ code: 500, message: 'SHARE_INVALID_CONFIG' })
+        createMailShare.mockRejectedValueOnce({ code: 500, message: 'SHARE_CAPABILITY_NOT_ENABLED' })
         const wrapper = await openWizard()
         await wrapper.get('[data-test="preset-custom"]').trigger('click')
         await wrapper.get('[data-test="authkey-toggle"]').setValue(true)
@@ -370,6 +376,21 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / AC-LIFE-11)', () =>
         // messageLimit is the fourth gate assertCreateBody checks and the one the task brief
         // leaves out; greying only three would misdescribe what the platform refused.
         expect(wrapper.get('[data-test="message-limit"]').attributes('disabled')).toBeDefined()
+    })
+
+    // 拆码前这条做不到:栅栏与「取值越域」共用 SHARE_INVALID_CONFIG,后端拒一个写错的值时
+    // 前端会误读成「平台没开这项能力」,灰掉四组并让 Owner 去找管理员 —— 指向完全错误的动作。
+    it('does not grey the gated groups when the server refused a value, not the capability', async () => {
+        createMailShare.mockRejectedValueOnce({ code: 500, message: 'SHARE_INVALID_CONFIG' })
+        const wrapper = await openWizard()
+        await wrapper.get('[data-test="preset-custom"]').trigger('click')
+        await wrapper.get('[data-test="authkey-toggle"]').setValue(true)
+        await submit(wrapper)
+
+        expect(wrapper.find('[data-test="capability-inactive"]').exists()).toBe(false)
+        expect(wrapper.get('[data-test="authkey-toggle"]').attributes('disabled')).toBeUndefined()
+        expect(wrapper.get('[data-test="max-sessions"]').attributes('disabled')).toBeUndefined()
+        expect(wrapper.get('[data-test="message-limit"]').attributes('disabled')).toBeUndefined()
     })
 
     // W9
@@ -387,7 +408,7 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / AC-LIFE-11)', () =>
 
     // W10
     it('resets the gated values so the owner can resubmit immediately after degrading', async () => {
-        createMailShare.mockRejectedValueOnce({ code: 500, message: 'SHARE_INVALID_CONFIG' })
+        createMailShare.mockRejectedValueOnce({ code: 500, message: 'SHARE_CAPABILITY_NOT_ENABLED' })
         const wrapper = await openWizard()
         await wrapper.get('[data-test="preset-custom"]').trigger('click')
         await setSelect(wrapper, 'mailbox-select', [11, 12])
@@ -626,6 +647,80 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / AC-LIFE-11)', () =>
 
         expect(accountList).toHaveBeenLastCalledWith(30, 30, 30)
         expect(wrapper.find('[data-test="mailbox-load-more"]').exists()).toBe(false)
+    })
+
+    // W-E1a
+    it('sends a custom 30-day duration as seconds, not as the sentinel (W-E1)', async () => {
+        const wrapper = await openWizard()
+
+        expect(wrapper.find('[data-test="wizard-duration-amount"]').exists()).toBe(false)
+
+        await setSelect(wrapper, 'wizard-duration', DURATION_CUSTOM)
+        await setSelect(wrapper, 'wizard-duration-unit', 'days')
+        await wrapper.get('[data-test="wizard-duration-amount"]').setValue(30)
+        await submit(wrapper)
+
+        expect(lastBody().durationSeconds).toBe(2592000)
+        expect(wrapper.find('[data-test="wizard-error"]').exists()).toBe(false)
+    })
+
+    // W-E1b
+    it('rejects a duration past the ceiling before the request leaves (W-E1)', async () => {
+        const wrapper = await openWizard()
+
+        await setSelect(wrapper, 'wizard-duration', DURATION_CUSTOM)
+        await setSelect(wrapper, 'wizard-duration-unit', 'days')
+        await wrapper.get('[data-test="wizard-duration-amount"]').setValue(3650)
+        await submit(wrapper)
+
+        expect(createMailShare).not.toHaveBeenCalled()
+        // The ceiling has to be in the sentence: "invalid duration" leaves the owner guessing
+        // which way to move the number.
+        expect(wrapper.get('[data-test="wizard-error"]').text()).toContain(String(MAX_DURATION_DAYS))
+    })
+
+    // W-E1c
+    it('carries the ceiling out of one constant into both the hint and the rejection (W-E1)', async () => {
+        const wrapper = await openWizard()
+        await setSelect(wrapper, 'wizard-duration', DURATION_CUSTOM)
+
+        expect(wrapper.get('[data-test="duration-ceiling"]').text()).toContain(String(MAX_DURATION_DAYS))
+        expect(wrapper.get('[data-test="duration-ceiling"]').text()).not.toContain('{days}')
+
+        await setSelect(wrapper, 'wizard-duration-unit', 'hours')
+        await wrapper.get('[data-test="wizard-duration-amount"]').setValue(MAX_DURATION_DAYS * 24)
+        await submit(wrapper)
+
+        expect(lastBody().durationSeconds).toBe(MAX_DURATION_SECONDS)
+    })
+
+    // W-E1d
+    it('drops back to the rung a preset carries instead of stranding the custom fields (W-E1)', async () => {
+        const wrapper = await openWizard()
+
+        await setSelect(wrapper, 'wizard-duration', DURATION_CUSTOM)
+        await wrapper.get('[data-test="wizard-duration-amount"]').setValue(30)
+        expect(selectValue(wrapper, 'wizard-duration')).toBe(DURATION_CUSTOM)
+
+        await wrapper.get('[data-test="preset-tempMailbox"]').trigger('click')
+
+        expect(selectValue(wrapper, 'wizard-duration')).toBe(86400)
+        expect(wrapper.find('[data-test="wizard-duration-amount"]').exists()).toBe(false)
+
+        await submit(wrapper)
+        expect(lastBody().durationSeconds).toBe(86400)
+    })
+
+    // W-E1e
+    it('refuses an emptied custom amount rather than sending 0 seconds (W-E1)', async () => {
+        const wrapper = await openWizard()
+
+        await setSelect(wrapper, 'wizard-duration', DURATION_CUSTOM)
+        await wrapper.get('[data-test="wizard-duration-amount"]').setValue('')
+        await submit(wrapper)
+
+        expect(createMailShare).not.toHaveBeenCalled()
+        expect(wrapper.find('[data-test="wizard-error"]').exists()).toBe(true)
     })
 })
 

@@ -9,14 +9,43 @@
     <div class="share-form">
       <el-input v-model="form.name" :placeholder="t('shareNamePlaceholder')" maxlength="64"/>
       <el-input v-model="form.remark" :placeholder="t('shareRemarkPlaceholder')" maxlength="200"/>
-      <el-select v-model="form.durationSeconds">
+      <el-select v-model="durationModel" data-test="duration-select">
         <el-option
-            v-for="item in durationOptions"
+            v-for="item in SHARE_DURATION_PRESETS"
             :key="item.value"
             :label="t(item.labelKey)"
             :value="item.value"
         />
+        <el-option
+            :key="DURATION_CUSTOM"
+            :label="t('shareDurationCustom')"
+            :value="DURATION_CUSTOM"
+        />
       </el-select>
+      <div v-if="customDurationOpen" class="custom-duration">
+        <el-input-number
+            v-model="customDurationAmount"
+            data-test="duration-amount"
+            :min="1"
+            :step="1"
+            :aria-label="t('shareDurationCustomAmount')"
+        />
+        <el-select
+            v-model="customDurationUnit"
+            data-test="duration-unit"
+            :aria-label="t('shareDurationCustomUnit')"
+        >
+          <el-option
+              v-for="unit in DURATION_UNITS"
+              :key="unit.id"
+              :label="t(unit.labelKey)"
+              :value="unit.id"
+          />
+        </el-select>
+        <p class="custom-duration-hint" data-test="duration-ceiling">
+          {{ t('shareDurationTooLong', { days: MAX_DURATION_DAYS }) }}
+        </p>
+      </div>
       <el-button type="primary" data-test="create-share" :disabled="creating" @click="submitCreate">
         {{ t('shareCreate') }}
       </el-button>
@@ -91,6 +120,17 @@ import { useCopyWithFallback } from '@/composables/useCopyWithFallback.js'
 import { createMailShare, listMailShares, newIdempotencyKey, revokeMailShare } from '@/request/mail-share.js'
 import { tzText } from '@/utils/day.js'
 import { buildShareUrl } from './build-share-url.js'
+// One definition, two entries. This dialog and the share-admin wizard create the same thing,
+// and while each held its own literal rung list the 7-day cap could be raised in one and left
+// standing in the other (P-03).
+import {
+  DURATION_CUSTOM,
+  DURATION_UNITS,
+  MAX_DURATION_DAYS,
+  SHARE_DURATION_PRESETS,
+  customDurationSeconds,
+  durationError
+} from '@/views/share-admin/presets.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -122,16 +162,34 @@ function canManageShare() {
 }
 
 const canManage = computed(() => canManageShare())
-const durationOptions = [
-  { value: 3600, labelKey: 'shareDuration1h' },
-  { value: 21600, labelKey: 'shareDuration6h' },
-  { value: 86400, labelKey: 'shareDuration1d' },
-  { value: 604800, labelKey: 'shareDuration7d' }
-]
 const form = reactive({
   name: '',
   remark: '',
   durationSeconds: 3600
+})
+const customDurationOpen = ref(false)
+const customDurationAmount = ref(30)
+const customDurationUnit = ref('days')
+
+// The select holds either a rung or the 'custom' sentinel; durationSeconds stays the resolved
+// number the request speaks, so the sentinel can never reach the body.
+const durationModel = computed({
+  get() {
+    return customDurationOpen.value ? DURATION_CUSTOM : form.durationSeconds
+  },
+  set(value) {
+    customDurationOpen.value = value === DURATION_CUSTOM
+    form.durationSeconds = customDurationOpen.value
+        ? customDurationSeconds(customDurationAmount.value, customDurationUnit.value)
+        : value
+  }
+})
+
+watch([customDurationAmount, customDurationUnit], ([amount, unit]) => {
+  if (!customDurationOpen.value) {
+    return
+  }
+  form.durationSeconds = customDurationSeconds(amount, unit)
 })
 const idempotencyKey = ref(newIdempotencyKey())
 const creating = ref(false)
@@ -196,8 +254,13 @@ async function submitCreate() {
     ElMessage({ message: t('shareAccountRequired'), type: 'warning', plain: true })
     return
   }
-  if (!form.durationSeconds || form.durationSeconds <= 0) {
-    ElMessage({ message: t('shareDurationRequired'), type: 'warning', plain: true })
+  const durationInvalid = durationError(form.durationSeconds)
+  if (durationInvalid) {
+    ElMessage({
+      message: t(durationInvalid, { days: MAX_DURATION_DAYS }),
+      type: 'warning',
+      plain: true
+    })
     return
   }
   creating.value = true
@@ -276,6 +339,20 @@ watch(() => props.modelValue, (open) => {
   flex-direction: column;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.custom-duration {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.custom-duration-hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .share-created {

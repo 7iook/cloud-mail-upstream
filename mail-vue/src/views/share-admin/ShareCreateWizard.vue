@@ -140,18 +140,53 @@
           <label class="row-label" for="wizard-duration">{{ tf('shareWizardDuration') }}</label>
           <el-select
               id="wizard-duration"
-              v-model="form.durationSeconds"
+              v-model="durationModel"
               class="row-control"
               data-test="wizard-duration"
               :disabled="locked"
           >
             <el-option
-                v-for="item in DURATION_OPTIONS"
+                v-for="item in SHARE_DURATION_PRESETS"
                 :key="item.value"
                 :label="$t(item.labelKey)"
                 :value="item.value"
             />
+            <el-option
+                :key="DURATION_CUSTOM"
+                :label="tf('shareDurationCustom')"
+                :value="DURATION_CUSTOM"
+            />
           </el-select>
+        </div>
+
+        <div v-if="customDurationOpen" class="row row-custom-duration">
+          <label class="row-label" for="wizard-duration-amount">{{ tf('shareDurationCustomAmount') }}</label>
+          <div class="row-control custom-duration">
+            <el-input-number
+                id="wizard-duration-amount"
+                v-model="customDurationAmount"
+                data-test="wizard-duration-amount"
+                :min="1"
+                :step="1"
+                :disabled="locked"
+            />
+            <el-select
+                v-model="customDurationUnit"
+                :aria-label="tf('shareDurationCustomUnit')"
+                data-test="wizard-duration-unit"
+                :disabled="locked"
+            >
+              <el-option
+                  v-for="unit in DURATION_UNITS"
+                  :key="unit.id"
+                  :label="tf(unit.labelKey)"
+                  :value="unit.id"
+              />
+            </el-select>
+            <p class="hint" data-test="duration-ceiling">
+              {{ tf('shareDurationTooLong', {days: MAX_DURATION_DAYS}) }}
+            </p>
+          </div>
         </div>
 
         <div class="row">
@@ -329,8 +364,14 @@ import {accountList} from "@/request/account.js"
 import {createMailShare, newIdempotencyKey} from "@/request/mail-share.js"
 import {buildShareUrl} from "@/views/email/build-share-url.js"
 import {
+  DURATION_CUSTOM,
+  DURATION_UNITS,
+  MAX_DURATION_DAYS,
+  SHARE_DURATION_PRESETS,
   SHARE_PRESETS,
   capabilityV2,
+  customDurationSeconds,
+  durationError,
   findPreset,
   hasFenceIntent,
   markCapabilityInactive,
@@ -400,8 +441,8 @@ const PENDING_COPY = {
   shareQuotaUnlimited: '不限'
 }
 
-function tf(key) {
-  return te(key) ? t(key) : (PENDING_COPY[key] || key)
+function tf(key, params) {
+  return te(key) ? t(key, params || {}) : (PENDING_COPY[key] || key)
 }
 
 // Mirrors of backend constants the browser has to enforce before the request leaves:
@@ -409,13 +450,6 @@ function tf(key) {
 const BINDING_LIMIT = 50
 const ACCOUNT_PAGE_SIZE = 30
 const MIN_REFRESH_INTERVAL_MS = 3000
-
-const DURATION_OPTIONS = [
-  {value: 3600, labelKey: 'shareDuration1h'},
-  {value: 21600, labelKey: 'shareDuration6h'},
-  {value: 86400, labelKey: 'shareDuration1d'},
-  {value: 604800, labelKey: 'shareDuration7d'}
-]
 
 const presetLabelId = 'share-wizard-preset-label'
 const accountStore = useAccountStore()
@@ -431,6 +465,11 @@ const formError = ref('')
 // URL: the list and the detail drawer never return them again.
 const created = ref(null)
 const advancedNames = ref([])
+// The free-form duration lives beside the rungs rather than replacing them: the presets cover
+// the frequent cases, and only the owner who needs 30 days pays the extra two fields.
+const customDurationOpen = ref(false)
+const customDurationAmount = ref(30)
+const customDurationUnit = ref('days')
 const accounts = ref([])
 const accountsDone = ref(false)
 const accountsLoading = ref(false)
@@ -449,6 +488,29 @@ const gatedDisabled = computed(() => capabilityV2.value === 'inactive')
 const activePreset = computed(() => findPreset(form.presetId))
 const multiEnabled = computed(() => activePreset.value.multi && !gatedDisabled.value)
 const overBindingLimit = computed(() => form.accountIds.length > BINDING_LIMIT)
+
+// The select carries either a rung's seconds or the 'custom' sentinel, while durationSeconds
+// stays the resolved number the request speaks. Keeping the sentinel out of the form is what
+// stops it from reaching the body: normalizeCreateBody would drop a string silently, and the
+// share would land with the backend's default instead of the duration on screen.
+const durationModel = computed({
+  get() {
+    return customDurationOpen.value ? DURATION_CUSTOM : form.durationSeconds
+  },
+  set(value) {
+    customDurationOpen.value = value === DURATION_CUSTOM
+    form.durationSeconds = customDurationOpen.value
+        ? customDurationSeconds(customDurationAmount.value, customDurationUnit.value)
+        : value
+  }
+})
+
+watch([customDurationAmount, customDurationUnit], ([amount, unit]) => {
+  if (!customDurationOpen.value) {
+    return
+  }
+  form.durationSeconds = customDurationSeconds(amount, unit)
+})
 
 // The request always speaks accountIds, but a non-multiple el-select cannot render an array
 // and silently falls back to its placeholder — the owner sees "no mailbox chosen" over a
@@ -500,6 +562,9 @@ function applyPreset(presetId, resetMailboxes = false) {
   const preset = findPreset(presetId)
   Object.assign(form, preset.form)
   form.presetId = presetId
+  // preset.form carries a rung, so leaving custom mode open would show 'custom' over a
+  // durationSeconds the two custom fields no longer describe.
+  customDurationOpen.value = false
   if (resetMailboxes) {
     const current = Number(accountStore.currentAccountId) || 0
     form.accountIds = current > 0 ? [current] : []
@@ -592,8 +657,8 @@ function isCount(value) {
 }
 
 // Every range the backend enforces, checked before the request leaves. This is not polish:
-// SHARE_INVALID_CONFIG covers both a bad range and the capability fence, so an unchecked
-// range error would be read as "the platform disabled this" and grey four groups over a typo.
+// SHARE_INVALID_CONFIG names the offending write no more precisely than "not accepted", so a
+// range error that reaches the server comes back as one generic line instead of the field to fix.
 function localError() {
   if (form.accountIds.length === 0) {
     return 'shareAccountRequired'
@@ -601,13 +666,14 @@ function localError() {
   if (form.accountIds.length > BINDING_LIMIT) {
     return 'shareBindingLimitReached'
   }
-  if (!(Number(form.durationSeconds) > 0)) {
-    return 'shareDurationRequired'
+  const duration = durationError(form.durationSeconds)
+  if (duration) {
+    return duration
   }
   if (form.refreshIntervalMs != null && form.refreshIntervalMs !== '') {
     const interval = Number(form.refreshIntervalMs)
-    // assertCreateBody rejects any non-safe-integer before the V2 fence. 3000.5 would share
-    // SHARE_INVALID_CONFIG with a real capability miss and grey four groups over a typo.
+    // assertCreateBody rejects any non-safe-integer before the V2 fence, so 3000.5 never reaches
+    // the fence at all — it comes back as SHARE_INVALID_CONFIG with no hint of which field.
     if (!Number.isSafeInteger(interval) || interval < MIN_REFRESH_INTERVAL_MS) {
       return 'shareRefreshIntervalTooSmall'
     }
@@ -670,7 +736,7 @@ async function submit() {
   formError.value = ''
   const invalid = localError()
   if (invalid) {
-    formError.value = tf(invalid)
+    formError.value = tf(invalid, {days: MAX_DURATION_DAYS})
     return
   }
   created.value = null
@@ -693,10 +759,10 @@ async function submit() {
   } catch (err) {
     if (isBusinessError(err)) {
       unknownResult.value = false
-      // SHARE_INVALID_CONFIG is the same code for a bad range and a disabled capability, and
-      // assertCreateBody runs domain and limit checks first. So the fence is only a sound
-      // reading when this body asked for a gated write and every local range already passed.
-      if (fenceIntent && err.message === 'SHARE_INVALID_CONFIG') {
+      // 栅栏现在有自己的码,不必再从 SHARE_INVALID_CONFIG 里猜:那个码同时承载「取值越域」,
+      // 拿它灰掉四组会把一个写错的值说成「平台没开这项能力」。`fenceIntent` 保留为一致性
+      // 校验 —— 它镜像的正是后端 create 侧门控的那四项写入。
+      if (fenceIntent && err.message === 'SHARE_CAPABILITY_NOT_ENABLED') {
         degradeToInactive()
       }
     } else {
@@ -832,6 +898,26 @@ watch(form, () => {
 
 .row-control {
   width: 100%;
+}
+
+.custom-duration {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  .el-input-number {
+    flex: 1 1 120px;
+    min-width: 0;
+  }
+
+  .el-select {
+    flex: 0 1 120px;
+  }
+
+  .hint {
+    flex-basis: 100%;
+    margin-top: 0;
+  }
 }
 
 .advanced {

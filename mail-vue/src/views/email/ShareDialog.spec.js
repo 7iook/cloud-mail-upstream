@@ -56,6 +56,12 @@ vi.mock('element-plus', async (importOriginal) => {
     }
 })
 
+import { ElMessage } from 'element-plus'
+import {
+    DURATION_CUSTOM,
+    MAX_DURATION_DAYS,
+    SHARE_DURATION_PRESETS
+} from '@/views/share-admin/presets.js'
 import ShareDialog from './ShareDialog.vue'
 
 const SECRET = 'sec-shown-once'
@@ -71,10 +77,23 @@ const stubs = {
         emits: ['update:modelValue'],
         template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
     },
+    // The duration select carries preset seconds alongside the 'custom' sentinel and the unit
+    // select carries ids, so a stub that coerced everything to Number would turn both into NaN
+    // and hide the sentinel handling entirely.
     'el-select': {
         props: ['modelValue'],
         emits: ['update:modelValue'],
-        template: '<select :value="modelValue" @change="$emit(\'update:modelValue\', Number($event.target.value))"><slot /></select>'
+        methods: {
+            emitValue(raw) {
+                this.$emit('update:modelValue', /^-?\d+$/.test(raw) ? Number(raw) : raw)
+            }
+        },
+        template: '<select :value="modelValue" @change="emitValue($event.target.value)"><slot /></select>'
+    },
+    'el-input-number': {
+        props: ['modelValue', 'min', 'step'],
+        emits: ['update:modelValue'],
+        template: '<input type="number" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value === \'\' ? null : Number($event.target.value))" />'
     },
     'el-option': {
         props: ['label', 'value'],
@@ -138,6 +157,7 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         revokeMailShare.mockReset()
         confirm.mockReset()
         routerPush.mockReset()
+        ElMessage.mockClear()
         listMailShares.mockResolvedValue({ list: [], total: 0 })
         createMailShare.mockResolvedValue({
             shareId: 7,
@@ -324,5 +344,66 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         managementHooks.forEach((hook) => {
             expect(wrapper.find(`[data-test="${hook}"]`).exists()).toBe(false)
         })
+    })
+
+    // W-E1: this dialog and the share-admin wizard are the same feature. A duration reachable
+    // from one entry and not the other is the drift the shared module exists to prevent.
+    it('offers every rung the wizard offers, plus the custom sentinel (W-E1)', async () => {
+        const wrapper = mountDialog()
+        await flushPromises()
+
+        const values = wrapper.get('[data-test="duration-select"]')
+            .findAll('option')
+            .map((option) => option.attributes('value'))
+        expect(values).toEqual([
+            ...SHARE_DURATION_PRESETS.map((row) => String(row.value)),
+            DURATION_CUSTOM
+        ])
+    })
+
+    it('sends a custom 30-day duration as seconds (W-E1)', async () => {
+        const wrapper = mountDialog()
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="duration-amount"]').exists()).toBe(false)
+
+        await wrapper.get('[data-test="duration-select"]').setValue(DURATION_CUSTOM)
+        await wrapper.get('[data-test="duration-unit"]').setValue('days')
+        await wrapper.get('[data-test="duration-amount"]').setValue(30)
+        await wrapper.get('[data-test="create-share"]').trigger('click')
+        await flushPromises()
+
+        expect(createMailShare.mock.calls[0][0].durationSeconds).toBe(2592000)
+    })
+
+    it('warns with the ceiling instead of submitting a ten-year share (W-E1)', async () => {
+        const wrapper = mountDialog()
+        await flushPromises()
+
+        await wrapper.get('[data-test="duration-select"]').setValue(DURATION_CUSTOM)
+        await wrapper.get('[data-test="duration-unit"]').setValue('days')
+        await wrapper.get('[data-test="duration-amount"]').setValue(3650)
+        await wrapper.get('[data-test="create-share"]').trigger('click')
+        await flushPromises()
+
+        expect(createMailShare).not.toHaveBeenCalled()
+        const warned = ElMessage.mock.calls.map((call) => call[0].message).join(' ')
+        expect(warned).toContain(String(MAX_DURATION_DAYS))
+        expect(warned).not.toContain('{days}')
+        expect(wrapper.get('[data-test="duration-ceiling"]').text()).toContain(String(MAX_DURATION_DAYS))
+    })
+
+    it('returns to a rung without stranding the custom fields (W-E1)', async () => {
+        const wrapper = mountDialog()
+        await flushPromises()
+
+        await wrapper.get('[data-test="duration-select"]').setValue(DURATION_CUSTOM)
+        await wrapper.get('[data-test="duration-amount"]').setValue(30)
+        await wrapper.get('[data-test="duration-select"]').setValue('604800')
+        await wrapper.get('[data-test="create-share"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="duration-amount"]').exists()).toBe(false)
+        expect(createMailShare.mock.calls[0][0].durationSeconds).toBe(604800)
     })
 })

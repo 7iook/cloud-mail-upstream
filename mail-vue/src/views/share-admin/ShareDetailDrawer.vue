@@ -372,7 +372,8 @@ const PENDING_COPY = {
   shareConfigTitle: '配置',
   shareConfigSaved: '已保存',
   shareConfigNoChange: '没有需要保存的改动。',
-  shareConfigRejected: '这项配置未被接受：可能超出了当前允许的取值，或这项能力尚未开放。请调整后重试。',
+  shareConfigRejected: '这项配置未被接受：超出了当前允许的取值。请调整后重试。',
+  shareCapabilityNotEnabled: '该能力尚未开放，请联系管理员开启。',
   shareName: '名称',
   shareRemark: '备注',
   shareMaxSessions: '会话上限',
@@ -398,7 +399,7 @@ const PENDING_COPY = {
   shareAuthKeyDisableConfirm: '关闭后不再需要密钥，同时立刻让所有已打开的访问失效。',
   shareAuthKeyOnce: '新密钥只显示这一次，关闭后无法再查看。请立即复制并妥善保存。',
   shareAuthKeySaved: '我已保存',
-  shareAuthKeyFailed: '无法完成：可能是这项能力尚未开放，或分享状态刚刚变化。请刷新后重试。'
+  shareAuthKeyFailed: '无法完成：分享状态可能刚刚变化。请刷新后重试。'
 }
 
 function tf(key) {
@@ -745,7 +746,11 @@ async function submitSave() {
       closeGone()
       return
     }
-    if (err && err.message === 'SHARE_INVALID_CONFIG') {
+    // 两个码指向两种自助动作:越域要改自己填的值,栅栏要找管理员。共用一个码时只能给
+    // 一句「可能…或…」,把判断推回给管理员。
+    if (err && err.message === 'SHARE_CAPABILITY_NOT_ENABLED') {
+      configError.value = tf('shareCapabilityNotEnabled')
+    } else if (err && err.message === 'SHARE_INVALID_CONFIG') {
       configError.value = tf('shareConfigRejected')
     }
     console.error('mail share update failed', {code: err && err.code, message: err && err.message})
@@ -782,10 +787,11 @@ async function submitAuthKey(action) {
       closeGone()
       return
     }
-    // SHARE_INVALID_CONFIG here is ambiguous by design: either the capability is not open yet
-    // or another tab already moved the state. Offer both readings plus a refresh, and do not
-    // claim to know which one happened.
-    authKeyError.value = tf('shareAuthKeyFailed')
+    // 栅栏有了自己的码,这里不再需要「可能…或…」:后端明确说能力未开放时就直说,
+    // 其余(状态刚被另一个页签改过)仍保留那句不声称知道原因的兜底。
+    authKeyError.value = err && err.message === 'SHARE_CAPABILITY_NOT_ENABLED'
+      ? tf('shareCapabilityNotEnabled')
+      : tf('shareAuthKeyFailed')
     console.error('mail share auth key failed', {action, code: err && err.code, message: err && err.message})
   } finally {
     authKeyBusy.value = false

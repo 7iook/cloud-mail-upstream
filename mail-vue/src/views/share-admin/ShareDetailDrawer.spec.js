@@ -703,7 +703,7 @@ describe('share detail drawer · access key (AC-ADMIN-05 / AC-AUTH-07 / AC-AUTH-
     })
 
     it('keeps the panel intact and stays disabled when enable is refused (K5)', async () => {
-        resetMailShareAuthKey.mockRejectedValue({ code: 500, message: 'SHARE_INVALID_CONFIG' })
+        resetMailShareAuthKey.mockRejectedValue({ code: 500, message: 'SHARE_CAPABILITY_NOT_ENABLED' })
         const wrapper = await openDrawer()
 
         await wrapper.get('[data-test="authkey-enable"]').trigger('click')
@@ -713,6 +713,32 @@ describe('share detail drawer · access key (AC-ADMIN-05 / AC-AUTH-07 / AC-AUTH-
         expect(wrapper.find('[data-test="authkey-once"]').exists()).toBe(false)
         expect(wrapper.find('[data-test="authkey-enable"]').exists()).toBe(true)
         expect(wrapper.find('[data-test="authkey-reset"]').exists()).toBe(false)
+    })
+
+    // 交付契约成功状态②:被拒时管理员要能从提示分辨「能力尚未开放」与「自己写错了」,
+    // 不必翻日志或找开发。栅栏拆出独立错误码前,这两种都显示同一句「可能…或…」。
+    it('names the capability as the reason when the fence refuses enable', async () => {
+        resetMailShareAuthKey.mockRejectedValue({ code: 500, message: 'SHARE_CAPABILITY_NOT_ENABLED' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="authkey-enable"]').trigger('click')
+        await flushPromises()
+
+        const text = wrapper.get('[data-test="authkey-error"]').text()
+        expect(text).toBe(en.shareCapabilityNotEnabled)
+        expect(text).not.toBe(en.shareAuthKeyFailed)
+    })
+
+    it('does not blame the capability when the refusal is a state change', async () => {
+        resetMailShareAuthKey.mockRejectedValue({ code: 500, message: 'SHARE_INVALID_CONFIG' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="authkey-enable"]').trigger('click')
+        await flushPromises()
+
+        const text = wrapper.get('[data-test="authkey-error"]').text()
+        expect(text).toBe(en.shareAuthKeyFailed)
+        expect(text).not.toBe(en.shareCapabilityNotEnabled)
     })
 })
 
