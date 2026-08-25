@@ -13,6 +13,24 @@ const cacheDir = join(tmpdir(), `mail-worker-vitest-${process.pid}`);
 // exposing globals to cross-file races. Fixtures that patch shared runtime state
 // -- withLocalTimezoneShift swaps Date.prototype's local getters -- leak into
 // whatever else happens to be mid-assertion. Serial keeps that state private.
+// `.dev.vars` outranks a wrangler config's [vars], and the pool loads it the same way
+// `wrangler dev` does. That makes the suite depend on a developer's local secrets file
+// happening not to define a given key: set SHARE_CAPABILITY_V2=true in .dev.vars to click
+// through the feature locally and ten fence assertions turn red, with nothing in the failure
+// output pointing at the file. Bindings sit above both layers, so pin here the variables whose
+// *value* an assertion depends on. Everything else (pepper, signing key, KEK material) stays in
+// wrangler-vitest.toml -- tests only need those to exist, not to hold a particular value.
+const assertedEnv = {
+	// The release fence. Its whole test surface is "what happens while it is off".
+	SHARE_CAPABILITY_V2: 'false',
+	// Empty means unconfigured here: maxDurationSeconds() treats non-numeric, zero and negative
+	// the same as absent ("not a back door for lifting the ceiling", per its comment), and the
+	// duration tests cover exactly that fallback -- which is what production looks like today.
+	// A binding cannot delete an inherited key, so pinning an equivalent value is the way to stop
+	// a local .dev.vars from silently configuring one.
+	SHARE_MAX_DURATION_SECONDS: '',
+};
+
 export default defineWorkersConfig({
 	cacheDir,
 	test: {
@@ -22,6 +40,7 @@ export default defineWorkersConfig({
 			workers: {
 				singleWorker: true,
 				wrangler: { configPath: './wrangler-vitest.toml' },
+				miniflare: { bindings: assertedEnv },
 			},
 		},
 	},
