@@ -59,6 +59,11 @@ crons = ["0 16 * * *"]	#每天晚上12点执行每日任务,刷新分析缓存
 
 [vars]
 #ai_model = ""			#ai模型,不填默认使用@cf/meta/llama-3.1-8b-instruct
+						#收信时用它从邮件里提取验证码与验证链接。识别方式在【管理台 → 系统设置 → Workers AI】选,
+						#不在这里配:关闭 / 仅规则识别 / 规则识别 + AI 补位。默认【关闭】
+						#「仅规则」不调 AI、不吃额度;「AI 补位」只在规则没把握时才调一次
+						#Workers AI 免费额度 10000 neurons/天且是【整个账户】共享,超出后免费档直接 429
+						#删掉上面的 [ai] 段(或 fork 后没配)不会报错,提取会自动退回纯规则
 #analysis_cache = false			#是否开启分析数据缓存
 #orm_log = false			#是否sql日志
 #domain = []				#邮件域名可可配置多个 示例: ["example1.com","example2.com"]

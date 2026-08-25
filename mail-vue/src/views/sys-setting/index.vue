@@ -368,10 +368,27 @@
             <div class="card-title">Workers AI</div>
             <div class="card-content">
               <div class="setting-item">
-                <div><span>{{ $t('codeRecognition') }}</span></div>
                 <div>
-                  <el-switch @change="changeField('aiCode', $event)" :before-change="beforeChange" :active-value="0" :inactive-value="1"
-                             v-model="setting.aiCode"/>
+                  <span>{{ $t('codeRecognition') }}</span>
+                  <el-tooltip effect="dark" :content="$t('codeRecognitionModeDesc')">
+                    <Icon class="warning" icon="fe:warning" width="18" height="18"/>
+                  </el-tooltip>
+                </div>
+                <div>
+                  <el-select
+                      @visible-change="(open) => open && beforeChange()"
+                      @change="changeField('aiCode', $event)"
+                      :style="`width: ${ locale === 'en' ? 180 : 150 }px;`"
+                      v-model="setting.aiCode"
+                      placeholder="Select"
+                  >
+                    <el-option
+                        v-for="item in aiCodeOptions"
+                        :key="item.value"
+                        :label="item.label"
+                        :value="item.value"
+                    />
+                  </el-select>
                 </div>
               </div>
               <div class="setting-item">
@@ -907,6 +924,14 @@ const blackListForm = ref({
   blackFrom: []
 })
 const aiCodeFilter = ref([])
+
+// 按能力递增排列,而 value 是历史遗留的乱序:0/1 是原来那个二态开关的取值,
+// 已经躺在存量部署的 setting 行里,不能为了排得好看而重编号。
+const aiCodeOptions = computed(() => [
+  {label: t('codeRecognitionOff'), value: 1},
+  {label: t('codeRecognitionRuleOnly'), value: 2},
+  {label: t('codeRecognitionRuleAi'), value: 0}
+])
 
 const authRefreshOptions = computed(() => [
   {label: t('disable'), value: 0},
