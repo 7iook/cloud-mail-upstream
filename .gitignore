@@ -34,6 +34,12 @@ mail-vue/dist
 .dev.vars.*
 !.dev.vars.example
 
+# 部署者本机的 wrangler 配置:含自己账户的 D1 / KV 资源 ID。仓库里的 wrangler.toml 刻意
+# 把这些绑定注释掉留给使用者填,而 wrangler 视配置文件为绑定的唯一真源(toml 里没有的绑定
+# 会在部署时被移除,keep_vars 只保护 vars 不保护绑定),所以每个部署者都需要一份自己的。
+wrangler.prod.toml
+wrangler.*.local.toml
+
 # agent workspace: keep archived decision/recon docs tracked for handoff
 .agent-workspace/**
 !.agent-workspace/.archive/
