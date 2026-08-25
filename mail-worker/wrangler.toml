@@ -19,6 +19,15 @@ name = "SHARE_READ_RATE_LIMITER"
 namespace_id = "92602"
 simple = { limit = 100, period = 60 }
 
+# Owner-side credential exposure (POST /mailShare/revealSec). Keyed by userId, not IP.
+# Deliberately tight: a legitimate admin opens a detail drawer a handful of times a
+# minute, so 20 leaves room for misclicks while capping how fast a stolen session can
+# walk the whole share list back into plaintext links.
+[[ratelimits]]
+name = "SHARE_REVEAL_RATE_LIMITER"
+namespace_id = "92603"
+simple = { limit = 20, period = 60 }
+
 #[[d1_databases]]
 #binding = "db"			#d1数据库绑定名默认不可修改
 #database_name = ""		#d1数据库名字

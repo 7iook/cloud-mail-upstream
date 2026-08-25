@@ -36,6 +36,11 @@ SHARE_SEC_PEPPER = "vitest-share-sec-pepper"
 SHARE_SEC_PEPPER_KID = "v1"
 SHARE_SESSION_SIGNING_KEY = "vitest-share-session-signing-key"
 SHARE_SESSION_SIGNING_KID = "v1"
+# sec 密文持久化的 KEK(ADR-share-credential-recoverability 轨一)。生产要求它必配 ——
+# 缺失时 create/regenerate 当场 fail-closed，所以基线 env 必须带上它，否则整条写入面全红。
+# kid 刻意取 'k1' 而不是 'v1'：与 pepper 环的 kid 撞名会让「写错了环」这类缺陷假绿。
+SHARE_SEC_KEK = "vitest-share-sec-kek-current"
+SHARE_SEC_KEK_KID = "k1"
 # SHARE_MAX_DURATION_SECONDS 刻意不配：这个 worker 的 env 就是「生产实际长什么样」，
 # 而生产 wrangler.toml 从来没写过这一项。留空即让 HTTP 层用例跑在兜底上限（I-2，90 天）上，
 # 那正是 share-api.spec.js「超长有效期被拒」那条断言要证的东西。

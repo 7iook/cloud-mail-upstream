@@ -54,8 +54,20 @@ describe('mail_share drizzle schema (design.md Data Models)', () => {
 			authKeyEnabled: 'auth_key_enabled',
 			authKeyHash: 'auth_key_hash',
 			authKeyKid: 'auth_key_kid',
-			credentialsVersion: 'credentials_version'
+			credentialsVersion: 'credentials_version',
+			secCipher: 'sec_cipher',
+			kekKid: 'kek_kid'
 		});
+	});
+
+	// 轨一只覆盖 sec。AuthKey 保持不可恢复(ADR「AuthKey 不纳入可逆范围」),
+	// 所以这里钉的是「没有 auth_key_cipher 这一列」——一旦有人顺手加上,这条就红。
+	it('adds a reversible envelope for sec only and never for the AuthKey', () => {
+		const names = Object.values(getTableColumns(mailShare)).map((col) => col.name);
+		expect(names).toContain('sec_cipher');
+		expect(names).toContain('kek_kid');
+		expect(names).not.toContain('auth_key_cipher');
+		expect(names).not.toContain('auth_key_encrypted');
 	});
 
 	it('keeps the legacy columns and never persists share_type (R1-A1 / R1-A2)', () => {
@@ -111,7 +123,10 @@ describe('mail_share drizzle schema (design.md Data Models)', () => {
 			authKeyEnabled: true,
 			authKeyHash: false,
 			authKeyKid: false,
-			credentialsVersion: true
+			credentialsVersion: true,
+			// 两列都可空:本次部署之前建出来的存量行没有密文,那是 ABSENT 而不是故障。
+			secCipher: false,
+			kekKid: false
 		});
 	});
 });

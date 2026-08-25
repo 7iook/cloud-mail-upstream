@@ -165,6 +165,58 @@ describe('v3_2DB DDL (design.md Data Models · expand-only)', () => {
 	});
 });
 
+// v3_3DB:sec 密文持久化的两列。迁移由人工访问 `GET /api/init/{jwt_secret}` 触发,
+// 所以「重复跑」不是假想场景 —— 运维每次升级都会再点一次同一个链接。
+describe('v3_3DB DDL (ADR-share-credential-recoverability · expand-only)', () => {
+	it('adds sec_cipher and kek_kid as nullable text and touches nothing else', async () => {
+		const cols = await columnInfo('mail_share');
+
+		expect(cols.sec_cipher).toBeTruthy();
+		expect(cols.sec_cipher.type.toUpperCase()).toBe('TEXT');
+		// 存量行没有密文,NOT NULL 会让 ALTER 在有数据的表上直接失败。
+		expect(cols.sec_cipher.notnull).toBe(0);
+		expect(cols.sec_cipher.dflt_value).toBeNull();
+		expect(cols.kek_kid).toBeTruthy();
+		expect(cols.kek_kid.type.toUpperCase()).toBe('TEXT');
+		expect(cols.kek_kid.notnull).toBe(0);
+
+		// expand-only:零 RENAME 零 DROP,凭据旧列原样还在。
+		expect(cols.sec_hmac).toBeTruthy();
+		expect(cols.pepper_kid).toBeTruthy();
+		expect(cols.auth_key_hash).toBeTruthy();
+		// AuthKey 不纳入可逆范围。
+		expect(cols.auth_key_cipher).toBeUndefined();
+	});
+
+	it('is idempotent: reruns neither throw nor duplicate the columns', async () => {
+		const before = await columnInfo('mail_share');
+		const beforeNames = Object.keys(before);
+
+		await dbInit.v3_3DB(c);
+		await dbInit.v3_3DB(c);
+
+		const after = await columnInfo('mail_share');
+		expect(Object.keys(after)).toEqual(beforeNames);
+		expect(after.sec_cipher.cid).toBe(before.sec_cipher.cid);
+		expect(after.kek_kid.cid).toBe(before.kek_kid.cid);
+	});
+
+	it('leaves ciphertext already on a row untouched across a rerun', async () => {
+		const ownerId = nextId();
+		const accountId = await insertAccount({ accountId: nextId(), userId: ownerId });
+		const shareId = await insertLegacyShare({ userId: ownerId, accountId });
+		await env.db.prepare('UPDATE mail_share SET sec_cipher = ?, kek_kid = ? WHERE share_id = ?')
+			.bind('v1:k1:nonce:ct', 'k1', shareId).run();
+
+		await dbInit.v3_3DB(c);
+
+		const row = await env.db.prepare('SELECT sec_cipher, kek_kid FROM mail_share WHERE share_id = ?')
+			.bind(shareId).first();
+		expect(row.sec_cipher).toBe('v1:k1:nonce:ct');
+		expect(row.kek_kid).toBe('k1');
+	});
+});
+
 describe('v3_2DB backfill gate (R2-A4 · AC-BIND-09/11)', () => {
 	it('backfills exactly one Binding for a legal v3_1 row and preserves access_count', async () => {
 		const userId = nextId();

@@ -6,6 +6,10 @@ import { mailShare } from '../entity/mail-share';
 import { mailShareBinding } from '../entity/mail-share-binding';
 import orm from '../entity/orm';
 import BizError from '../error/biz-error';
+// The pepper ring, the signing ring below and the KEK ring in share-sec-cipher.js
+// are the same shape; it lives in one place so a rotation cannot behave
+// differently depending on which of the three it lands on.
+import { collectKeyedSecrets } from '../security/keyed-secret-ring';
 import { toUtc } from '../utils/date-uitil';
 // Known cycle with mail-share-service: it imports this module too. Both directions
 // are dereferenced inside function bodies only, so neither module evaluation hits a
@@ -119,21 +123,6 @@ async function hmacBytes(key, message) {
 async function digestShareSecret(sec, pepper) {
 	const bytes = await hmacBytes(pepper, sec);
 	return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function collectKeyedSecrets(currentKid, currentValue, prevKid, prevValue) {
-	const keys = [];
-	const seen = new Set();
-	const add = (kid, value) => {
-		if (!value || seen.has(kid)) {
-			return;
-		}
-		seen.add(kid);
-		keys.push({ kid, value });
-	};
-	add(currentKid || 'v1', currentValue);
-	add(prevKid || 'v0', prevValue);
-	return keys;
 }
 
 function selectKeyedSecret(ring, kid) {

@@ -13,7 +13,9 @@ const OWNER_ENDPOINTS = [
 	['DELETE', '/mailShare/delete'],
 	['PUT', '/mailShare/bindings'],
 	['DELETE', '/mailShare/revoke'],
-	['POST', '/mailShare/resetAuthKey']
+	['POST', '/mailShare/resetAuthKey'],
+	['POST', '/mailShare/regenerate'],
+	['POST', '/mailShare/revealSec']
 ];
 
 const VISITOR_READ_PATHS = [

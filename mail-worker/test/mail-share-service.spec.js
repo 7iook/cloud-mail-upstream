@@ -4,6 +4,7 @@ import { emailConst, isDel } from '../src/const/entity-const';
 import KvConst from '../src/const/kv-const';
 import jwtUtils from '../src/utils/jwt-utils';
 import shareAuthService from '../src/service/share-auth-service';
+import { decryptShareSec } from '../src/security/share-sec-cipher';
 import mailShareService, {
 	SHARE_BINDING_LIMIT,
 	SHARE_V2_INTENT,
@@ -1438,6 +1439,9 @@ describe('structured share observability events (R2-F2 / R3-A7)', () => {
 			SESSION_DENIED_CV: 'share.session.denied_cv',
 			BINDING_CASCADE: 'share.binding.cascade',
 			MIGRATE_INVALID_ROW: 'share.migrate.invalid_row',
+			// T-20b2b:凭据暴露面的审计线。事件名是告警规则的契约,加一条要连着告警
+			// 规则一起加,所以它必须出现在这张钉死的清单里而不是随手 import。
+			SEC_REVEAL: 'share.sec.reveal',
 			SYSTEM_ERROR: 'share.system.error'
 		});
 	});
@@ -3783,5 +3787,848 @@ describe('owner API surface for resetAuthKey (T-16)', () => {
 		// 「不是成功」，免得 T-17 一落地就把这条打红。
 		expect(body.code).not.toBe(200);
 		expect(authKeyColumns(await readShareRow(share.shareId))).toEqual(before);
+	});
+});
+
+// ── T-20a · 换链接（`POST /mailShare/regenerate`）─────────────────────────────
+// AC-LIFE-05 / AC-LIFE-11 / AC-SHARE-13 的断言表。语义与 resetAuthKey 同构（状态门 →
+// 带 CAS 的条件 UPDATE → 明文恰一次），差别只在轮换的是 `lid`/`sec_hmac` 而不是 AuthKey：
+// 这里额外要钉住「**没被**改动的两列」——`expires_at` 与 `window_start_email_id` 一旦
+// 跟着动，换链接就悄悄变成了续期 / 重置可见窗口，正是 AC-LIFE-05 要防的那件事。
+
+const REGEN_PRESERVED = ['expires_at', 'window_start_email_id', 'delete_at', 'create_time', 'account_id', 'status'];
+
+function preservedColumns(row) {
+	return Object.fromEntries(REGEN_PRESERVED.map((column) => [column, row[column]]));
+}
+
+// 全库扫描：明文 sec 不许出现在任何表的任何列里，而不只是 `mail_share`。
+// 逐表 `SELECT *` 而不是只查已知列 —— 将来新增一张表忘了脱敏，这条也要红。
+async function databaseContains(needle) {
+	const tables = await env.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
+	for (const table of tables.results || []) {
+		if (String(table.name).startsWith('sqlite_')) {
+			continue;
+		}
+		const rows = await env.db.prepare(`SELECT * FROM "${table.name}"`).all();
+		if (JSON.stringify(rows.results || []).includes(needle)) {
+			return table.name;
+		}
+	}
+	return null;
+}
+
+// regenerate 的写入走 `c.env.db.batch()`，`ctxStallingUpdate` 那把只包 `.run()` 的
+// 探针够不着它；在 batch 提交前插一次并发写入，才是「预读之后、写入之前」这条缝。
+function ctxStallingBatch(interfere, overrides = {}) {
+	let armed = true;
+	const batch = env.db.batch.bind(env.db);
+	const db = new Proxy(env.db, {
+		get(target, prop) {
+			if (prop === 'batch') {
+				return async (statements) => {
+					if (armed) {
+						armed = false;
+						await interfere();
+					}
+					return batch(statements);
+				};
+			}
+			const value = target[prop];
+			return typeof value === 'function' ? value.bind(target) : value;
+		}
+	});
+	return workerCtx({ db, ...overrides });
+}
+
+describe('mailShareService.regenerate (T-20a)', () => {
+	it('mints a fresh lid and sec, bumps cv by one and leaves the window and expiry verbatim (AC-LIFE-05)', async () => {
+		await seedOwners();
+		// 窗口下界与到期时刻都刻意取非默认值:seed 默认的 `window_start_email_id = 0` 会让
+		// 「被重置成 0」这种破法在断言里恰好等于「未变」,变异验证证实过这一点。
+		const share = await seedKeyless({
+			credentialsVersion: 3, windowStartEmailId: 4242, expiresAt: sqlTime(7200)
+		});
+		const before = await readShareRow(share.shareId);
+		expect(before.window_start_email_id).toBe(4242);
+
+		const result = await mailShareService.regenerate(ctx(), { shareId: share.shareId }, USER_A);
+
+		expect(result.lid).toMatch(/^[A-Za-z0-9_-]{22}$/);
+		expect(decodeBase64Url(result.lid).length).toBe(16);
+		expect(decodeBase64Url(result.sec).length).toBe(32);
+		expect(result.lid).not.toBe(before.lid);
+		expect(result.shareUrl).toBe(`https://mail.example.com/s/${result.lid}#${result.sec}`);
+		expect(result.shareId).toBe(share.shareId);
+
+		const after = await readShareRow(share.shareId);
+		expect(after.lid).toBe(result.lid);
+		expect(after.sec_hmac).toBe(await shareAuthService.digestShareSecret(result.sec, PEPPER));
+		expect(after.sec_hmac).not.toBe(before.sec_hmac);
+		expect(after.pepper_kid).toBe('v2');
+		expect(after.credentials_version).toBe(4);
+		// 逐字未变：换链接不是续期，也不重置可见窗口。
+		expect(preservedColumns(after)).toEqual(preservedColumns(before));
+	});
+
+	it('kills the old sec and the live visitor session on the spot, and the new sec works', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(workerCtx(), createParams(), USER_A);
+		const established = await postSession({ lid: created.lid, sec: created.sec });
+		expect(established.code).toBe(200);
+
+		const rotated = await mailShareService.regenerate(workerCtx(), { shareId: created.shareId }, USER_A);
+
+		// cv 已 +1 → 在飞会话当场断开。
+		expect((await getShareMails(established.data.sessionToken)).message).toBe('SHARE_UNAVAILABLE');
+		// 旧 lid+sec 再也换不到会话。
+		expect((await postSession({ lid: created.lid, sec: created.sec })).message).toBe('SHARE_UNAVAILABLE');
+		const reissued = await postSession({ lid: rotated.lid, sec: rotated.sec });
+		expect(reissued.code).toBe(200);
+		expect((await getShareMails(reissued.data.sessionToken)).code).toBe(200);
+	});
+
+	it('refuses an expired or a revoked row and leaves every column alone (AC-LIFE-11)', async () => {
+		await seedOwners();
+		const revoked = await seedKeyless({ status: 'REVOKED', revokedAt: sqlTime(-60) });
+		const expired = await seedKeyless({ expiresAt: '2001-01-01 00:00:00' });
+
+		for (const share of [revoked, expired]) {
+			const before = await readShareRow(share.shareId);
+			expect(await catchBiz(mailShareService.regenerate(ctx(), { shareId: share.shareId }, USER_A)))
+				.toBe('SHARE_NOT_FOUND');
+			// 「原地复活」正是这条 AC 禁的:整行一列都不许动。
+			expect(await readShareRow(share.shareId)).toEqual(before);
+		}
+	});
+
+	it('answers SHARE_NOT_FOUND for another owner, a missing row and a malformed id', async () => {
+		await seedOwners();
+		const theirs = await seedShareRow({ userId: USER_B, accountId: ACC_B });
+		await seedBindingRow({ shareId: theirs.shareId, accountId: ACC_B });
+		const before = await readShareRow(theirs.shareId);
+
+		for (const shareId of [theirs.shareId, 88881111, 0, -1, 'abc', null, undefined, true]) {
+			expect([shareId, await catchBiz(mailShareService.regenerate(ctx(), { shareId }, USER_A))])
+				.toEqual([shareId, 'SHARE_NOT_FOUND']);
+		}
+		expect(await readShareRow(theirs.shareId)).toEqual(before);
+	});
+
+	it('loses to a resetAuthKey that lands between the preread and the write (CAS)', async () => {
+		await seedOwners();
+		const share = await seedKeyed({ credentialsVersion: 3 });
+		const before = await readShareRow(share.shareId);
+
+		const stalled = ctxStallingBatch(() => mailShareService.resetAuthKey(workerCtx(), {
+			shareId: share.shareId, action: 'reset'
+		}, USER_A));
+
+		expect(await catchBiz(mailShareService.regenerate(stalled, { shareId: share.shareId }, USER_A)))
+			.toBe('SHARE_UPDATE_CONFLICT');
+		// 静默成功是这条用例真正要拦的:凭据只许被轮换一次,lid 不许被盖过去。
+		const after = await readShareRow(share.shareId);
+		expect(after.lid).toBe(before.lid);
+		expect(after.sec_hmac).toBe(before.sec_hmac);
+		expect(after.credentials_version).toBe(4);
+	});
+
+	it('lets exactly one of two concurrent regenerates win', async () => {
+		await seedOwners();
+		const share = await seedKeyless({ credentialsVersion: 3 });
+
+		const settled = await Promise.allSettled([
+			mailShareService.regenerate(workerCtx(), { shareId: share.shareId }, USER_A),
+			mailShareService.regenerate(workerCtx(), { shareId: share.shareId }, USER_A)
+		]);
+
+		const won = settled.filter((item) => item.status === 'fulfilled');
+		expect(won).toHaveLength(1);
+		expect(settled.find((item) => item.status === 'rejected').reason.message).toBe('SHARE_UPDATE_CONFLICT');
+		const after = await readShareRow(share.shareId);
+		expect(after.lid).toBe(won[0].value.lid);
+		expect(after.credentials_version).toBe(4);
+	});
+
+	it('never lets the new sec reach any table in the database or the owner projections (AC-SHARE-03)', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+		const lines = [];
+		const log = console.log;
+		console.log = (...args) => lines.push(args.map(String).join(' '));
+		let sec;
+		try {
+			sec = (await mailShareService.regenerate(ctx(), {
+				shareId: share.shareId, idempotencyKey: 't20a-leak-key'
+			}, USER_A)).sec;
+		} finally {
+			console.log = log;
+		}
+
+		expect(await databaseContains(sec)).toBeNull();
+		expect(lines.join('\n')).not.toContain(sec);
+		expect(JSON.stringify(await mailShareService.get(ctx(), { shareId: share.shareId }, USER_A))).not.toContain(sec);
+		expect(JSON.stringify(await mailShareService.list(ctx(), {}, USER_A))).not.toContain(sec);
+	});
+
+	// AC-SHARE-13：同 Owner + 同 Key + 同 shareId 在 24h 内重放同一个新 lid，且**不再**下发 sec。
+	it('replays the same new lid without the sec when the same Idempotency-Key comes back (AC-SHARE-13)', async () => {
+		await seedOwners();
+		const share = await seedKeyless({ credentialsVersion: 3 });
+
+		const first = await mailShareService.regenerate(ctx(), {
+			shareId: share.shareId, idempotencyKey: 't20a-key'
+		}, USER_A);
+		const replay = await mailShareService.regenerate(ctx(), {
+			shareId: share.shareId, idempotencyKey: 't20a-key'
+		}, USER_A);
+
+		expect(replay.lid).toBe(first.lid);
+		expect(replay.idempotentReplay).toBe(true);
+		expect('sec' in replay).toBe(false);
+		expect('shareUrl' in replay).toBe(false);
+		// 重放不得再轮换一次凭据 —— 那正是幂等要挡的「重复操作」。
+		const after = await readShareRow(share.shareId);
+		expect(after.credentials_version).toBe(4);
+		expect(after.lid).toBe(first.lid);
+	});
+
+	it('answers SHARE_IDEMPOTENCY_CONFLICT when the same key comes back for another share (AC-SHARE-14)', async () => {
+		await seedOwners();
+		const first = await seedKeyless();
+		const second = await seedKeyless();
+		await mailShareService.regenerate(ctx(), { shareId: first.shareId, idempotencyKey: 't20a-dup' }, USER_A);
+		const before = await readShareRow(second.shareId);
+
+		expect(await catchBiz(mailShareService.regenerate(ctx(), {
+			shareId: second.shareId, idempotencyKey: 't20a-dup'
+		}, USER_A))).toBe('SHARE_IDEMPOTENCY_CONFLICT');
+		expect(await readShareRow(second.shareId)).toEqual(before);
+	});
+
+	it('keeps the create and the regenerate idempotency namespaces apart', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams({ idempotencyKey: 't20a-shared' }), USER_A);
+
+		// 同一把 Key 用在 regenerate 上不是冲突：`operation` 是唯一键的一部分。
+		const rotated = await mailShareService.regenerate(ctx(), {
+			shareId: created.shareId, idempotencyKey: 't20a-shared'
+		}, USER_A);
+		expect(rotated.lid).not.toBe(created.lid);
+
+		const replayedCreate = await mailShareService.create(ctx(), createParams({ idempotencyKey: 't20a-shared' }), USER_A);
+		expect(replayedCreate.idempotentReplay).toBe(true);
+		expect(replayedCreate.shareId).toBe(created.shareId);
+	});
+
+	it('writes the rotation in one guarded UPDATE that touches neither expires_at nor the window', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+		const probe = sqlProbe();
+
+		await mailShareService.regenerate({ env: shareEnv({ db: probe.db }) }, { shareId: share.shareId }, USER_A);
+
+		const writes = probe.seen.filter((sql) => /UPDATE\s+mail_share/i.test(sql) && /sec_hmac/i.test(sql));
+		expect(writes).toHaveLength(1);
+		const [assignments, predicates] = writes[0].split(/\bWHERE\b/i);
+		expect(assignments).toMatch(/credentials_version\s*=\s*credentials_version\s*\+\s*1/i);
+		expect(assignments).not.toMatch(/expires_at\s*=/i);
+		expect(assignments).not.toMatch(/window_start_email_id\s*=/i);
+		// CAS 必须在 WHERE 里：预读只挑错误码，谓词才是并发下的防线。
+		expect(predicates).toMatch(/credentials_version\s*=\s*\?/i);
+		expect(predicates).toMatch(/expires_at\s*=\s*\?/i);
+	});
+});
+
+describe('owner API surface for regenerate (T-20a)', () => {
+	it('serves the rotation over HTTP with no-store and a single plaintext', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const share = await seedKeyless();
+		const before = await readShareRow(share.shareId);
+
+		const response = await SELF.fetch('http://example.com/api/mailShare/regenerate', {
+			method: 'POST',
+			headers: {
+				Authorization: jwt, 'content-type': 'application/json',
+				'accept-language': 'en', 'Idempotency-Key': 't20a-http'
+			},
+			body: JSON.stringify({ shareId: share.shareId })
+		});
+		const rotated = await response.json();
+
+		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(rotated.code).toBe(200);
+		expect(rotated.data.lid).toMatch(/^[A-Za-z0-9_-]{22}$/);
+		expect(rotated.data.sec).toEqual(expect.any(String));
+
+		// 同一把头再来一次:重放同一个 lid，不再下发 sec。
+		const again = await ownerApi('POST', '/mailShare/regenerate', {
+			jwt, body: { shareId: share.shareId }
+		});
+		expect(again.json.code).toBe(200);
+		const after = await readShareRow(share.shareId);
+		expect(after.expires_at).toBe(before.expires_at);
+		expect(after.window_start_email_id).toBe(before.window_start_email_id);
+	});
+
+	it('refuses an anonymous caller before any column moves', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const share = await seedKeyless();
+		// 先证明路由真的在:否则「匿名被拒」在端点不存在时也会假绿。
+		const owned = await ownerApi('POST', '/mailShare/regenerate', { jwt, body: { shareId: share.shareId } });
+		expect(owned.json.code).toBe(200);
+		const before = await readShareRow(share.shareId);
+
+		const response = await SELF.fetch('http://example.com/api/mailShare/regenerate', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ shareId: share.shareId })
+		});
+
+		expect((await response.json()).code).not.toBe(200);
+		expect(await readShareRow(share.shareId)).toEqual(before);
+	});
+});
+
+// ── T-20b2a · sec 密文持久化接线（ADR-share-credential-recoverability 轨一）───────
+// 铸造点已经同时持有明文 `sec` 与新 `lid`，这一包把密文与它的 `kek_kid` 写进**同一条**
+// INSERT / UPDATE。两条断言线各自不可省：
+// ① 密文真的能解回同一个 sec —— 否则「写进去了」只是多了两列噪声；
+// ② KEK 缺失时**零行落库** —— 这是 fail-closed 的全部意义。写了再回滚不算，
+//    D1 没有 BEGIN，batch 一提交就没有回头路，而这类行的病征要等 Owner 几天后
+//    点开详情才暴露。
+// AAD 绑 `lid` 而不是 `share_id`：`share_id` 在 create 的 INSERT 返回之前根本不存在，
+// 绑它就只能拆成「先插行、再补密文」两次写入，正是本包要消灭的中间态。`lid` 与 `sec`
+// 恒由同一次铸造产生、同一条语句落库（create 与 regenerate 是仅有的两个写入口），
+// 所以它同样唯一、同样能让「密文被搬到另一行」验签失败，并且额外让「轮换后残留的旧密文」
+// 也解不开 —— 那正好该响，而不该悄悄交回一个已经失效的 sec。
+
+const CURRENT_KEK_KID = env.SHARE_SEC_KEK_KID;
+
+function noKekCtx(overrides = {}) {
+	return ctx({ SHARE_SEC_KEK: undefined, SHARE_SEC_KEK_PREV: undefined, ...overrides });
+}
+
+async function openSecCipher(row) {
+	return decryptShareSec(shareEnv(), { shareId: row.lid, envelope: row.sec_cipher });
+}
+
+describe('sec ciphertext persistence (T-20b2a)', () => {
+	it('create writes a decryptable envelope plus the current kek_kid, and no plaintext anywhere', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+
+		const row = await readShareRow(created.shareId);
+		expect(row.sec_cipher).toEqual(expect.any(String));
+		expect(row.sec_cipher).not.toContain(created.sec);
+		expect(row.kek_kid).toBe(CURRENT_KEK_KID);
+		// 全库扫描复用 T-20a 的守卫：明文 sec 不许出现在任何表的任何列里。
+		expect(await databaseContains(created.sec)).toBeNull();
+
+		expect(await openSecCipher(row)).toEqual({
+			ok: true, plaintext: created.sec, kekKid: CURRENT_KEK_KID
+		});
+	});
+
+	it('regenerate replaces the envelope so it decrypts to the new sec, never the old one', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const before = await readShareRow(created.shareId);
+
+		const rotated = await mailShareService.regenerate(ctx(), { shareId: created.shareId }, USER_A);
+
+		const after = await readShareRow(created.shareId);
+		expect(after.sec_cipher).toEqual(expect.any(String));
+		expect(after.sec_cipher).not.toBe(before.sec_cipher);
+		expect(after.kek_kid).toBe(CURRENT_KEK_KID);
+		expect(await openSecCipher(after)).toEqual({
+			ok: true, plaintext: rotated.sec, kekKid: CURRENT_KEK_KID
+		});
+		expect(await databaseContains(rotated.sec)).toBeNull();
+		expect(await databaseContains(created.sec)).toBeNull();
+	});
+
+	it('refuses to create at all when no KEK is configured, leaving zero rows behind', async () => {
+		await seedOwners();
+		const errors = [];
+		const error = console.error;
+		console.error = (...args) => errors.push(args.map(String).join(' '));
+		try {
+			await expect(mailShareService.create(noKekCtx(), createParams({
+				idempotencyKey: 't20b2a-nokek'
+			}), USER_A)).rejects.toThrow(/kek/i);
+		} finally {
+			console.error = error;
+		}
+
+		// 「拒绝」的判据是行数，不是异常本身：先写后回滚在 D1 上不存在，
+		// 一条半成品行就是一条永远取不回来的分享。
+		expect(await countOwnerRows(USER_A)).toEqual({ shares: 0, bindings: 0 });
+		const idem = await env.db.prepare('SELECT COUNT(*) AS n FROM share_idempotency WHERE user_id = ?')
+			.bind(USER_A).first();
+		expect(idem.n).toBe(0);
+		// 告警要真的发出去，否则运维只看到一个 500。
+		expect(errors.join('\n')).toMatch(/kek/i);
+	});
+
+	it('refuses to regenerate when no KEK is configured and leaves every column untouched', async () => {
+		await seedOwners();
+		const share = await seedKeyless();
+		const before = await readShareRow(share.shareId);
+
+		const error = console.error;
+		console.error = () => {};
+		try {
+			await expect(mailShareService.regenerate(noKekCtx(), {
+				shareId: share.shareId, idempotencyKey: 't20b2a-nokek-regen'
+			}, USER_A)).rejects.toThrow(/kek/i);
+		} finally {
+			console.error = error;
+		}
+
+		expect(await readShareRow(share.shareId)).toEqual(before);
+	});
+
+	// 这条钉的是**顺序**,不只是「最终被拒」。铸造点自己也会在 KEK 缺失时抛,所以
+	// 「零行落库」在前置探测被删掉后依然成立 —— 变异验证当场证实了这一点,它单独立不住。
+	// 幂等重放是那条唯一能把两者分开的缝:探测在重放之前,整条写入面(含重放)一起拒;
+	// 探测挪到铸造点里,重放就会绕过它,把一次部署事故藏进一条看着正常的 200 响应。
+	it('refuses even an idempotent replay while the KEK is missing, on both write paths', async () => {
+		await seedOwners();
+		const error = console.error;
+		console.error = () => {};
+		try {
+			const created = await mailShareService.create(ctx(), createParams({
+				idempotencyKey: 't20b2a-order-create'
+			}), USER_A);
+			// 同一把 Key 在 KEK 健在时确实会重放成功,否则下面那条断言测的是别的东西。
+			expect((await mailShareService.create(ctx(), createParams({
+				idempotencyKey: 't20b2a-order-create'
+			}), USER_A)).idempotentReplay).toBe(true);
+			await expect(mailShareService.create(noKekCtx(), createParams({
+				idempotencyKey: 't20b2a-order-create'
+			}), USER_A)).rejects.toThrow(/kek/i);
+
+			const rotated = await mailShareService.regenerate(ctx(), {
+				shareId: created.shareId, idempotencyKey: 't20b2a-order-regen'
+			}, USER_A);
+			expect(rotated.lid).not.toBe(created.lid);
+			expect((await mailShareService.regenerate(ctx(), {
+				shareId: created.shareId, idempotencyKey: 't20b2a-order-regen'
+			}, USER_A)).idempotentReplay).toBe(true);
+			await expect(mailShareService.regenerate(noKekCtx(), {
+				shareId: created.shareId, idempotencyKey: 't20b2a-order-regen'
+			}, USER_A)).rejects.toThrow(/kek/i);
+		} finally {
+			console.error = error;
+		}
+	});
+
+	it('keeps the AuthKey unrecoverable: hash and kid only, never an envelope', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(v2ctx(), createParams({ authKeyEnabled: true }), USER_A);
+		const row = await readShareRow(created.shareId);
+
+		expect(created.authKey).toEqual(expect.any(String));
+		expect(row.auth_key_hash).toEqual(expect.any(String));
+		// 全库扫描：AuthKey 明文不在库里，而且**没有**任何一列能把它解回来。
+		expect(await databaseContains(created.authKey)).toBeNull();
+		expect(await openSecCipher(row)).toEqual({
+			ok: true, plaintext: created.sec, kekKid: CURRENT_KEK_KID
+		});
+		expect((await openSecCipher(row)).plaintext).not.toBe(created.authKey);
+		// 列清单里只多了 sec 这一路的两列，AuthKey 没有对应物。
+		expect(Object.keys(row)).not.toContain('auth_key_cipher');
+	});
+
+	it('never lets the credential columns reach the owner projections', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const row = await readShareRow(created.shareId);
+
+		const detail = JSON.stringify(await mailShareService.get(ctx(), { shareId: created.shareId }, USER_A));
+		const list = JSON.stringify(await mailShareService.list(ctx(), {}, USER_A));
+		for (const payload of [detail, list]) {
+			expect(payload).not.toContain(row.sec_cipher);
+			expect(payload).not.toContain('secCipher');
+			expect(payload).not.toContain('kekKid');
+			expect(payload).not.toContain(row.sec_hmac);
+		}
+	});
+
+	it('writes the ciphertext inside the very statement that writes the row', async () => {
+		await seedOwners();
+		const probe = sqlProbe();
+		const probeCtx = { env: shareEnv({ db: probe.db }) };
+
+		const created = await mailShareService.create(probeCtx, createParams(), USER_A);
+		const inserts = probe.seen.filter((sql) => /INSERT\s+INTO\s+mail_share\b/i.test(sql));
+		expect(inserts).toHaveLength(1);
+		expect(inserts[0]).toMatch(/sec_cipher/i);
+		expect(inserts[0]).toMatch(/kek_kid/i);
+		// 补写式的第二条语句正是本包禁止的中间态。
+		expect(probe.seen.filter((sql) => /UPDATE\s+mail_share[\s\S]*sec_cipher\s*=/i.test(sql))).toHaveLength(0);
+
+		probe.seen.length = 0;
+		await mailShareService.regenerate(probeCtx, { shareId: created.shareId }, USER_A);
+		const rotations = probe.seen.filter((sql) => /UPDATE\s+mail_share/i.test(sql) && /sec_hmac/i.test(sql));
+		expect(rotations).toHaveLength(1);
+		expect(rotations[0]).toMatch(/sec_cipher\s*=\s*\?/i);
+		expect(rotations[0]).toMatch(/kek_kid\s*=\s*\?/i);
+	});
+});
+
+// ── T-20b2b · 查看链接（`POST /mailShare/revealSec`）────────────────────────────
+// 轨一的读取端。这一包的全部风险都在**失败分类**上：解密模块已经把五种成因分开返回了，
+// 端点只要把任意两种折成一句「解不开」，一次部署事故（KEK 没配）或一次数据损坏
+// （密文被改写）就会被管理员当成「这条老分享而已」放过去，而这恰恰是 ADR 唯一
+// 排除的结局。所以下面每一条失败都单独立一个断言，并且额外有一条「四个码互不相等」
+// 的反折叠断言 —— 单看每条用例，把两类映射到同一个码时它们仍会各自通过。
+
+const REVEAL_CODES = {
+	absent: 'SHARE_SEC_ABSENT',
+	kekMissing: 'SHARE_SEC_UNAVAILABLE',
+	retired: 'SHARE_SEC_KEY_RETIRED',
+	corrupted: 'SHARE_SEC_CORRUPTED'
+};
+
+async function captureLogs(run) {
+	const lines = [];
+	const log = console.log;
+	console.log = (...args) => lines.push(args.map(String).join(' '));
+	try {
+		return { value: await run(), lines };
+	} finally {
+		console.log = log;
+	}
+}
+
+function revealEvents(lines) {
+	return lines
+		.map((line) => {
+			try {
+				return JSON.parse(line);
+			} catch {
+				return null;
+			}
+		})
+		.filter((entry) => entry && entry.event === SHARE_EVENT.SEC_REVEAL);
+}
+
+async function writeSecCipher(shareId, cipher) {
+	await env.db.prepare('UPDATE mail_share SET sec_cipher = ? WHERE share_id = ?').bind(cipher, shareId).run();
+}
+
+function retireEnvelopeKid(envelope) {
+	const parts = String(envelope).split(':');
+	parts[1] = 't20b2b-retired-kid';
+	return parts.join(':');
+}
+
+describe('mailShareService.revealSec (T-20b2b)', () => {
+	it('hands the owner back the very URL the create response issued', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+
+		const revealed = await mailShareService.revealSec(ctx(), { shareId: created.shareId }, USER_A);
+
+		// 逐字相等,不是「形状对」:拼错一个字符,管理员复制出去的就是一条坏链接。
+		expect(revealed.shareUrl).toBe(created.shareUrl);
+		expect(revealed.shareId).toBe(created.shareId);
+		expect(revealed.lid).toBe(created.lid);
+	});
+
+	it('refuses another owner exactly as it refuses a row that never existed', async () => {
+		await seedOwners();
+		const theirs = await mailShareService.create(ctx(), createParams({ accountId: ACC_B }), USER_B);
+
+		const foreign = await catchBiz(mailShareService.revealSec(ctx(), { shareId: theirs.shareId }, USER_A));
+		const missing = await catchBiz(mailShareService.revealSec(ctx(), { shareId: 88881111 }, USER_A));
+
+		expect(foreign).toBe('SHARE_NOT_FOUND');
+		// 两者必须逐字相同,否则错误码本身就是一台存在性探针。
+		expect(foreign).toBe(missing);
+		for (const shareId of [0, -1, 'abc', null, undefined, true]) {
+			expect([shareId, await catchBiz(mailShareService.revealSec(ctx(), { shareId }, USER_A))])
+				.toEqual([shareId, 'SHARE_NOT_FOUND']);
+		}
+	});
+
+	it('tells a pre-feature row apart as a benign, non-alerting outcome', async () => {
+		await seedOwners();
+		// seedShareRow 不写 sec_cipher —— 正是上线前那批行的形状。
+		const share = await seedKeyless();
+
+		const { value, lines } = await captureLogs(
+			() => catchBiz(mailShareService.revealSec(ctx(), { shareId: share.shareId }, USER_A))
+		);
+
+		expect(value).toBe(REVEAL_CODES.absent);
+		expect(revealEvents(lines)).toEqual([expect.objectContaining({
+			shareId: share.shareId, userId: USER_A, outcome: 'absent', alert: false
+		})]);
+	});
+
+	it('reports a missing KEK as a service fault with an alert, not as a benign degradation', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+
+		const { value, lines } = await captureLogs(
+			() => catchBiz(mailShareService.revealSec(noKekCtx(), { shareId: created.shareId }, USER_A))
+		);
+
+		// 部署事故:既不是 500 崩溃(BizError 才走得到这里),也不是「存量不可恢复」。
+		expect(value).toBe(REVEAL_CODES.kekMissing);
+		expect(value).not.toBe(REVEAL_CODES.absent);
+		expect(revealEvents(lines)).toEqual([expect.objectContaining({
+			shareId: created.shareId, outcome: 'kek_missing', alert: true
+		})]);
+	});
+
+	it('reports a kid that has left the ring as recoverable-by-regenerate, without alerting', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const row = await readShareRow(created.shareId);
+		await writeSecCipher(created.shareId, retireEnvelopeKid(row.sec_cipher));
+
+		const { value, lines } = await captureLogs(
+			() => catchBiz(mailShareService.revealSec(ctx(), { shareId: created.shareId }, USER_A))
+		);
+
+		expect(value).toBe(REVEAL_CODES.retired);
+		expect(revealEvents(lines)).toEqual([expect.objectContaining({
+			outcome: 'unknown_kid', alert: false, kekKid: 't20b2b-retired-kid'
+		})]);
+	});
+
+	it('treats an envelope lifted off another row as a data-integrity incident', async () => {
+		await seedOwners();
+		const mine = await mailShareService.create(ctx(), createParams({ name: 'mine' }), USER_A);
+		const other = await mailShareService.create(ctx(), createParams({ name: 'other' }), USER_A);
+		// AAD 绑 lid,所以搬到另一行的密文过不了 tag 校验 —— 这正是绑定要抓的事。
+		await writeSecCipher(mine.shareId, (await readShareRow(other.shareId)).sec_cipher);
+
+		const { value, lines } = await captureLogs(
+			() => catchBiz(mailShareService.revealSec(ctx(), { shareId: mine.shareId }, USER_A))
+		);
+
+		expect(value).toBe(REVEAL_CODES.corrupted);
+		expect(revealEvents(lines)).toEqual([expect.objectContaining({
+			outcome: 'auth_failed', alert: true
+		})]);
+	});
+
+	it('keeps a malformed envelope apart from a tampered one in the event, though the admin sees one message', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		await writeSecCipher(created.shareId, 'not-an-envelope-at-all');
+
+		const { value, lines } = await captureLogs(
+			() => catchBiz(mailShareService.revealSec(ctx(), { shareId: created.shareId }, USER_A))
+		);
+
+		// 对管理员同 AUTH_FAILED(都是「凭据数据异常」),但成因在写入侧,事件里必须分得开。
+		expect(value).toBe(REVEAL_CODES.corrupted);
+		expect(revealEvents(lines)).toEqual([expect.objectContaining({
+			outcome: 'malformed', alert: true
+		})]);
+	});
+
+	// 反折叠闸门:上面五条各自看,把任意两类映射到同一个码时它们仍然全绿。
+	it('never folds the five outcomes into one undistinguishable answer', async () => {
+		await seedOwners();
+		const legacy = await seedKeyless();
+		const live = await mailShareService.create(ctx(), createParams(), USER_A);
+		const retired = await mailShareService.create(ctx(), createParams({ name: 'retired' }), USER_A);
+		await writeSecCipher(retired.shareId, retireEnvelopeKid((await readShareRow(retired.shareId)).sec_cipher));
+		const broken = await mailShareService.create(ctx(), createParams({ name: 'broken' }), USER_A);
+		await writeSecCipher(broken.shareId, 'not-an-envelope-at-all');
+
+		const codes = [
+			await catchBiz(mailShareService.revealSec(ctx(), { shareId: legacy.shareId }, USER_A)),
+			await catchBiz(mailShareService.revealSec(noKekCtx(), { shareId: live.shareId }, USER_A)),
+			await catchBiz(mailShareService.revealSec(ctx(), { shareId: retired.shareId }, USER_A)),
+			await catchBiz(mailShareService.revealSec(ctx(), { shareId: broken.shareId }, USER_A))
+		];
+
+		expect(codes).toEqual([
+			REVEAL_CODES.absent, REVEAL_CODES.kekMissing, REVEAL_CODES.retired, REVEAL_CODES.corrupted
+		]);
+		expect(new Set(codes).size).toBe(4);
+	});
+
+	it('audits every call without ever writing the plaintext or the ciphertext', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const row = await readShareRow(created.shareId);
+
+		const { value, lines } = await captureLogs(
+			() => mailShareService.revealSec(ctx(), { shareId: created.shareId }, USER_A)
+		);
+		const joined = lines.join('\n');
+
+		expect(revealEvents(lines)).toEqual([expect.objectContaining({
+			shareId: created.shareId, userId: USER_A, outcome: 'ok', alert: false
+		})]);
+		expect(joined).not.toContain(created.sec);
+		expect(joined).not.toContain(value.shareUrl);
+		expect(joined).not.toContain(row.sec_cipher);
+		// 取回明文不得让它落库:全库扫描复用 T-20a 的守卫。
+		expect(await databaseContains(created.sec)).toBeNull();
+	});
+
+	it('audits a refused call too, without telling the caller anything extra', async () => {
+		await seedOwners();
+		const theirs = await mailShareService.create(ctx(), createParams({ accountId: ACC_B }), USER_B);
+
+		const { value, lines } = await captureLogs(
+			() => catchBiz(mailShareService.revealSec(ctx(), { shareId: theirs.shareId }, USER_A))
+		);
+
+		expect(value).toBe('SHARE_NOT_FOUND');
+		expect(revealEvents(lines)).toEqual([expect.objectContaining({
+			shareId: theirs.shareId, userId: USER_A, outcome: 'denied', alert: false
+		})]);
+	});
+
+	// 裁决:查看不等于使用。过期 / 撤销的行,其链接在访客侧恒被拒(`consumeSessionQuota`
+	// 的 ACTIVE + 未过期谓词),而且没有任何路径能让它复活 —— regenerate 与 update 都只
+	// 认 ACTIVE 且未过期的行。所以交回这条链接不给出任何可用能力,却是 AC-ADMIN-09
+	// 「非 ACTIVE 行仍可读可审计」的一部分:管理员正是在这些行上排查「当初发的是哪条」。
+	it('still reveals an expired or a revoked share, because that link can no longer be used', async () => {
+		await seedOwners();
+		const expired = await mailShareService.create(ctx(), createParams({ name: 'exp' }), USER_A);
+		const revoked = await mailShareService.create(ctx(), createParams({ name: 'rev' }), USER_A);
+		await env.db.prepare("UPDATE mail_share SET expires_at = '2001-01-01 00:00:00' WHERE share_id = ?")
+			.bind(expired.shareId).run();
+		await mailShareService.revoke(ctx(), { shareId: revoked.shareId }, USER_A);
+
+		expect((await mailShareService.revealSec(ctx(), { shareId: expired.shareId }, USER_A)).shareUrl)
+			.toBe(expired.shareUrl);
+		expect((await mailShareService.revealSec(ctx(), { shareId: revoked.shareId }, USER_A)).shareUrl)
+			.toBe(revoked.shareUrl);
+	});
+
+	it('hands back the rotated link after a regenerate, never the retired one', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const rotated = await mailShareService.regenerate(ctx(), { shareId: created.shareId }, USER_A);
+
+		const revealed = await mailShareService.revealSec(ctx(), { shareId: created.shareId }, USER_A);
+
+		expect(revealed.shareUrl).toBe(rotated.shareUrl);
+		expect(revealed.shareUrl).not.toBe(created.shareUrl);
+		expect(revealed.shareUrl).not.toContain(created.sec);
+	});
+
+	it('reads the row exactly once and writes nothing', async () => {
+		await seedOwners();
+		const created = await mailShareService.create(ctx(), createParams(), USER_A);
+		const before = await readShareRow(created.shareId);
+		const probe = sqlProbe();
+
+		await mailShareService.revealSec({ env: shareEnv({ db: probe.db }) }, { shareId: created.shareId }, USER_A);
+
+		expect(probe.seen.filter((sql) => /\b(INSERT|UPDATE|DELETE)\b/i.test(sql))).toEqual([]);
+		expect(await readShareRow(created.shareId)).toEqual(before);
+	});
+});
+
+describe('owner API surface for revealSec (T-20b2b)', () => {
+	afterEach(() => {
+		delete env.SHARE_REVEAL_RATE_LIMITER;
+	});
+
+	// 建与取回必须走同一份 env:`SHARE_PUBLIC_ORIGIN` 在 Worker 侧没配(回落请求 origin),
+	// 在测试 ctx 里配了 —— 用服务层建、用 HTTP 取回,两条链接会因为 origin 不同而不等,
+	// 而那是测试自己造出来的差异,不是产品的。
+	async function httpCreate(jwt) {
+		const created = await ownerApi('POST', '/mailShare/create', {
+			jwt, body: { accountId: ACC_A, durationSeconds: 3600, name: 't20b2b', remark: '' }
+		});
+		expect(created.json.code).toBe(200);
+		return created.json.data;
+	}
+
+	it('serves the link over HTTP with no-store', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const created = await httpCreate(jwt);
+
+		const response = await SELF.fetch('http://example.com/api/mailShare/revealSec', {
+			method: 'POST',
+			headers: { Authorization: jwt, 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ shareId: created.shareId })
+		});
+		const body = await response.json();
+
+		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(body.code).toBe(200);
+		expect(body.data.shareUrl).toBe(created.shareUrl);
+	});
+
+	it('refuses a share that belongs to another owner over HTTP', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const theirs = await mailShareService.create(ctx(), createParams({ accountId: ACC_B }), USER_B);
+
+		const denied = await ownerApi('POST', '/mailShare/revealSec', {
+			jwt, body: { shareId: theirs.shareId }
+		});
+
+		expect(denied.json.code).not.toBe(200);
+		expect(denied.json.message).toBe('SHARE_NOT_FOUND');
+		expect(JSON.stringify(denied.json)).not.toContain(theirs.sec);
+	});
+
+	it('answers 429 with Retry-After when the owner limiter denies, without revealing anything', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const created = await httpCreate(jwt);
+		const keys = [];
+		env.SHARE_REVEAL_RATE_LIMITER = {
+			async limit({ key }) {
+				keys.push(key);
+				return { success: false };
+			}
+		};
+
+		const response = await worker.fetch(new Request('http://example.com/api/mailShare/revealSec', {
+			method: 'POST',
+			headers: { Authorization: jwt, 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ shareId: created.shareId })
+		}), env, {});
+		const body = await response.json();
+
+		expect(response.status).toBe(429);
+		expect(response.headers.get('Retry-After')).toBe('60');
+		expect(body.message).toBe('RATE_LIMITED');
+		expect(JSON.stringify(body)).not.toContain(created.sec);
+		// Owner 是已鉴权主体,按 userId 计而不是按 IP —— 换个出口 IP 不该换来一份新配额。
+		expect(keys).toEqual([String(USER_A)]);
+	});
+
+	it('lets the call through when the limiter allows', async () => {
+		await seedOwners();
+		const jwt = await ownerJwt();
+		const created = await httpCreate(jwt);
+		env.SHARE_REVEAL_RATE_LIMITER = { async limit() { return { success: true }; } };
+
+		const response = await worker.fetch(new Request('http://example.com/api/mailShare/revealSec', {
+			method: 'POST',
+			headers: { Authorization: jwt, 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ shareId: created.shareId })
+		}), env, {});
+
+		expect(response.status).toBe(200);
+		expect((await response.json()).data.shareUrl).toBe(created.shareUrl);
+	});
+
+	it('declares the limiter binding in the production wrangler.toml', () => {
+		// 绑定缺失时中间件 fail-open(share-rate-limit.js:56)——限流「装了但没生效」
+		// 只会在 toml 里看得出来,运行时是静默的。
+		expect(wranglerToml).toContain('SHARE_REVEAL_RATE_LIMITER');
 	});
 });

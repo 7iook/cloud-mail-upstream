@@ -32,8 +32,32 @@ const dbInit = {
 		await this.v3_0DB(c);
 		await this.v3_1DB(c);
 		await this.v3_2DB(c);
+		await this.v3_3DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+	// 轨一(ADR-share-credential-recoverability):`sec` 的可逆信封与它的 KEK kid。
+	// 沿用 v3_2DB 的 expand-only 幂等模式 —— 逐条 ALTER,重复跑时靠 catch 吞掉
+	// 「duplicate column name」。本项目的迁移由人工访问 `GET /api/init/{jwt_secret}` 触发,
+	// 每次升级都会再跑一遍,所以幂等不是保险而是常态路径。
+	// 两列都可空且无 DEFAULT:存量行本就没有密文,读取侧按 ABSENT 处置;NOT NULL 反而会让
+	// ALTER 在有数据的表上直接失败。
+	async v3_3DB(c) {
+
+		const ADD_COLUMN_SQL_LIST = [
+			`ALTER TABLE mail_share ADD COLUMN sec_cipher TEXT;`,
+			`ALTER TABLE mail_share ADD COLUMN kek_kid TEXT;`
+		];
+
+		const columnPromises = ADD_COLUMN_SQL_LIST.map(async (sql) => {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		});
+		await Promise.all(columnPromises);
 	},
 
 	async v3_2DB(c) {

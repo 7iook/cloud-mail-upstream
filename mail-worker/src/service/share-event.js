@@ -9,6 +9,9 @@ export const SHARE_EVENT = {
 	SESSION_DENIED_CV: 'share.session.denied_cv',
 	BINDING_CASCADE: 'share.binding.cascade',
 	MIGRATE_INVALID_ROW: 'share.migrate.invalid_row',
+	// 凭据暴露面的审计线。信封里的 `alert` 是告警规则的钩子:`outcome` 有五种失败成因,
+	// 其中只有两种是事故 —— 让规则自己去枚举 outcome,加一种成因就漏一类告警。
+	SEC_REVEAL: 'share.sec.reveal',
 	SYSTEM_ERROR: 'share.system.error'
 };
 

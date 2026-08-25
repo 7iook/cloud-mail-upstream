@@ -77,7 +77,9 @@ const requirePermsExact = [
 	{ method: 'DELETE', path: '/mailShare/delete' },
 	{ method: 'PUT', path: '/mailShare/bindings' },
 	{ method: 'DELETE', path: '/mailShare/revoke' },
-	{ method: 'POST', path: '/mailShare/resetAuthKey' }
+	{ method: 'POST', path: '/mailShare/resetAuthKey' },
+	{ method: 'POST', path: '/mailShare/regenerate' },
+	{ method: 'POST', path: '/mailShare/revealSec' }
 ];
 
 const premKey = {
@@ -117,7 +119,9 @@ const premKey = {
 		'/mailShare/delete',
 		'/mailShare/bindings',
 		'/mailShare/revoke',
-		'/mailShare/resetAuthKey'
+		'/mailShare/resetAuthKey',
+		'/mailShare/regenerate',
+		'/mailShare/revealSec'
 	]
 };
 

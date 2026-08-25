@@ -28,7 +28,13 @@ export const mailShare = sqliteTable('mail_share', {
 	authKeyEnabled: integer('auth_key_enabled').default(0).notNull(),
 	authKeyHash: text('auth_key_hash'),
 	authKeyKid: text('auth_key_kid'),
-	credentialsVersion: integer('credentials_version').default(0).notNull()
+	credentialsVersion: integer('credentials_version').default(0).notNull(),
+	// 轨一(ADR-share-credential-recoverability):`sec` 的可逆信封与铸造它的 KEK kid。
+	// 命名对齐 `sec_hmac` / `pepper_kid` 那一对 —— 同一个 `sec`,两种保存形态,各自带自己的
+	// kid。两列可空:本次部署之前建出来的存量行没有密文,读取侧按 ABSENT 处置,那是正常态。
+	// AuthKey 刻意没有对应物,`auth_key_hash` 保持不可恢复。
+	secCipher: text('sec_cipher'),
+	kekKid: text('kek_kid')
 });
 
 export const shareIdempotency = sqliteTable('share_idempotency', {
