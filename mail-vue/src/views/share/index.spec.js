@@ -445,6 +445,33 @@ describe('share view visitor mailbox', () => {
         expect(wrapper.get('[data-share-mail-list]').text()).toContain('After recover')
     })
 
+    // T-22b3 · 同一个访客续期不该再扣一个访问名额。后端靠旧 token 认出「还是这个人」,
+    // 所以重建时必须把刚过期的那个 token 递下去;首次打开没有旧 token,请求形状不变。
+    it('hands the expiring token to the rebuild so a renewal is not counted as a second visitor', async () => {
+        vi.useFakeTimers()
+        createShareSession
+            .mockResolvedValueOnce({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+            .mockResolvedValueOnce({ sessionToken: 'sess-b', mailbox: 'otp@example.com' })
+        listShareMails
+            .mockResolvedValueOnce({ list: [], nextCursor: null })
+            .mockRejectedValueOnce({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' })
+            .mockResolvedValue({ list: [], nextCursor: null })
+
+        await mountShare('lid-a', 'sec-keep')
+
+        const [, , firstOptions] = createShareSession.mock.calls[0]
+        expect(firstOptions.previousSessionToken).toBeFalsy()
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        expect(createShareSession).toHaveBeenCalledTimes(2)
+        expect(createShareSession).toHaveBeenLastCalledWith('lid-a', 'sec-keep', expect.objectContaining({
+            previousSessionToken: 'sess-a'
+        }))
+        expect(readShareSession('lid-a')).toBe('sess-b')
+    })
+
     it('shows timed-out, not unavailable, when a stored token dies after reload with no in-memory secret (AC-VISIT-12, AC-VISIT-14)', async () => {
         writeShareSession('lid-a', 'sess-dead')
         listShareMails.mockRejectedValue({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' })

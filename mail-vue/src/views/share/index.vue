@@ -634,15 +634,15 @@ function isLostResponse(err) {
 // The only POST /share/session in this page. The key is written before the request goes
 // out, so a wrong AuthKey, a retry and a lost response all replay under the same one
 // (AC-SESS-10). One replay, not a backoff ladder: backoff belongs to the poller.
-async function postSession(lid, sec, authKey) {
+async function postSession(lid, sec, authKey, previousSessionToken = '') {
     const idempotencyKey = ensureEstablishKey(lid)
     try {
-        return await createShareSession(lid, sec, { authKey, idempotencyKey })
+        return await createShareSession(lid, sec, { authKey, idempotencyKey, previousSessionToken })
     } catch (err) {
         if (!isLostResponse(err)) {
             throw err
         }
-        return await createShareSession(lid, sec, { authKey, idempotencyKey })
+        return await createShareSession(lid, sec, { authKey, idempotencyKey, previousSessionToken })
     }
 }
 
@@ -695,7 +695,11 @@ async function reestablishSession() {
     if (!lid || !sec) {
         return false
     }
-    const data = await postSession(lid, sec, '')
+    // The token being replaced is still in hand here: only showDeadShare / showTimedOut /
+    // exitShare clear it, and every one of them runs after this call, never before it. It is
+    // what lets the worker recognise the same visitor and renew without spending a second
+    // access slot; a blank one would have the renewal counted as a fresh arrival.
+    const data = await postSession(lid, sec, '', sessionToken.value)
     const token = data && data.sessionToken
     if (!token) {
         return false

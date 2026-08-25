@@ -288,6 +288,38 @@ describe('share request client', () => {
         expect(readBody(captured[0]).authKey).toBe(authKey)
     })
 
+    // T-22b3 · 续期把旧 token 放进 Authorization 头,复用其它分享接口既有的那条通道。
+    // 放进 body 就等于把一次性凭据写进网关默认会记的那一半请求(AC-SEC-09)。
+    it('renews with the previous session token on the Authorization header, never in the body', async () => {
+        const previousSessionToken = 'sess-about-to-expire'
+
+        await createShareSession('lid-1', 'sec-1', { previousSessionToken, idempotencyKey: 'idem-1' })
+
+        expect(captured).toHaveLength(1)
+        expect(captured[0].url).toBe('/share/session')
+        expect(readAuth(captured[0])).toBe(`Bearer ${previousSessionToken}`)
+        expect(readBody(captured[0])).toEqual({ lid: 'lid-1', sec: 'sec-1' })
+        expect(JSON.stringify(readBody(captured[0]))).not.toContain(previousSessionToken)
+        expect(String(captured[0].url)).not.toContain(previousSessionToken)
+        expect(JSON.stringify(captured[0].params || {})).not.toContain(previousSessionToken)
+        expect(readHeaderValue(captured[0], 'Idempotency-Key')).toBe('idem-1')
+    })
+
+    it('leaves the request shape untouched on a first open and on a blank previous token', async () => {
+        await createShareSession('lid-1', 'sec-1')
+        await createShareSession('lid-1', 'sec-1', { previousSessionToken: '' })
+        await createShareSession('lid-1', 'sec-1', { previousSessionToken: null })
+        await createShareSession('lid-1', 'sec-1', { previousSessionToken: '   ' })
+
+        expect(captured).toHaveLength(4)
+        for (const config of captured) {
+            // 空值不得退化成 'Bearer ' 这种畸形头:后端会把尾随空格后的空串当成一个 token 去验。
+            expect(readAuth(config)).toBeFalsy()
+            expect(String(readAuth(config) ?? '')).not.toMatch(/^Bearer/i)
+            expect(readBody(config)).toEqual({ lid: 'lid-1', sec: 'sec-1' })
+        }
+    })
+
     it('tells SHARE_AUTH_REQUIRED apart from a dead link and a rate limit', async () => {
         expect(isShareAuthRequired({ code: 501, message: 'SHARE_AUTH_REQUIRED' })).toBe(true)
         expect(isShareAuthRequired({ code: 'SHARE_AUTH_REQUIRED' })).toBe(true)

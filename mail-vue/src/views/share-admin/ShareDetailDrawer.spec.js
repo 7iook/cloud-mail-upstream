@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { expectSameInstant } from '@/test/utc-instant.js'
@@ -69,6 +69,7 @@ vi.mock('@/composables/useCopyWithFallback.js', () => ({
     })
 }))
 
+import { tzText } from '@/utils/day.js'
 import ShareDetailDrawer from './ShareDetailDrawer.vue'
 
 const AUTH_KEY = 'Ab3dEf0123456789_-xyQ'
@@ -105,14 +106,22 @@ const stubs = {
         emits: ['update:modelValue'],
         template: '<input type="checkbox" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)" />'
     },
+    // The raw option value travels, not Number(...): the renewal select carries the 'keep' and
+    // 'custom' sentinels beside the numeric rungs, and coercing here would turn both into NaN.
+    // The account picker still works because submitAdd does its own Number() on the way out.
     'el-select': {
         props: ['modelValue', 'disabled'],
         emits: ['update:modelValue'],
-        template: '<select :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', Number($event.target.value))"><slot /></select>'
+        template: '<select :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.value)"><slot /></select>'
     },
     'el-option': {
         props: ['label', 'value'],
         template: '<option :value="value">{{ label }}</option>'
+    },
+    'el-date-picker': {
+        props: ['modelValue', 'disabled', 'type', 'valueFormat'],
+        emits: ['update:modelValue'],
+        template: '<input type="text" :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />'
     }
 }
 
@@ -576,6 +585,160 @@ describe('share detail drawer · config patch (AC-ADMIN-03 / AC-EDGE-14 / AC-LIF
     })
 })
 
+// 交付契约:管理员看到一条分享快到期，能当场把它延长，链接不变、在看的访客不掉线。
+// 抽屉里的到期时刻一律是「本机墙上时钟」，与上面三个只读字段同一口径；请求要的是 UTC 裸串。
+// sampleDetail 的两个时刻都写死在 2026-08 中旬，所以这一组把系统时间也钉住 —— 否则真实
+// 时间一过 2026-08-18，样本分享就恒在过去，「新时刻必须在未来」这条会把每条用例都判红。
+describe('share detail drawer · renewal (review-t22b P0-1)', () => {
+    const NOW = '2026-08-17T12:00:00Z'
+    // sampleDetail: createTime 2026-08-17 01:00:00Z, expiresAt 2026-08-18 01:00:00Z。
+    // 后端上限判据是「新 expires_at − create_time ≤ 90 天」，基准是创建时刻。
+    const CEILING_UTC = '2026-11-15 01:00:00'
+
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(NOW))
+        getMailShare.mockReset()
+        updateMailShare.mockReset()
+        updateMailShareBindings.mockReset()
+        resetMailShareAuthKey.mockReset()
+        accountList.mockReset()
+        confirm.mockReset()
+        message.mockReset()
+        getMailShare.mockResolvedValue(sampleDetail())
+        updateMailShare.mockImplementation(async () => sampleDetail())
+        accountList.mockResolvedValue([])
+        confirm.mockResolvedValue('confirm')
+    })
+
+    afterEach(() => {
+        vi.useRealTimers()
+    })
+
+    it('extends by a preset rung and sends the new instant as a UTC bare string (R1)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="renew-choice"]').setValue('86400')
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(updateMailShare).toHaveBeenCalledTimes(1)
+        // 24h past 2026-08-18 01:00:00Z. Sending the browser's wall clock instead would land
+        // eight hours off on this machine, and the visitor countdown reads this very column.
+        expect(saveBody()).toEqual({ shareId: 7, expiresAt: '2026-08-19 01:00:00' })
+    })
+
+    // 这条与 R1 是一对:R1 保证改了会发,这条保证没改绝不发。assertUpdatePatch 对「键存在
+    // 且非 null」敏感而非「值变了」,全量回发会让改个名字都被 SHARE_INVALID_CONFIG 拒掉。
+    it('keeps expiresAt out of the patch when the owner never touched it (R2)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="config-name"]').setValue('lobby desk')
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(saveBody()).toEqual({ shareId: 7, name: 'lobby desk' })
+        expect(saveBody()).not.toHaveProperty('expiresAt')
+    })
+
+    it('drops the renewal again when the owner picks a rung and then goes back to keep (R3)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="renew-choice"]').setValue('86400')
+        await wrapper.get('[data-test="renew-choice"]').setValue('keep')
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(updateMailShare).not.toHaveBeenCalled()
+    })
+
+    it('shows how far the share can still be extended, so the owner does not guess (R4)', async () => {
+        const wrapper = await openDrawer()
+
+        expect(wrapper.get('[data-test="renew-ceiling"]').text()).toContain(tzText(CEILING_UTC))
+    })
+
+    it('stops a renewal past the ceiling in the browser instead of posting it (R5)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="renew-choice"]').setValue('custom')
+        await wrapper.get('[data-test="renew-exact"]').setValue(tzText('2026-11-16 01:00:00'))
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(updateMailShare).not.toHaveBeenCalled()
+        const text = wrapper.get('[data-test="config-error"]').text()
+        expect(text).toBeTruthy()
+        expect(text).toContain('90')
+    })
+
+    it('stops a shortening that lands in the past: EXPIRED rows cannot be edited back (R6)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="renew-choice"]').setValue('custom')
+        await wrapper.get('[data-test="renew-exact"]').setValue(tzText('2026-08-17 00:00:00'))
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(updateMailShare).not.toHaveBeenCalled()
+        const text = wrapper.get('[data-test="config-error"]').text()
+        expect(text).toBeTruthy()
+        expect(text).not.toContain('90')
+    })
+
+    it('allows shortening to a still-future instant (R7)', async () => {
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="renew-choice"]').setValue('custom')
+        await wrapper.get('[data-test="renew-exact"]').setValue(tzText('2026-08-17 18:00:00'))
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(saveBody()).toEqual({ shareId: 7, expiresAt: '2026-08-17 18:00:00' })
+    })
+
+    // 本项目刚修过一批「点了没反应」的缺陷:部署把上限配得比前端镜像更低时,浏览器放行、
+    // 服务端拒绝,这条码必须上屏,而不是只落进 console。
+    it('puts a server-side duration refusal on screen (R8)', async () => {
+        updateMailShare.mockRejectedValue({ code: 500, message: 'SHARE_DURATION_EXCEEDED' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="renew-choice"]').setValue('86400')
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="config-error"]').text()).toBe(en.shareDurationServerRejected)
+    })
+
+    // The CAS guard on the renewal UPDATE emits this when the row moved between the read and
+    // the write. Re-reading is the owner's action, so the message has to say so rather than
+    // invite a blind retry.
+    it('tells the owner to reload when the row changed under them (R9)', async () => {
+        updateMailShare.mockRejectedValue({ code: 500, message: 'SHARE_UPDATE_CONFLICT' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="renew-choice"]').setValue('86400')
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="config-error"]').text()).toBe(en.shareUpdateConflict)
+    })
+
+    // Without a fallback branch a newly added error code silently does nothing, which the owner
+    // cannot tell apart from a dead Save button. This asserts the branch exists at all, so the
+    // next code added server-side cannot regress into silence.
+    it('never leaves a business refusal off the screen, whatever the code (R10)', async () => {
+        updateMailShare.mockRejectedValue({ code: 500, message: 'SHARE_SOME_FUTURE_CODE' })
+        const wrapper = await openDrawer()
+
+        await wrapper.get('[data-test="config-name"]').setValue('lobby desk')
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.get('[data-test="config-error"]').text()).toBe(en.shareUpdateFailed)
+    })
+})
+
 describe('share detail drawer · access key (AC-ADMIN-05 / AC-AUTH-07 / AC-AUTH-08 / AC-CAP-05)', () => {
     beforeEach(() => {
         getMailShare.mockReset()
@@ -743,7 +906,14 @@ describe('share detail drawer · access key (AC-ADMIN-05 / AC-AUTH-07 / AC-AUTH-
 })
 
 describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', () => {
-    const WRITE_HOOKS = ['config-save', 'binding-add', 'binding-add-select', 'config-name', 'authkey-enable']
+    const WRITE_HOOKS = [
+        'config-save',
+        'binding-add',
+        'binding-add-select',
+        'config-name',
+        'authkey-enable',
+        'renew-choice'
+    ]
 
     beforeEach(() => {
         getMailShare.mockReset()

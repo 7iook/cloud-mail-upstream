@@ -147,6 +147,44 @@
         </div>
 
         <div class="config-row">
+          <label class="config-label" for="share-config-renew">{{ tf('shareRenewLabel') }}</label>
+          <el-select
+              id="share-config-renew"
+              v-model="renewChoice"
+              data-test="renew-choice"
+              :disabled="!writable"
+          >
+            <el-option :key="RENEW_KEEP" :label="tf('shareRenewKeep')" :value="RENEW_KEEP" />
+            <el-option
+                v-for="item in SHARE_DURATION_PRESETS"
+                :key="item.value"
+                :label="tf('shareRenewBy', {duration: $t(item.labelKey)})"
+                :value="item.value"
+            />
+            <el-option :key="DURATION_CUSTOM" :label="tf('shareRenewExact')" :value="DURATION_CUSTOM" />
+          </el-select>
+        </div>
+
+        <div v-if="renewExactOpen" class="config-row">
+          <label class="config-label" for="share-config-expires">{{ tf('shareRenewExact') }}</label>
+          <el-date-picker
+              id="share-config-expires"
+              v-model="form.expiresAtLocal"
+              data-test="renew-exact"
+              type="datetime"
+              value-format="YYYY-MM-DD HH:mm:ss"
+              :disabled="!writable"
+          />
+        </div>
+
+        <p v-if="writable" class="config-hint" data-test="renew-target">
+          {{ tf('shareRenewTarget', {time: form.expiresAtLocal || '-'}) }}
+        </p>
+        <p v-if="writable" class="config-hint" data-test="renew-ceiling">
+          {{ tf('shareRenewCeiling', {time: renewCeilingText, days: MAX_DURATION_DAYS}) }}
+        </p>
+
+        <div class="config-row">
           <label class="config-label" for="share-config-max-sessions">{{ tf('shareMaxSessions') }}</label>
           <div class="config-limit">
             <el-input-number
@@ -333,7 +371,13 @@ import {
   updateMailShareBindings
 } from "@/request/mail-share.js"
 import {bindingLabels, isMutableStatus, quotaText, shareTypeLabelKey, statusMeta} from "./status.js"
-import {tzText} from "@/utils/day.js"
+import {
+  DURATION_CUSTOM,
+  MAX_DURATION_DAYS,
+  MAX_DURATION_SECONDS,
+  SHARE_DURATION_PRESETS
+} from "./presets.js"
+import {toUtc, tzDayjs, tzText} from "@/utils/day.js"
 
 defineOptions({
   name: 'share-detail-drawer'
@@ -402,8 +446,8 @@ const PENDING_COPY = {
   shareAuthKeyFailed: '无法完成：分享状态可能刚刚变化。请刷新后重试。'
 }
 
-function tf(key) {
-  return te(key) ? t(key) : (PENDING_COPY[key] || key)
+function tf(key, params) {
+  return te(key) ? t(key, params || {}) : (PENDING_COPY[key] || key)
 }
 
 // Mirrors of backend constants that the browser has to enforce before the request leaves:
@@ -411,6 +455,11 @@ function tf(key) {
 const BINDING_LIMIT = 50
 const ACCOUNT_PAGE_SIZE = 30
 const MIN_REFRESH_INTERVAL_MS = 3000
+
+// A string, like DURATION_CUSTOM, so it can never collide with a rung's seconds. "Leave the
+// expiry alone" has to be an explicit rung rather than the absence of a choice: the select is
+// the only control here whose neutral state must round-trip back to the saved instant.
+const RENEW_KEEP = 'keep'
 
 const detail = ref(null)
 const loadError = ref(false)
@@ -447,8 +496,13 @@ const form = reactive({
   otpExtractionEnabled: false,
   autoRefresh: false,
   refreshIntervalMs: null,
-  showFullAddress: false
+  showFullAddress: false,
+  // The browser's wall clock, same reading as the three read-only instants above. The request
+  // speaks the backend's UTC bare string, and buildPatch is the single place that converts.
+  expiresAtLocal: ''
 })
+
+const renewChoice = ref(RENEW_KEEP)
 
 const open = computed(() => props.shareId > 0)
 const writable = computed(() => Boolean(detail.value) && isMutableStatus(detail.value.effectiveStatus))
@@ -465,6 +519,75 @@ const bindingRows = computed(() => {
 })
 
 const atBindingLimit = computed(() => bindingRows.value.length >= BINDING_LIMIT)
+
+const renewExactOpen = computed(() => renewChoice.value === DURATION_CUSTOM)
+
+// The ceiling is measured from create_time, not from now: the backend judges
+// `new expires_at − create_time <= max`, so that rolling renewals cannot turn a share into a
+// permanent one. Showing "now + 90 days" here would promise headroom the server will refuse.
+const renewCeiling = computed(() => {
+  const base = detail.value
+  return base && base.createTime
+      ? tzDayjs(base.createTime).add(MAX_DURATION_SECONDS, 'second')
+      : null
+})
+
+const renewCeilingText = computed(() => (
+  renewCeiling.value ? renewCeiling.value.format('YYYY-MM-DD HH:mm:ss') : '-'
+))
+
+// Empty means "the drawer never had a value" — the same "no opinion" reading the refresh
+// interval gets — and an unchanged wall clock is not a renewal, so neither reaches the patch.
+function isRenewDirty() {
+  const base = detail.value
+  if (!base || !form.expiresAtLocal) {
+    return false
+  }
+  return form.expiresAtLocal !== tzText(base.expiresAt, '')
+}
+
+// Both server-side judgements, mirrored so a refusal reads here instead of arriving as
+// SHARE_INVALID_CONFIG / SHARE_DURATION_EXCEEDED after the round trip. Landing in the past is
+// the one that cannot be undone: the row turns EXPIRED, and an EXPIRED row is not updatable.
+function renewErrorKey() {
+  const base = detail.value
+  if (!base || !isRenewDirty()) {
+    return ''
+  }
+  const target = toUtc(form.expiresAtLocal)
+  if (!target.isValid()) {
+    return 'shareRenewInvalid'
+  }
+  if (!target.isAfter(toUtc())) {
+    return 'shareRenewPast'
+  }
+  const created = tzDayjs(base.createTime)
+  if (!created.isValid() || target.diff(created, 'second') > MAX_DURATION_SECONDS) {
+    return 'shareRenewTooLong'
+  }
+  return ''
+}
+
+// Every rung is measured from the saved expiry rather than from the previous pick, so choosing
+// 24h twice lands on the same instant instead of quietly compounding to 48.
+watch(renewChoice, (choice) => {
+  const base = detail.value
+  if (!base) {
+    return
+  }
+  if (choice === DURATION_CUSTOM) {
+    return
+  }
+  if (choice === RENEW_KEEP) {
+    form.expiresAtLocal = tzText(base.expiresAt, '')
+    return
+  }
+  const seconds = Number(choice)
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return
+  }
+  form.expiresAtLocal = tzDayjs(base.expiresAt).add(seconds, 'second').format('YYYY-MM-DD HH:mm:ss')
+})
 
 const addableAccounts = computed(() => {
   const bound = new Set(bindingRows.value.map((item) => item.accountId))
@@ -496,6 +619,10 @@ function applyDetail(data) {
   form.autoRefresh = Boolean(data.autoRefresh)
   form.refreshIntervalMs = data.refreshIntervalMs == null ? null : Number(data.refreshIntervalMs)
   form.showFullAddress = Boolean(data.showFullAddress)
+  // Assigned here as well as by the watch: the watch only runs when the choice actually
+  // changes, and after a successful save it is already back on RENEW_KEEP.
+  form.expiresAtLocal = tzText(data.expiresAt, '')
+  renewChoice.value = RENEW_KEEP
 }
 
 function close() {
@@ -685,6 +812,10 @@ function buildPatch() {
       patch.refreshIntervalMs = ms
     }
   }
+  // The one conversion point between the drawer's wall clock and the column's UTC bare string.
+  if (isRenewDirty()) {
+    patch.expiresAt = toUtc(form.expiresAtLocal).format('YYYY-MM-DD HH:mm:ss')
+  }
   return patch
 }
 
@@ -707,6 +838,11 @@ async function submitSave() {
   if (form.refreshIntervalMs != null && form.refreshIntervalMs !== ''
       && Number(form.refreshIntervalMs) < MIN_REFRESH_INTERVAL_MS) {
     configError.value = tf('shareRefreshIntervalTooSmall')
+    return
+  }
+  const renewInvalid = renewErrorKey()
+  if (renewInvalid) {
+    configError.value = tf(renewInvalid, {days: MAX_DURATION_DAYS, time: renewCeilingText.value})
     return
   }
   const patch = buildPatch()
@@ -750,8 +886,22 @@ async function submitSave() {
     // 一句「可能…或…」,把判断推回给管理员。
     if (err && err.message === 'SHARE_CAPABILITY_NOT_ENABLED') {
       configError.value = tf('shareCapabilityNotEnabled')
+    } else if (err && err.message === 'SHARE_DURATION_EXCEEDED') {
+      // MAX_DURATION_SECONDS is a mirror of the Worker's fallback; a deployment configuring a
+      // lower ceiling refuses a renewal the browser allowed. Quoting our own 90 days back at
+      // the owner when the server enforced a different number is worse than saying nothing.
+      configError.value = tf('shareDurationServerRejected')
     } else if (err && err.message === 'SHARE_INVALID_CONFIG') {
       configError.value = tf('shareConfigRejected')
+    } else if (err && err.message === 'SHARE_UPDATE_CONFLICT') {
+      // The row moved between the read and the write -- someone rotated the AuthKey or saved
+      // their own edit. Re-reading is the owner's action here, not retrying blind.
+      configError.value = tf('shareUpdateConflict')
+    } else {
+      // Every remaining business rejection still has to reach the screen. Without this branch a
+      // newly added error code silently does nothing, which the owner cannot tell apart from a
+      // dead Save button -- the exact defect just fixed on both create entries.
+      configError.value = tf('shareUpdateFailed')
     }
     console.error('mail share update failed', {code: err && err.code, message: err && err.message})
   } finally {
@@ -835,6 +985,8 @@ watch(() => props.shareId, (shareId) => {
   accounts.value = []
   accountsDone.value = false
   addAccountId.value = null
+  renewChoice.value = RENEW_KEEP
+  form.expiresAtLocal = ''
   if (shareId > 0) {
     load(shareId)
   }

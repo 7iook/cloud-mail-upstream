@@ -159,7 +159,10 @@ shareHttp.interceptors.response.use(async (res) => {
 // credential in a header or a query string is the half of the request gateways log by
 // default (AC-SEC-09). Both are omitted when blank so an unprotected share keeps the
 // exact request shape it had before T-26.
-export function createShareSession(lid, sec, { authKey, idempotencyKey } = {}) {
+// previousSessionToken is the dying token of a page renewing itself, and it rides the same
+// Authorization header every other share endpoint already uses — a body would put it in the
+// logged half too. Blank on a first open, where there is nothing to renew.
+export function createShareSession(lid, sec, { authKey, idempotencyKey, previousSessionToken } = {}) {
     const body = { lid, sec }
     if (typeof authKey === 'string' && authKey.trim()) {
         body.authKey = authKey
@@ -167,6 +170,9 @@ export function createShareSession(lid, sec, { authKey, idempotencyKey } = {}) {
     const config = {}
     if (typeof idempotencyKey === 'string' && idempotencyKey.trim()) {
         config.headers = { 'Idempotency-Key': idempotencyKey }
+    }
+    if (typeof previousSessionToken === 'string' && previousSessionToken.trim()) {
+        config.shareSessionToken = previousSessionToken
     }
     return shareHttp.post('/share/session', body, config)
 }
