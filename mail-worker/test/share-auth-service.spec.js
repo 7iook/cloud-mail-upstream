@@ -1890,3 +1890,404 @@ describe('shareAuthService ShareContext and session response', () => {
 		expect(await response.text()).toBe('capped-bytes');
 	});
 });
+
+// T-22B2 · max_sessions counts people, not browser refreshes. The visitor page rebuilds
+// its session every time the 900s token dies, and each rebuild used to cost a slot, so a
+// long-lived share with a small cap hit ACCESS_LIMIT_REACHED on one person sitting still.
+// The renewal proof is the token this share itself signed: a visitor holds lid+sec and
+// nothing else, so any claim they can author on their own must stay metered or the cap
+// evaporates. Grace mirrors RENEWAL_GRACE in the service.
+const RENEWAL_GRACE_SECONDS = 3600;
+const FORGED_SIGNING_KEY = 't22b2-attacker-chosen-signing-key';
+
+describe('shareAuthService session renewal quota', () => {
+	it('spends no slot when a visitor renews with the token this share signed (T-22B2)', async () => {
+		await ensureAccount();
+		const lid = randomLid('renew-free');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+		const t0 = 1_700_000_000_000;
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+		try {
+			const first = await shareAuthService.establishSession(c, lid, sec);
+			expect((await quotaRow(shareId)).access_count).toBe(1);
+			// The one slot is spent: a second person opening the link is out.
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec))).toBe(UNAVAILABLE_BODY);
+
+			// 15 minutes of reading later the tab's own token has died and the page rebuilds.
+			nowSpy.mockReturnValue(t0 + 900_000 + 1_000);
+			expect(await catchFail(shareAuthService.resolveSession(c, first.sessionToken)))
+				.toBe(UNAVAILABLE_BODY);
+
+			const renewed = await shareAuthService.establishSession(c, lid, sec, {
+				previousSessionToken: first.sessionToken
+			});
+			expect(renewed.sessionToken).not.toBe(first.sessionToken);
+			expect((await shareAuthService.resolveSession(c, renewed.sessionToken)).shareId).toBe(shareId);
+			expect((await quotaRow(shareId)).access_count).toBe(1);
+
+			// The chain keeps going: renewing off the renewed token is free too, otherwise
+			// the second half-hour would still eat the share.
+			nowSpy.mockReturnValue(t0 + 1_800_000 + 2_000);
+			const again = await shareAuthService.establishSession(c, lid, sec, {
+				previousSessionToken: renewed.sessionToken
+			});
+			expect((await shareAuthService.resolveSession(c, again.sessionToken)).shareId).toBe(shareId);
+			expect((await quotaRow(shareId)).access_count).toBe(1);
+
+			// A renewal is still an access: the owner's "last seen" must not freeze at the
+			// first open just because the slot stopped moving.
+			const row = await quotaRow(shareId);
+			expect(row.last_access_at).toEqual(expect.any(String));
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	it('meters every renewal claim a visitor can author for themselves (T-22B2)', async () => {
+		await ensureAccount();
+		const lid = randomLid('renew-forge');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const otherLid = randomLid('renew-other');
+		const otherSec = randomSec();
+		const other = await insertShare({ lid: otherLid, sec: otherSec });
+		const c = ctx();
+
+		const first = await shareAuthService.establishSession(c, lid, sec);
+		const otherSession = await shareAuthService.establishSession(c, otherLid, otherSec);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const iat = Math.floor(Date.now() / 1000);
+		const forged = [
+			'not-a-token',
+			's1.v2.eyJmYWtlIjp0cnVlfQ.AAAA',
+			// Right shape, right claims, signed with a key the visitor picked.
+			await mintToken(
+				{ shareId, lid, iat, exp: iat + 900, kid: 'v2', cv: 0 },
+				{ key: FORGED_SIGNING_KEY }
+			),
+			// Same, with the cv rewritten to whatever the row might hold.
+			await mintToken(
+				{ shareId, lid, iat, exp: iat + 900, kid: 'v2', cv: 99 },
+				{ key: FORGED_SIGNING_KEY }
+			),
+			// Genuinely signed by this deployment — for a different share. A slot on a
+			// throwaway share must not buy an unmetered seat on a capped one.
+			otherSession.sessionToken,
+			// This share's real token with the lid swapped to the other share's.
+			await mintToken(
+				{ shareId: other.shareId, lid, iat, exp: iat + 900, kid: 'v2', cv: 0 },
+				{ key: FORGED_SIGNING_KEY }
+			)
+		];
+		for (const previousSessionToken of forged) {
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec, { previousSessionToken })))
+				.toBe(UNAVAILABLE_BODY);
+		}
+		// A real token does not stand in for the share secret either.
+		expect(await catchFail(shareAuthService.establishSession(c, lid, randomSec(), {
+			previousSessionToken: first.sessionToken
+		}))).toBe(UNAVAILABLE_BODY);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		// Below the cap a forged claim is not an error, it is simply a new visitor — and
+		// it pays for a slot like one. This is the half that keeps max_sessions meaningful.
+		const meteredLid = randomLid('renew-forge-metered');
+		const meteredSec = randomSec();
+		const metered = await insertShare({ lid: meteredLid, sec: meteredSec, maxSessions: 3 });
+		await shareAuthService.establishSession(c, meteredLid, meteredSec, {
+			previousSessionToken: 'not-a-token'
+		});
+		await shareAuthService.establishSession(c, meteredLid, meteredSec, {
+			previousSessionToken: await mintToken(
+				{ shareId: metered.shareId, lid: meteredLid, iat, exp: iat + 900, kid: 'v2', cv: 0 },
+				{ key: FORGED_SIGNING_KEY }
+			)
+		});
+		expect((await quotaRow(metered.shareId)).access_count).toBe(2);
+	});
+
+	it('refuses a renewal once the share is revoked, expired or its cv moved (T-22B2, AC-AUTH-04)', async () => {
+		await ensureAccount();
+		const c = ctx();
+
+		const revLid = randomLid('renew-rev');
+		const revSec = randomSec();
+		const rev = await insertShare({ lid: revLid, sec: revSec, maxSessions: 1 });
+		const revSession = await shareAuthService.establishSession(c, revLid, revSec);
+		await env.db.prepare("UPDATE mail_share SET status = 'REVOKED' WHERE share_id = ?")
+			.bind(rev.shareId).run();
+		expect(await catchFail(shareAuthService.establishSession(c, revLid, revSec, {
+			previousSessionToken: revSession.sessionToken
+		}))).toBe(UNAVAILABLE_BODY);
+
+		const expLid = randomLid('renew-exp');
+		const expSec = randomSec();
+		const expired = await insertShare({ lid: expLid, sec: expSec, maxSessions: 1 });
+		const expSession = await shareAuthService.establishSession(c, expLid, expSec);
+		await env.db.prepare("UPDATE mail_share SET expires_at = '2001-01-01 00:00:00' WHERE share_id = ?")
+			.bind(expired.shareId).run();
+		expect(await catchFail(shareAuthService.establishSession(c, expLid, expSec, {
+			previousSessionToken: expSession.sessionToken
+		}))).toBe(UNAVAILABLE_BODY);
+
+		// A cv bump is how revocation of the credential itself lands. The renewal right
+		// dies with the credential it was minted under, so the visitor falls back to the
+		// metered path — which this capped share refuses.
+		const cvLid = randomLid('renew-cv');
+		const cvSec = randomSec();
+		const cvShare = await insertShare({ lid: cvLid, sec: cvSec, maxSessions: 1 });
+		const cvSession = await shareAuthService.establishSession(c, cvLid, cvSec);
+		expect(await bumpCredentialsVersion(cvShare.shareId)).toBe(1);
+		expect(await catchFail(shareAuthService.establishSession(c, cvLid, cvSec, {
+			previousSessionToken: cvSession.sessionToken
+		}))).toBe(UNAVAILABLE_BODY);
+		expect((await quotaRow(cvShare.shareId)).access_count).toBe(1);
+	});
+
+	it('meters a renewal presented long after its token died (T-22B2)', async () => {
+		await ensureAccount();
+		const insideLid = randomLid('renew-inside');
+		const insideSec = randomSec();
+		const inside = await insertShare({ lid: insideLid, sec: insideSec, maxSessions: 1 });
+		const staleLid = randomLid('renew-stale');
+		const staleSec = randomSec();
+		const stale = await insertShare({ lid: staleLid, sec: staleSec, maxSessions: 1 });
+		const c = ctx();
+		const t0 = 1_700_000_000_000;
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+		try {
+			const insideSession = await shareAuthService.establishSession(c, insideLid, insideSec);
+			const staleSession = await shareAuthService.establishSession(c, staleLid, staleSec);
+
+			nowSpy.mockReturnValue(t0 + (900 + RENEWAL_GRACE_SECONDS - 60) * 1000);
+			const renewed = await shareAuthService.establishSession(c, insideLid, insideSec, {
+				previousSessionToken: insideSession.sessionToken
+			});
+			expect((await shareAuthService.resolveSession(c, renewed.sessionToken)).shareId)
+				.toBe(inside.shareId);
+			expect((await quotaRow(inside.shareId)).access_count).toBe(1);
+
+			// Past the window the holder is treated as somebody arriving fresh, which on a
+			// share with its single slot already spent means no seat.
+			nowSpy.mockReturnValue(t0 + (900 + RENEWAL_GRACE_SECONDS + 10) * 1000);
+			expect(await catchFail(shareAuthService.establishSession(c, staleLid, staleSec, {
+				previousSessionToken: staleSession.sessionToken
+			}))).toBe(UNAVAILABLE_BODY);
+			expect((await quotaRow(stale.shareId)).access_count).toBe(1);
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	it('still demands the AuthKey when renewing a keyed share (T-22B2, AC-AUTH-01)', async () => {
+		await ensureAccount();
+		const lid = randomLid('renew-keyed');
+		const sec = randomSec();
+		const { shareId } = await authKeyShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+		const t0 = 1_700_000_000_000;
+		const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(t0);
+		try {
+			const first = await shareAuthService.establishSession(c, lid, sec, { authKey: AUTH_KEY });
+			expect((await quotaRow(shareId)).access_count).toBe(1);
+
+			nowSpy.mockReturnValue(t0 + 900_000 + 1_000);
+			// Holding a token this share signed is not a way around the second factor.
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec, {
+				previousSessionToken: first.sessionToken
+			}))).toBe(AUTH_REQUIRED_BODY);
+			expect((await quotaRow(shareId)).access_count).toBe(1);
+
+			const renewed = await shareAuthService.establishSession(c, lid, sec, {
+				authKey: AUTH_KEY,
+				previousSessionToken: first.sessionToken
+			});
+			expect((await shareAuthService.resolveSession(c, renewed.sessionToken)).shareId).toBe(shareId);
+			expect((await quotaRow(shareId)).access_count).toBe(1);
+		} finally {
+			nowSpy.mockRestore();
+		}
+	});
+
+	// A signature says who minted the token, not that what it minted makes sense. These
+	// cases all carry a signature this deployment really produced — the only way to hold
+	// one is a leaked signing key or an issuer that malfunctioned — and check that such a
+	// token still cannot claim more session life than issueToken could ever have granted.
+	// The share is capped at one already-spent slot throughout, so "accepted as a renewal"
+	// is observable as a session appearing where the metered path would refuse one.
+	it('refuses a validly signed token whose exp is not after its iat (P1-3)', async () => {
+		await ensureAccount();
+		const lid = randomLid('inv-exp-le-iat');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+
+		await shareAuthService.establishSession(c, lid, sec);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const iat = Math.floor(Date.now() / 1000);
+		// Both sit inside RENEWAL_GRACE, so the grace window alone cannot refuse them.
+		for (const exp of [iat, iat - 1]) {
+			const token = await mintToken({ shareId, lid, iat, exp, kid: 'v2', cv: 0 });
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec, {
+				previousSessionToken: token
+			}))).toBe(UNAVAILABLE_BODY);
+			expect(await catchFail(shareAuthService.resolveSession(c, token))).toBe(UNAVAILABLE_BODY);
+		}
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('refuses a validly signed token whose iat is missing or not a finite number (P1-3)', async () => {
+		await ensureAccount();
+		const lid = randomLid('inv-iat');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+
+		await shareAuthService.establishSession(c, lid, sec);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const exp = Math.floor(Date.now() / 1000) + 900;
+		// JSON.stringify folds Infinity and NaN into null, so the null row covers them too.
+		const payloads = [
+			{ shareId, lid, exp, kid: 'v2', cv: 0 },
+			{ shareId, lid, iat: null, exp, kid: 'v2', cv: 0 },
+			{ shareId, lid, iat: 'yesterday', exp, kid: 'v2', cv: 0 }
+		];
+		for (const payload of payloads) {
+			const token = await mintToken(payload);
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec, {
+				previousSessionToken: token
+			}))).toBe(UNAVAILABLE_BODY);
+			// Without an iat there is no way to tell a live token from one whose exp was
+			// simply written far enough forward, so the read path has to refuse it too.
+			expect(await catchFail(shareAuthService.resolveSession(c, token))).toBe(UNAVAILABLE_BODY);
+		}
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	// The mirror of the iat case, and the one that used to be exploitable: the old read path
+	// asked `payload.exp <= now`, and `undefined <= number` is false, so a signed token with no
+	// exp at all was treated as never expiring. Keeping a direct sample means a future edit that
+	// drops back to validating only iat gets caught here rather than in production.
+	it('refuses a validly signed token whose exp is missing or not a finite number (P1-3)', async () => {
+		await ensureAccount();
+		const lid = randomLid('inv-exp');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+
+		await shareAuthService.establishSession(c, lid, sec);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const iat = Math.floor(Date.now() / 1000);
+		// JSON.stringify folds Infinity and NaN into null, so the null row covers them too.
+		const payloads = [
+			{ shareId, lid, iat, kid: 'v2', cv: 0 },
+			{ shareId, lid, iat, exp: null, kid: 'v2', cv: 0 },
+			{ shareId, lid, iat, exp: 'never', kid: 'v2', cv: 0 }
+		];
+		for (const payload of payloads) {
+			const token = await mintToken(payload);
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec, {
+				previousSessionToken: token
+			}))).toBe(UNAVAILABLE_BODY);
+			expect(await catchFail(shareAuthService.resolveSession(c, token))).toBe(UNAVAILABLE_BODY);
+		}
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('refuses a validly signed token claiming more life than any issue path grants (P1-3)', async () => {
+		await ensureAccount();
+		const lid = randomLid('inv-lifetime');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		const c = ctx();
+
+		await shareAuthService.establishSession(c, lid, sec);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		const iat = Math.floor(Date.now() / 1000);
+		const year = 365 * 24 * 3600;
+		for (const exp of [iat + year, iat + 901]) {
+			const token = await mintToken({ shareId, lid, iat, exp, kid: 'v2', cv: 0 });
+			expect(await catchFail(shareAuthService.establishSession(c, lid, sec, {
+				previousSessionToken: token
+			}))).toBe(UNAVAILABLE_BODY);
+			expect(await catchFail(shareAuthService.resolveSession(c, token))).toBe(UNAVAILABLE_BODY);
+		}
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		// One second under the same bound is exactly what issueToken mints at
+		// SHARE_SESSION_TTL=900, so the bound must not be a hair stricter than the issuer.
+		const atBound = await mintToken({ shareId, lid, iat, exp: iat + 900, kid: 'v2', cv: 0 });
+		const renewed = await shareAuthService.establishSession(c, lid, sec, {
+			previousSessionToken: atBound
+		});
+		expect((await shareAuthService.resolveSession(c, renewed.sessionToken)).shareId).toBe(shareId);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+	});
+
+	it('keeps a normally issued token resolving and renewing after SHARE_SESSION_TTL is lowered (P1-3)', async () => {
+		await ensureAccount();
+		const lid = randomLid('inv-no-friendly-fire');
+		const sec = randomSec();
+		const { shareId } = await insertShare({ lid, sec, maxSessions: 1 });
+		// issueToken falls back to DEFAULT_SESSION_TTL whenever SHARE_SESSION_TTL is unset
+		// or unparseable, so a 900s token is something this deployment can mint whatever
+		// the variable currently says. Lowering it afterwards must not kill that token.
+		const unset = ctx({ SHARE_SESSION_TTL: '' });
+		const lowered = ctx({ SHARE_SESSION_TTL: '300' });
+
+		const first = await shareAuthService.establishSession(unset, lid, sec);
+		expect(decodeTokenPayload(first.sessionToken).exp - decodeTokenPayload(first.sessionToken).iat).toBe(900);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		expect((await shareAuthService.resolveSession(lowered, first.sessionToken)).shareId).toBe(shareId);
+		const renewed = await shareAuthService.establishSession(lowered, lid, sec, {
+			previousSessionToken: first.sessionToken
+		});
+		expect((await shareAuthService.resolveSession(lowered, renewed.sessionToken)).shareId).toBe(shareId);
+		expect((await quotaRow(shareId)).access_count).toBe(1);
+
+		// The other legitimate shape: exp truncated by the share's own expiry, so the
+		// lifetime is far below the bound rather than at it.
+		const shortLid = randomLid('inv-short-life');
+		const shortSec = randomSec();
+		const short = await insertShare({ lid: shortLid, sec: shortSec, expiresAt: futureText(60) });
+		const shortSession = await shareAuthService.establishSession(unset, shortLid, shortSec);
+		const shortPayload = decodeTokenPayload(shortSession.sessionToken);
+		expect(shortPayload.exp - shortPayload.iat).toBeLessThanOrEqual(61);
+		expect((await shareAuthService.resolveSession(unset, shortSession.sessionToken)).shareId)
+			.toBe(short.shareId);
+	});
+
+	it('carries the visitor session token on POST /share/session so the page can renew (T-22B2)', async () => {
+		await ensureAccount();
+		const lid = randomLid('renew-endpoint');
+		const sec = randomSec();
+		await insertShare({
+			lid,
+			sec,
+			maxSessions: 1,
+			pepper: env.SHARE_SEC_PEPPER,
+			pepperKid: env.SHARE_SEC_PEPPER_KID
+		});
+
+		const first = await shareFetch('POST', '/share/session', { body: { lid, sec } });
+		expect(first.status).toBe(200);
+		const firstToken = first.json.data.sessionToken;
+
+		// Same request without the Authorization header is a second visitor: capped.
+		const stranger = await shareFetch('POST', '/share/session', { body: { lid, sec } });
+		expect(stranger.json.code).toBe(501);
+
+		const renewed = await shareFetch('POST', '/share/session', { body: { lid, sec }, bearer: firstToken });
+		expect(renewed.status).toBe(200);
+		expect(renewed.json.code).toBe(200);
+		expect(renewed.json.data.sessionToken).toEqual(expect.any(String));
+	});
+});

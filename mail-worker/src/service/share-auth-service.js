@@ -29,6 +29,10 @@ const TOKEN_VER = 's1';
 const KV_MIN_TTL = 60;
 // The replay window only has to outlive a client retry, not the session.
 const ESTABLISH_REPLAY_TTL = 120;
+// How long after a session token dies its holder may still trade it for a fresh one
+// without spending a second slot (T-22B2). Long enough to survive a closed laptop or a
+// dropped connection, short enough that a leaked dead token stops being a free seat.
+const RENEWAL_GRACE = 3600;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -203,6 +207,21 @@ function readAuthKey(options) {
 	return raw == null ? '' : String(raw).trim();
 }
 
+function sessionTtl(c) {
+	const ttlRaw = Number(c.env.SHARE_SESSION_TTL);
+	return Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : DEFAULT_SESSION_TTL;
+}
+
+// The longest life this deployment could ever have signed, and therefore the only
+// upper bound parseToken may enforce: a bound stricter than the issuer would refuse
+// tokens the worker itself minted. It is deliberately not just the currently
+// configured TTL — issueToken falls back to DEFAULT_SESSION_TTL whenever
+// SHARE_SESSION_TTL is unset or unparseable, so a default-length token is legitimate
+// even while the variable reads shorter.
+function maxTokenLifetime(c) {
+	return Math.max(sessionTtl(c), DEFAULT_SESSION_TTL);
+}
+
 async function issueToken(c, row) {
 	const keys = signingRing(c);
 	if (!keys.length) {
@@ -211,8 +230,7 @@ async function issueToken(c, row) {
 	}
 	const kid = keys[0].kid;
 	const iat = Math.floor(Date.now() / 1000);
-	const ttlRaw = Number(c.env.SHARE_SESSION_TTL);
-	const ttl = Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : DEFAULT_SESSION_TTL;
+	const ttl = sessionTtl(c);
 	// expiresAt 是不带时区标记的 UTC 裸串，必须按 UTC 读回，否则非 UTC 进程会把
 	// token 的绝对上界算偏一个时区偏移量。
 	const shareExp = toUtc(row.expiresAt).unix();
@@ -237,7 +255,26 @@ async function issueToken(c, row) {
 	return { sessionToken: `${data}.${base64url(sig)}`, exp };
 }
 
-async function verifyToken(c, sessionToken) {
+// A signature proves who minted the token, never that what it minted makes sense, so
+// the pair (iat, exp) is checked for internal consistency on top of it: both finite,
+// exp strictly after iat, and a claimed life no longer than issueToken could grant.
+// The comparison is between two values inside the token, so no clock skew enters it.
+// Only a leaked signing key or a malfunctioning issuer can produce a token that fails
+// here; refusing it keeps that blast radius at "no session" instead of "a session with
+// whatever life the token asked for".
+function hasSaneLifetime(c, payload) {
+	if (!Number.isFinite(payload.iat) || !Number.isFinite(payload.exp) || payload.exp <= payload.iat) {
+		return false;
+	}
+	return payload.exp - payload.iat <= maxTokenLifetime(c);
+}
+
+// Signature and shape only. Expiry is verifyToken's own check rather than part of this
+// one, because the renewal path deliberately accepts a token that has just died — a
+// token at the end of its life is precisely the signal it looks for. The time
+// invariants above are part of the shape and live here rather than in either caller,
+// so verifyToken and isRenewal cannot drift into disagreeing about what a token is.
+async function parseToken(c, sessionToken) {
 	if (sessionToken == null || sessionToken === '') {
 		return null;
 	}
@@ -266,8 +303,15 @@ async function verifyToken(c, sessionToken) {
 	}
 	try {
 		const payload = JSON.parse(decoder.decode(base64urlDecode(parts[2])));
-		const now = Math.floor(Date.now() / 1000);
-		if (!payload || payload.exp <= now || payload.shareId == null || !payload.lid) {
+		if (!payload || payload.shareId == null || !payload.lid) {
+			return null;
+		}
+		if (!hasSaneLifetime(c, payload)) {
+			// Reason only: this line shares the AC-LEAK-05 fence with the rest of the
+			// module, so no lid, token or claim value may reach it. It is worth logging
+			// at all because a well-signed token failing here is a signing-key or
+			// issuer alarm, not ordinary visitor traffic.
+			console.error('share-auth token time invariants failed');
 			return null;
 		}
 		return payload;
@@ -277,9 +321,49 @@ async function verifyToken(c, sessionToken) {
 	}
 }
 
+async function verifyToken(c, sessionToken) {
+	const payload = await parseToken(c, sessionToken);
+	if (!payload || payload.exp <= Math.floor(Date.now() / 1000)) {
+		return null;
+	}
+	return payload;
+}
+
+function readPreviousSessionToken(options) {
+	const raw = options && options.previousSessionToken;
+	return raw == null ? '' : String(raw).trim();
+}
+
+// A renewal is the visitor handing back the session token this very share signed for
+// them. The signature is the entire proof, and it has to be: every visitor of one link
+// holds the same lid, the same sec and the same AuthKey, so nothing a visitor can author
+// tells them apart. A claim carried in the request ("this is a renewal") would let anyone
+// opt out of the cap; only a value the worker minted under its own signing key cannot be
+// produced by the person it is being checked against.
+// Bound to this row on three axes so a signature alone is not enough: shareId+lid stop a
+// token earned on a throwaway share from buying a free seat on a capped one, and cv ends
+// the chain the moment the credential behind it is rotated or revoked.
+// A failed check is not an error — it is somebody opening the link, and it falls through
+// to the metered path, which is what keeps forgery pointless rather than merely refused.
+async function isRenewal(c, row, lidText, previousSessionToken) {
+	if (!previousSessionToken) {
+		return false;
+	}
+	const payload = await parseToken(c, previousSessionToken);
+	if (!payload || payload.shareId !== row.shareId || payload.lid !== lidText) {
+		return false;
+	}
+	if ((payload.cv == null ? 0 : payload.cv) !== row.credentialsVersion) {
+		return false;
+	}
+	// parseToken already guaranteed exp is a finite number strictly after iat, so the
+	// only question left here is whether the grace window has closed.
+	return payload.exp + RENEWAL_GRACE > Math.floor(Date.now() / 1000);
+}
+
 // Establishing a session needs a fully ACTIVE share; an already-issued session
 // keeps reading through ACCESS_LIMIT_REACHED (AC-SESS-06: close the door,
-// don't clear the room).
+// don't clear the room). A renewal reads the second list for the same reason.
 const ESTABLISH_ALLOWED = ['ACTIVE'];
 const RESOLVE_ALLOWED = ['ACTIVE', 'ACCESS_LIMIT_REACHED'];
 
@@ -431,18 +515,30 @@ function denyQuota(c, shareId, reason) {
 // does not bump credentials_version (AC-AUTH-07), so an enable that commits after a
 // keyless snapshot would otherwise still mint an unkeyed token on a keyed share.
 // An empty RETURNING therefore means "someone else changed the world"; refuse.
-async function consumeSessionQuota(c, shareId, expectedCv, now, expectedAuthKeyEnabled) {
-	return await orm(c).update(mailShare).set({
-		accessCount: sql`${mailShare.accessCount} + 1`,
-		lastAccessAt: now
-	}).where(and(
+// A renewal runs the same statement rather than a second one, so revoke, expiry and cv
+// rotation still land on it atomically: skipping the gate for renewals would be exactly
+// the "this is a renewal, let it through" hole that makes the cap meaningless.
+async function consumeSessionQuota(c, shareId, expectedCv, now, expectedAuthKeyEnabled, renewal) {
+	const conditions = [
 		eq(mailShare.shareId, shareId),
 		eq(mailShare.status, 'ACTIVE'),
 		gt(mailShare.expiresAt, now),
 		eq(mailShare.credentialsVersion, expectedCv),
-		eq(mailShare.authKeyEnabled, expectedAuthKeyEnabled),
-		or(isNull(mailShare.maxSessions), sql`${mailShare.accessCount} < ${mailShare.maxSessions}`)
-	)).returning({ accessCount: mailShare.accessCount });
+		eq(mailShare.authKeyEnabled, expectedAuthKeyEnabled)
+	];
+	if (!renewal) {
+		// The cap is the one predicate a renewal drops. Its holder already paid for a
+		// slot, and refusing here is the bug itself: a full share evicting the people
+		// who are in it (AC-SESS-06, close the door without clearing the room).
+		conditions.push(or(isNull(mailShare.maxSessions), sql`${mailShare.accessCount} < ${mailShare.maxSessions}`));
+	}
+	return await orm(c).update(mailShare).set({
+		// The renewal writes access_count back unchanged instead of leaving the column
+		// out, so both paths keep one statement shape and the gate stays the single
+		// linearization point rather than forking into a second writer.
+		accessCount: renewal ? sql`${mailShare.accessCount}` : sql`${mailShare.accessCount} + 1`,
+		lastAccessAt: now
+	}).where(and(...conditions)).returning({ accessCount: mailShare.accessCount });
 }
 
 function replayCacheKey(lid, key) {
@@ -543,16 +639,24 @@ async function establishSession(c, lid, sec, options = {}) {
 	// The snapshot read above stays: AC-SEC-08 bans a read-then-write state change,
 	// not a read. It carries sec_hmac for the credential check and credentials_version
 	// into the gate below, while the state change itself is still one statement.
+	// T-22B2: max_sessions counts people, not the browser's 15-minute rebuild cycle, so a
+	// token this share already signed buys its holder a fresh one on the same slot. It is
+	// resolved below the AuthKey gate on purpose — a renewal continues an authorized
+	// session, it does not stand in for the authorization.
+	const renewal = await isRenewal(c, row, lidText, readPreviousSessionToken(options));
 	// assertAllowed throws rather than returning the capped state, so recompute it here
 	// to keep the everyday "cap already reached" refusal observable.
-	if (effectiveStatus(row, nowText()) === 'ACCESS_LIMIT_REACHED') {
+	if (!renewal && effectiveStatus(row, nowText()) === 'ACCESS_LIMIT_REACHED') {
 		denyQuota(c, row.shareId, 'quota_snapshot');
 	}
-	assertAllowed(row, ESTABLISH_ALLOWED);
+	// A renewal reads the same allow-list as resolveSession because it is the same
+	// question: may an existing session keep going? Only a new one needs a fully ACTIVE
+	// share.
+	assertAllowed(row, renewal ? RESOLVE_ALLOWED : ESTABLISH_ALLOWED);
 	const now = nowText();
 	let applied;
 	try {
-		applied = await consumeSessionQuota(c, row.shareId, row.credentialsVersion, now, row.authKeyEnabled);
+		applied = await consumeSessionQuota(c, row.shareId, row.credentialsVersion, now, row.authKeyEnabled, renewal);
 	} catch (err) {
 		// AC-SESS-11: a gate that never landed must refuse, not hand out an unmetered
 		// session the way the old fire-and-forget accounting did.

@@ -57,7 +57,11 @@ app.post('/share/session', shareRateLimit(SHARE_SESSION_RATE_LIMITER, SHARE_SESS
 	const idempotencyKey = c.req.header('Idempotency-Key') || '';
 	const data = await shareAuthService.establishSession(c, body.lid, body.sec, {
 		idempotencyKey,
-		authKey: body.authKey
+		authKey: body.authKey,
+		// A page rebuilding its dying session sends the old token on the same
+		// Authorization header every other share endpoint already uses, so a renewal
+		// never puts it in a body that a gateway logs by default (AC-SEC-09).
+		previousSessionToken: readSessionToken(c)
 	});
 	return shareJson(c, shareResult.ok(data));
 }));
