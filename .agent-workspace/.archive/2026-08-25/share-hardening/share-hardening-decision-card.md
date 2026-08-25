@@ -393,7 +393,15 @@
 - [x] T-22a 自定义有效期 · **前端部分**(两处入口 P-03 同改)
   - **Evidence**:`commit 344ff5d` + `ac71081`(静默失败修复)· `verify: pnpm --dir mail-vue test → 23 files/280 passed/EXIT=0` · `pnpm --dir mail-vue build 通过` · `files: share-admin/presets.js(+presets.spec.js 新建) · ShareCreateWizard.vue · email/ShareDialog.vue · i18n zh/en` · `AC: §1.2 H 项`
   - **Update Log**:2026-08-25 · 档位收敛到 `presets.js` 共享常量,加源码级断言防 P-03 复发(两个 `.vue` 不许再出现档位字面量)。自定义哨兵用字符串 `'custom'`,类型上不可能与档位秒数相撞。**顺带修了一个被本功能放大的既有缺陷**:两个入口的 catch 原本只 `console.error`,业务错误完全不上屏,管理员看到「点了没反应」——以前档位固定不可能超限所以撞不上,自定义有效期让它变成常规路径。已做红绿验证(移除赋值 → 守卫红 → 恢复 → 绿,探针无残留)。
-- [ ] T-22b 自定义有效期 · **后端部分**:I-2 兜底上限 90 天落地 + `SHARE_MAX_DURATION_SECONDS` 显式化 + 测试夹具评估 + 续期(`expiresAt` 进 `UPDATE_FIELDS`)+ 配额排除自动重建
+- [x] T-22b 自定义有效期 · **后端部分** + 续期 + 配额语义(经 2 轮 GPT-5.6 Sol 异构审查)
+  - **Evidence**:`commit 9aea77e`(上限+续期+CAS)· `c4a6e6d`(配额+token 不变量)· `9ceceaf`(前端续期入口+兜底提示)· `e1a0ba1`(补提 e2e)· `verify: pnpm --dir mail-worker test → 18 files/664 passed/EXIT=0` · `pnpm --dir mail-vue test → 23 files/293 passed/EXIT=0` · `AC: §1.5 不变量 I-2 + §6 第 2、3 项`
+  - **Update Log**:2026-08-25 · 实现用 opus-5-thinking-high-fast 三包并行(文件零交集),审查用 gpt-5.6-sol 异构。
+    - **R1 审查 `NEEDS_CHANGES`(P0=2/P1=1/P2=1),四条全部采纳,零驳回**。P0-1「管理端无续期入口」是**我分包失误**造成的断链——后端能力齐全、测试全绿,而管理员在界面上点不到,单测永远发现不了。P0-2「续期写入缺 CAS」是并发时序缺陷:预读整行后 WHERE 未带 `credentials_version`,凭据轮换会被静默覆盖;讽刺的是同文件的 `resetAuthKey` 早有正确写法,新路径没沿用。
+    - **修复反过来收窄了审查一处判断**:审查把「并发撤销」也列为缺口,实测 `prepareRevoke` 只写 status 且续期 WHERE 已含 `status='ACTIVE'`,撤销那一路本就安全。R2 审查独立复核后**承认上轮过宽**,双向校准成立。
+    - **顺带修掉一个两轮审查都没点名的缺陷**:`verifyToken()` 用 `payload.exp <= now` 判过期,而 `undefined <= number` 恒为 `false`,无 `exp` 字段的有效签名 token 会被读路径当成永不过期。需先持有签名密钥才能利用(此时攻击者本可签任意 exp),且 `resolveSession` 仍回查数据库,故非可直接利用的漏洞,但已关上。
+    - **静默失败第三次出现**:详情抽屉 `submitSave()` 只有三个特判、无 else 兜底,新错误码会让保存按钮点了没反应。与创建向导、邮箱对话框是同一个病。已加兜底并用虚构错误码 `SHARE_SOME_FUTURE_CODE` 写测试钉住(变异验证精确变红)。**这个模式已在三处出现,是代码库惯性而非偶发**。
+    - **R2 审查 `APPROVED`**(P0=0/P1=0/P2=1),P2 是「缺 `exp` 畸形样本的直接回归」,已补。
+    - **`unverified`**:`wrangler dev` / Playwright 手动 e2e 未跑;替代证据是走真实 HTTP `ownerApi` 的集成断言与并发代理注入测试。
   - ⚠️ **前端上限当前是镜像常量,构成第二真源**:`presets.js` 的 `MAX_DURATION_DAYS = 90` 镜像后端兜底值(沿用文件内既有的 "Mirrors of backend constants" 约定,`BINDING_LIMIT` 同源)。`websiteConfig` 带不出它——该接口只读 `setting` 表,而上限住在 Worker env。**部署者若配置更低的上限,前端不知情会放行、由后端拒绝**(现已有可读提示,不再静默)。彻底消除需把上限下发到前端,归本 task 一并评估。
 
 ### 阶段 3 · 收口
