@@ -31,6 +31,11 @@ SHARE_SEC_PEPPER = "e2e-share-sec-pepper"
 SHARE_SEC_PEPPER_KID = "v1"
 SHARE_SESSION_SIGNING_KEY = "e2e-share-session-signing-key"
 SHARE_SESSION_SIGNING_KID = "v1"
+# 创建分享是 fail-closed 的:KEK 没配就在写库前拒掉整条创建面(轨一硬约束,
+# mail-share-service.js `assertKekConfigured`)。真实部署用 `wrangler secret put`,
+# 这里是隔离的本地 e2e,与上面两把同样明文写在配置里。
+SHARE_SEC_KEK = "e2e-share-sec-kek"
+SHARE_SEC_KEK_KID = "v1"
 # SHARE_MAX_DURATION_SECONDS 刻意不配，与生产 wrangler.toml 一致：
 # e2e 要跑的就是真实部署形态，而真实部署没有这一项，上限来自代码兜底(I-2，90 天)。
 E2E_CONTROL_SECRET = "e2e-local-control-secret"
