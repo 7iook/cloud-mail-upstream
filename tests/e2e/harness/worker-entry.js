@@ -254,12 +254,18 @@ async function handleControl(req, env, ctx, url) {
 		if (!row) {
 			return json({ ok: false, error: 'email() completed but no email row was found' }, 500)
 		}
-		if (row.code !== code) {
+		// `code` 既是注入正文里那串数字,也是默认的期望值 —— 对「每封注入邮件都含一个码」
+		// 的用例这两者本就相同。但提取扩成双字段之后,合法的注入体可以只有验证链接、甚至
+		// 两者都没有,那时期望值是空串而不是 `code`。`expectCode` 让调用方显式声明,
+		// 不传时行为与从前一致。
+		const expectCode = body.expectCode === undefined ? code : body.expectCode
+		if (row.code !== expectCode) {
 			return json({
 				ok: false,
 				error: 'email() did not persist the extracted code',
 				emailId: row.email_id,
 				code: row.code,
+				expected: expectCode,
 				status: row.status
 			}, 500)
 		}
