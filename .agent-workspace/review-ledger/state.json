@@ -1,0 +1,20 @@
+{
+  "last_reviewed_sha": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+  "last_run_id": "2026-08-26-r1",
+  "run_seq": 1,
+  "last_gc_at": "",
+  "created_at": "2026-08-26",
+  "refs": {
+    "origin/cursor/share-link-fullchain-8a38": {
+      "last_reviewed_sha": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+      "last_run_id": "2026-08-26-r1",
+      "completed_at": "2026-08-26T19:50:00Z",
+      "mode": "cursor",
+      "cursor_eligible": true
+    },
+    "origin/main": {
+      "last_reviewed_sha": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+      "note": "first-round empty --since=yesterday"
+    }
+  }
+}
