@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
     SHARE_ESTABLISH_KEY_PREFIX,
     SHARE_GONE_KEY_PREFIX,

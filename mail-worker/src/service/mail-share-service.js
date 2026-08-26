@@ -336,7 +336,7 @@ function isUniqueConflict(err) {
 }
 
 function isPartialInsert(err) {
-	return /SHARE_PARTIAL_INSERT/i.test(String(err && err.message || err));
+	return /SHARE_PARTIAL_INSERT|division by zero/i.test(String(err && err.message || err));
 }
 
 function placeholders(list) {
@@ -900,14 +900,15 @@ function prepareShareInsertByEmails(c, values) {
 	);
 }
 
-// 0 行 INSERT 在 D1 里不算失败,不会触发 batch 回滚。末尾用 RAISE(ABORT) 把
-// 「minted lids 必须全部落库」变成语句错误,这样缺一条就整批回滚(AC-SHARE-12)。
+// 0 行 INSERT 在 D1 里不算失败,不会触发 batch 回滚。末尾用 1/0 把
+// 「minted lids 必须全部落库」变成语句错误(D1 禁止在触发器外 RAISE),
+// 这样缺一条就整批回滚(AC-SHARE-12)。
 function prepareShareBatchComplete(c, lids) {
 	return c.env.db.prepare(`
 		SELECT CASE
 			WHEN (SELECT COUNT(*) FROM mail_share WHERE lid IN (SELECT value FROM json_each(?))) = ?
 			THEN 1
-			ELSE RAISE(ABORT, 'SHARE_PARTIAL_INSERT')
+			ELSE 1 / 0
 		END AS ok
 	`).bind(JSON.stringify(lids), lids.length);
 }
