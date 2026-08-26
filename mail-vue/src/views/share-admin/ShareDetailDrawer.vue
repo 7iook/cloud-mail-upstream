@@ -20,11 +20,11 @@
         <div class="detail-badges">
           <el-tag type="info" data-test="detail-type">{{ tf(shareTypeLabelKey(detail.shareType)) }}</el-tag>
           <el-tag
-              :type="statusMeta(detail.effectiveStatus).tone"
+              :type="statusMeta(liveStatus(detail)).tone"
               data-test="detail-status"
-              :data-status="detail.effectiveStatus"
+              :data-status="liveStatus(detail)"
           >
-            {{ statusText(detail.effectiveStatus) }}
+            {{ statusText(liveStatus(detail)) }}
           </el-tag>
         </div>
       </header>
@@ -446,6 +446,7 @@ import {
   updateMailShareBindings
 } from "@/request/mail-share.js"
 import {bindingLabels, isMutableStatus, quotaText, shareTypeLabelKey, statusMeta} from "./status.js"
+import {useShareClock} from "./use-share-clock.js"
 import {
   DURATION_CUSTOM,
   MAX_DURATION_DAYS,
@@ -464,6 +465,9 @@ const props = defineProps({
 const emit = defineEmits(['update:shareId', 'changed'])
 
 const {t, te} = useI18n()
+// P1: badge and write predicate follow the live clock, so a drawer left open across
+// expiresAt turns read-only on its own instead of trusting the load-time snapshot.
+const {liveStatus} = useShareClock()
 const {copy, selectableRef} = useCopyWithFallback()
 // A second instance rather than a shared one: the two one-shot blocks can be on screen at the
 // same time, and one selectableRef cannot point at both inputs.
@@ -596,7 +600,7 @@ const form = reactive({
 const renewChoice = ref(RENEW_KEEP)
 
 const open = computed(() => props.shareId > 0)
-const writable = computed(() => Boolean(detail.value) && isMutableStatus(detail.value.effectiveStatus))
+const writable = computed(() => Boolean(detail.value) && isMutableStatus(liveStatus(detail.value)))
 
 const bindingRows = computed(() => {
   const rows = detail.value && Array.isArray(detail.value.bindings) ? detail.value.bindings : []

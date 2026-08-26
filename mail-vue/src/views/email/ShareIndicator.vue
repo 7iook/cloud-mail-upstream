@@ -12,11 +12,13 @@
   </button>
 </template>
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { hasPerm } from '@/perm/perm.js'
 import { useUserStore } from '@/store/user.js'
 import { listMailShares } from '@/request/mail-share.js'
+import { liveEffectiveStatus } from '@/views/share-admin/status.js'
+import { useShareClock } from '@/views/share-admin/use-share-clock.js'
 
 function canManageShare() {
   const keys = useUserStore().user && useUserStore().user.permKeys
@@ -33,13 +35,20 @@ const emit = defineEmits(['open'])
 const { t } = useI18n()
 const shares = ref([])
 const listError = ref(false)
+const { nowMs } = useShareClock()
 const canManage = computed(() => canManageShare())
 const activeCount = computed(() => {
   const id = Number(props.accountId)
   return shares.value.filter((row) => {
-    return Number(row.accountId) === id && row.effectiveStatus === 'ACTIVE'
+    return Number(row.accountId) === id && liveEffectiveStatus(row, nowMs.value) === 'ACTIVE'
   }).length
 })
+
+function onVisible() {
+  if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+    refresh()
+  }
+}
 
 async function refresh() {
   if (!canManageShare()) {
@@ -59,6 +68,17 @@ defineExpose({ refresh, activeCount })
 
 onMounted(() => {
   refresh()
+  document.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('focus', refresh)
+})
+
+onActivated(() => {
+  refresh()
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener('focus', refresh)
 })
 
 watch(() => props.accountId, () => {

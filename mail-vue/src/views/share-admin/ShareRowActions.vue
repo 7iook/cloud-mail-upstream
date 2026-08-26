@@ -33,6 +33,7 @@ import {computed, ref} from "vue"
 import {useI18n} from "vue-i18n"
 import {ElMessage, ElMessageBox} from "element-plus"
 import {deleteMailShare, revokeMailShare} from "@/request/mail-share.js"
+import {useShareClock} from "./use-share-clock.js"
 
 const props = defineProps({
   row: {type: Object, required: true}
@@ -56,10 +57,14 @@ function tf(key) {
 
 const busy = ref(false)
 
+// P1: read the live status, not the API snapshot the parent happened to fetch.
+const {liveStatus} = useShareClock()
+
 // revoke flips status to REVOKED and the backend predicate is `status = 'ACTIVE'`, so an
-// already destroyed share has nothing left to destroy. delete carries no status predicate at
-// all, which is why it stays on every row.
-const canRevoke = computed(() => props.row && props.row.effectiveStatus !== 'REVOKED')
+// already destroyed share has nothing left to destroy (EXPIRED stays revocable: persistence
+// is still ACTIVE). delete carries no status predicate at all, which is why it stays on
+// every row.
+const canRevoke = computed(() => props.row && liveStatus(props.row) !== 'REVOKED')
 
 function isDismissal(err) {
   return err === 'cancel' || err === 'close'

@@ -119,7 +119,9 @@ function sampleShare(overrides = {}) {
         accessCount: 2,
         maxSessions: 5,
         createTime: '2026-08-17 01:00:00',
-        expiresAt: '2026-08-18 01:00:00',
+        // Far future on purpose: the page now renders liveEffectiveStatus, so a sample meant
+        // to read ACTIVE must actually be unexpired; the overlay case supplies its own past.
+        expiresAt: '2099-08-18 01:00:00',
         lastAccessAt: '2026-08-17 02:00:00',
         ...overrides
     }
@@ -173,7 +175,7 @@ describe('share-admin list page (AC-ADMIN-01 / AC-ADMIN-09 / AC-ADMIN-10)', () =
         expect(row.get('[data-test="share-status"]').text()).toBe('Active')
         expect(row.get('[data-test="share-quota"]').text()).toContain('2')
         expect(row.get('[data-test="share-quota"]').text()).toContain('5')
-        expectSameInstant(row.get('[data-test="share-expires"]').text(), '2026-08-18 01:00:00')
+        expectSameInstant(row.get('[data-test="share-expires"]').text(), '2099-08-18 01:00:00')
         expectSameInstant(row.get('[data-test="share-last-access"]').text(), '2026-08-17 02:00:00')
     })
 
@@ -185,7 +187,7 @@ describe('share-admin list page (AC-ADMIN-01 / AC-ADMIN-09 / AC-ADMIN-10)', () =
         await flushPromises()
 
         const row = wrapper.get('[data-test="share-row"]')
-        expectSameInstant(row.get('[data-test="share-expires"]').text(), '2026-08-18 01:00:00')
+        expectSameInstant(row.get('[data-test="share-expires"]').text(), '2099-08-18 01:00:00')
         expectSameInstant(row.get('[data-test="share-last-access"]').text(), '2026-08-17 02:00:00')
     })
 
@@ -207,6 +209,26 @@ describe('share-admin list page (AC-ADMIN-01 / AC-ADMIN-09 / AC-ADMIN-10)', () =
         const labels = wrapper.findAll('[data-test="share-status"]').map((node) => node.text())
         expect(labels).toHaveLength(4)
         expect(new Set(labels).size).toBe(4)
+    })
+
+    // P1: the card must not keep saying ACTIVE off a stale snapshot. Both the tag and the
+    // data-status hook go through liveStatus(row), so a refresh (or just sitting on the page)
+    // shows EXPIRED without a re-login.
+    it('overlays EXPIRED on a stale ACTIVE row whose expiresAt has passed (P1 live status)', async () => {
+        listMailShares.mockResolvedValue({
+            list: [sampleShare({
+                status: 'ACTIVE',
+                effectiveStatus: 'ACTIVE',
+                expiresAt: '2020-01-01 00:00:00'
+            })],
+            total: 1
+        })
+        const wrapper = mountPage()
+        await flushPromises()
+
+        const row = wrapper.get('[data-test="share-row"]')
+        expect(row.attributes('data-status')).toBe('EXPIRED')
+        expect(row.get('[data-test="share-status"]').text()).toBe('Expired')
     })
 
     it('renders an unlimited session quota instead of a raw null maxSessions', async () => {
