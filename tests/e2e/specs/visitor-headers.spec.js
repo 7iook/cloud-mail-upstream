@@ -1,7 +1,10 @@
 import { expect, test } from '../fixtures/share.js'
 
-test('records /s/* security headers or names the deploy-time gap (AC-LEAK-02 to 04)', async ({ request, baseURL }) => {
-	const response = await request.get(`${baseURL}/s/header-probe`)
+// P4 之后 missing lid 的文档请求是裸 404(空 body、no-store),不再适合当 header 探针;
+// 头部断言必须打在一条活分享的文档上。
+test('records /s/* security headers or names the deploy-time gap (AC-LEAK-02 to 04)', async ({ request, world }) => {
+	const share = await world.api.createShare(world.seed)
+	const response = await request.get(`${world.baseURL}/s/${share.lid}`)
 	expect(response.status()).toBe(200)
 	const headers = response.headers()
 	const cache = headers['cache-control'] || ''

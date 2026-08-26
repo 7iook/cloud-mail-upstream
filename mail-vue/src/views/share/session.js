@@ -1,5 +1,7 @@
 export const SHARE_SESSION_KEY_PREFIX = 'share:session:'
 export const SHARE_ESTABLISH_KEY_PREFIX = 'share:est-key:'
+// P4:某个 lid 已被判 gone(HTTP 404)的记账。存在 = 已经为它 reload 过一次。
+export const SHARE_GONE_KEY_PREFIX = 'share:gone:'
 
 const pendingSecrets = new Map()
 
@@ -75,6 +77,41 @@ export function clearOtherShareSessions(keepLid) {
     for (const key of remove) {
         sessionStorage.removeItem(key)
     }
+}
+
+export function shareGoneKey(lid) {
+    return `${SHARE_GONE_KEY_PREFIX}${String(lid || '')}`
+}
+
+/**
+ * P4 已打开页的销毁恢复记账:第一眼 gone → 'reload'(生产 reload 落到 worker 的
+ * 文档拦截 = 浏览器原生 404);之后每一眼 → 'blank'(reload 又回到了 SPA,说明当前
+ * 环境不经 worker —— vite:3001 直出 —— 只能清空文档,绝不循环)。
+ * sessionStorage 不可用时直接回 'blank':没有记账就没有安全的 reload。
+ */
+export function markShareGone(lid) {
+    try {
+        const key = shareGoneKey(lid)
+        if (sessionStorage.getItem(key)) {
+            return 'blank'
+        }
+        sessionStorage.setItem(key, '1')
+        return 'reload'
+    } catch {
+        return 'blank'
+    }
+}
+
+// 独立可 mock 的导航动作:jsdom 的 location.reload 不可 spy,页面单测经由这两个
+// 接缝断言「reload 一次 / 清空文档」而不真的导航。
+export function reloadShareDocument() {
+    window.location.reload()
+}
+
+export function blankShareDocument() {
+    // 空文档 = 没有任何业务 HTML。销毁态唯一合法形态是浏览器原生 404,清空是
+    // 不经 worker 的开发环境里最接近它的形状。
+    document.documentElement.innerHTML = ''
 }
 
 export function clearShareFragment() {

@@ -113,6 +113,19 @@ function expectIdenticalUnavailable(items) {
 	expect(new Set(items.map((item) => item.text)).size).toBe(1);
 }
 
+// P4:gone(无行 / REVOKED)不再走 JSON 信封,而是与文档入口同貌的裸 404 空 body。
+function expectGone(item) {
+	expect(item.status).toBe(404);
+	expect(item.text).toBe('');
+	expect(item.headers.get('Cache-Control')).toBe('no-store');
+}
+
+function expectAllGone(items) {
+	for (const item of items) {
+		expectGone(item);
+	}
+}
+
 function expectVisitorDto(dto) {
 	expect(Object.keys(dto).sort()).toEqual(VISITOR_MAIL_KEYS);
 	expect(dto.user_id).toBeUndefined();
@@ -367,7 +380,8 @@ describe('T-24 mail share backend integration', () => {
 		});
 		expect(revoked.json.data.shareId).toBe(created.json.data.shareId);
 
-		expectIdenticalUnavailable(await Promise.all([
+		// P4:销毁后所有访客路由封成裸 404,与文档入口 GET /s/:lid 同貌。
+		expectAllGone(await Promise.all([
 			jsonApi('POST', '/share/session', { body: { lid: created.json.data.lid, sec: created.json.data.sec } }),
 			jsonApi('GET', '/share/mails', { bearer: session.json.data.sessionToken }),
 			jsonApi('GET', `/share/mail?mailId=${inScopeId}`, { bearer: session.json.data.sessionToken }),
@@ -403,11 +417,11 @@ describe('T-24 mail share backend integration', () => {
 			}
 		})();
 
+		// P4 拆两族:错 sec / 过期 / 功能关 / 越窗读仍是字节一致的 UNAVAILABLE 信封;
+		// 无行 / 已销毁则是裸 404。族内不变量各自保持。
 		const bodies = await Promise.all([
-			jsonApi('POST', '/share/session', { body: { lid: 't24-never-existed', sec: 'nope' } }),
 			jsonApi('POST', '/share/session', { body: { lid: live.json.data.lid, sec: 'wrong-secret' } }),
 			jsonApi('POST', '/share/session', { body: { lid: expired.json.data.lid, sec: expired.json.data.sec } }),
-			jsonApi('POST', '/share/session', { body: { lid: revoked.json.data.lid, sec: revoked.json.data.sec } }),
 			disabled,
 			jsonApi('GET', `/share/mail?mailId=${beforeId}`, { bearer: liveSession.json.data.sessionToken }),
 			jsonApi('GET', '/share/mail?mailId=999999001', { bearer: liveSession.json.data.sessionToken }),
@@ -417,6 +431,11 @@ describe('T-24 mail share backend integration', () => {
 			jsonApi('GET', '/share/mails?sec=should-not-authenticate', {})
 		]);
 		expectIdenticalUnavailable(bodies);
+
+		expectAllGone(await Promise.all([
+			jsonApi('POST', '/share/session', { body: { lid: 't24-never-existed', sec: 'nope' } }),
+			jsonApi('POST', '/share/session', { body: { lid: revoked.json.data.lid, sec: revoked.json.data.sec } })
+		]));
 	});
 
 	it('keeps account_id=0, mid-write, below-window, and foreign mail off every visitor route (P-SCOPE-01)', async () => {
@@ -722,7 +741,8 @@ describe('T-24 mail share backend integration', () => {
 		const deleted = await jsonApi('DELETE', `/account/delete?accountId=${accountId}`, { token: ownerJwt });
 		expect(deleted.json?.code).toBe(200);
 
-		expectIdenticalUnavailable(await Promise.all([
+		// 信箱删除级联撤销后,四个入口(含从未存在的 lid)全部同貌:裸 404(P4)。
+		expectAllGone(await Promise.all([
 			jsonApi('POST', '/share/session', { body: { lid: created.json.data.lid, sec: created.json.data.sec } }),
 			jsonApi('GET', '/share/mails', { bearer: session.json.data.sessionToken }),
 			jsonApi('GET', `/share/mail?mailId=${mailId}`, { bearer: session.json.data.sessionToken }),
@@ -916,14 +936,18 @@ describe('GET /share/mailboxes/status', () => {
 			token: ownerJwt
 		});
 
-		expectIdenticalUnavailable(await Promise.all([
+		// P4:持有效 token 撞上撤销行 → 裸 404;token 本身不可用(伪造/缺失)则
+		// 从未触到行,仍是 UNAVAILABLE 信封。status 与其它读路由口径一致。
+		expectAllGone(await Promise.all([
 			status(bearer),
 			status(bearer, '?sinceEmailId=1'),
-			status('not-a-session-token'),
-			jsonApi('GET', '/share/mailboxes/status'),
 			jsonApi('GET', '/share/mails', { bearer }),
 			jsonApi('GET', `/share/mail?mailId=${mailId}`, { bearer }),
 			jsonApi('GET', `/share/attachment?mailId=${mailId}&attachmentId=${att.attId}`, { bearer })
+		]));
+		expectIdenticalUnavailable(await Promise.all([
+			status('not-a-session-token'),
+			jsonApi('GET', '/share/mailboxes/status')
 		]));
 	});
 });
@@ -1132,7 +1156,8 @@ describe('multi mailbox share over HTTP (T-19)', () => {
 		expect(removed.json.data.status).toBe('REVOKED');
 		expect(removed.json.data.bindings).toEqual([]);
 
-		expectIdenticalUnavailable(await Promise.all([
+		// 移除最后一个 Binding = 撤销,P4 后四个入口全是裸 404。
+		expectAllGone(await Promise.all([
 			jsonApi('POST', '/share/session', {
 				body: { lid: created.json.data.lid, sec: created.json.data.sec }
 			}),
@@ -1377,8 +1402,11 @@ describe('AuthKey over HTTP (T-19)', () => {
 		const created = await createShareV2({ accountId, authKeyEnabled: true });
 		const { lid, sec, authKey, shareId } = created.json.data;
 
-		expectIdenticalUnavailable(await Promise.all([
-			jsonApi('POST', '/share/session', { body: { lid, sec: 't24-wrong-secret', authKey } }),
+		// AC-AUTH-02 的不变量在 P4 后依旧成立:lid+sec 没对上之前,回答永远不含
+		// 「还差一把钥匙」。错 sec → UNAVAILABLE 信封;lid 不存在 → 裸 404;
+		// 两族都与访客递交的 authKey 无关。
+		expectUnavailable(await jsonApi('POST', '/share/session', { body: { lid, sec: 't24-wrong-secret', authKey } }));
+		expectAllGone(await Promise.all([
 			jsonApi('POST', '/share/session', { body: { lid: 't24-never-existed', sec, authKey } }),
 			jsonApi('POST', '/share/session', { body: { lid: 't24-never-existed', sec: 'nope', authKey: 'nope' } })
 		]));

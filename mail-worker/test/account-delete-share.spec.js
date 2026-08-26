@@ -24,6 +24,8 @@ const MAIL_BOX = 't13-box@example.com';
 const MAIL_BOX_C = 't13-box-c@example.com';
 const MAIL_OTHER = 't13-other@example.com';
 const UNAVAILABLE = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
+// P4:级联撤销后的行是 gone(share-api 层翻成裸 404),与「暂时不可用」分家。
+const DESTROYED = JSON.stringify(shareResult.fail('SHARE_DESTROYED', 404));
 
 function shareEnv(overrides = {}) {
 	return {
@@ -212,9 +214,10 @@ describe('account delete revokes mailbox shares (AC-LIFE-09, AC-LIFE-12 delete p
 
 		await accountService.delete(live.c, { accountId: BOX_A }, USER_A);
 
+		// 撤销行与从未存在的 lid 同貌:都是 gone(P4 后统一为裸 404 的 SHARE_DESTROYED)。
 		const after = await catchFail(shareAuthService.resolveSession(live.c, live.session.sessionToken));
 		const neverExisted = await catchFail(shareAuthService.establishSession(live.c, 'missing-lid', 'missing-sec'));
-		expect(after).toBe(UNAVAILABLE);
+		expect(after).toBe(DESTROYED);
 		expect(after).toBe(neverExisted);
 
 		const row = await readShareRow(live.created.shareId);
@@ -249,7 +252,7 @@ describe('account delete revokes mailbox shares (AC-LIFE-09, AC-LIFE-12 delete p
 		expect(restored.is_del).toBe(isDel.NORMAL);
 
 		const after = await catchFail(shareAuthService.resolveSession(live.c, live.session.sessionToken));
-		expect(after).toBe(UNAVAILABLE);
+		expect(after).toBe(DESTROYED);
 		const row = await readShareRow(live.created.shareId);
 		expect(row.status).toBe('REVOKED');
 		expect(row.revoked_at).toEqual(expect.any(String));
@@ -267,7 +270,7 @@ describe('account delete revokes mailbox shares (AC-LIFE-09, AC-LIFE-12 delete p
 
 		const after = await catchFail(shareAuthService.resolveSession(live.c, live.session.sessionToken));
 		const neverExisted = await catchFail(shareAuthService.establishSession(live.c, 'missing-lid', 'missing-sec'));
-		expect(after).toBe(UNAVAILABLE);
+		expect(after).toBe(DESTROYED);
 		expect(after).toBe(neverExisted);
 
 		const row = await readShareRow(live.created.shareId);
@@ -297,8 +300,8 @@ describe('account delete revokes mailbox shares (AC-LIFE-09, AC-LIFE-12 delete p
 
 		await accountService.physicsDeleteByUserIds(primaryShare.c, [USER_A]);
 
-		expect(await catchFail(shareAuthService.resolveSession(primaryShare.c, primaryShare.session.sessionToken))).toBe(UNAVAILABLE);
-		expect(await catchFail(shareAuthService.resolveSession(boxShare.c, boxShare.session.sessionToken))).toBe(UNAVAILABLE);
+		expect(await catchFail(shareAuthService.resolveSession(primaryShare.c, primaryShare.session.sessionToken))).toBe(DESTROYED);
+		expect(await catchFail(shareAuthService.resolveSession(boxShare.c, boxShare.session.sessionToken))).toBe(DESTROYED);
 		expect((await readShareRow(primaryShare.created.shareId)).status).toBe('REVOKED');
 		expect((await readShareRow(boxShare.created.shareId)).status).toBe('REVOKED');
 		expect((await readShareRow(other.created.shareId)).status).toBe('ACTIVE');
@@ -387,7 +390,7 @@ describe('T-18 cascade revoke goes through mail_share_binding (AC-BIND-05/06/10,
 		expect(row.status).toBe('REVOKED');
 		expect(row.revoked_at).toEqual(expect.any(String));
 		expect(await bindingAccountIds(live.created.shareId)).toEqual([]);
-		expect(await catchFail(shareAuthService.resolveSession(live.c, live.session.sessionToken))).toBe(UNAVAILABLE);
+		expect(await catchFail(shareAuthService.resolveSession(live.c, live.session.sessionToken))).toBe(DESTROYED);
 	});
 
 	it('A4: the hard-delete path behaves exactly like the soft-delete path', async () => {

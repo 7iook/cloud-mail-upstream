@@ -20,6 +20,10 @@ const SHARE_UNAVAILABLE = 'SHARE_UNAVAILABLE';
 // The only business code a visitor can ever tell apart from SHARE_UNAVAILABLE, and
 // only after lid+sec already matched (AC-AUTH-02).
 const SHARE_AUTH_REQUIRED = 'SHARE_AUTH_REQUIRED';
+// P4:gone(无行或 REVOKED)与「暂时不可用」是两种终局。share-api 把这个码翻成
+// 裸 404 空 body,与文档入口的浏览器原生 404 同貌;EXPIRED/错 sec 仍走
+// SHARE_UNAVAILABLE 信封。销毁本就通过文档 404 可观测,这里不再新增可探测面。
+const SHARE_DESTROYED = 'SHARE_DESTROYED';
 // 15 minutes: long enough to wait for and copy an OTP, short enough to bound
 // the same-tab sessionStorage residual after a hard navigation (AC-VISIT-12 vs 15).
 const DEFAULT_SESSION_TTL = 900;
@@ -42,6 +46,10 @@ const decoder = new TextDecoder();
 
 function throwUnavailable() {
 	throw new BizError(SHARE_UNAVAILABLE);
+}
+
+function throwDestroyed() {
+	throw new BizError(SHARE_DESTROYED, 404);
 }
 
 function throwAuthRequired() {
@@ -358,6 +366,11 @@ const RESOLVE_ALLOWED = ['ACTIVE', 'ACCESS_LIMIT_REACHED'];
 
 function assertAllowed(row, allowed) {
 	const state = effectiveStatus(row, nowText());
+	// REVOKED 先于其余判定:销毁是终态,即便行同时缺 accountId 也是 gone 而不是
+	// 「暂时不可用」——一个已持有会话的访客在 Owner 销毁后必须看到 404(P4 #4-#7)。
+	if (state === 'REVOKED') {
+		throwDestroyed();
+	}
 	if (!(row.accountId > 0) || !allowed.includes(state)) {
 		throwUnavailable();
 	}
@@ -593,8 +606,14 @@ async function establishSession(c, lid, sec, options = {}) {
 	const row = lidText
 		? await orm(c).select().from(mailShare).where(eq(mailShare.lid, lidText)).get()
 		: null;
+	// P4:gone 在 sec 之前判——销毁的链接对谁都是 404,不因 sec 对错而不同
+	// (p4-destroyed-entrypoints.md #3)。原本 matchSec 恒跑是为了不让「lid 不存在」
+	// 与「sec 错」在时序上可分,而 gone 现在本来就通过 404 可观测,该顾虑不复存在。
+	if (!row || row.status === 'REVOKED') {
+		throwDestroyed();
+	}
 	const matched = await matchSec(c, secText, row);
-	if (!row || !matched) {
+	if (!matched) {
 		throwUnavailable();
 	}
 	// ① sec already matched. ③ at least one binding account must still be live
@@ -679,7 +698,12 @@ async function resolveSession(c, sessionToken) {
 		throwUnavailable();
 	}
 	const row = await orm(c).select().from(mailShare).where(eq(mailShare.shareId, payload.shareId)).get();
-	if (!row || row.lid !== payload.lid) {
+	// 行被删 = gone(P4:一个仍有效的 token 撞上被删的行必须收到 404,不是重试提示)。
+	// lid 对不上则不是 gone —— token 与行的绑定坏了,按不可用处理。
+	if (!row) {
+		throwDestroyed();
+	}
+	if (row.lid !== payload.lid) {
 		throwUnavailable();
 	}
 	// A token minted before T-08 carries no cv and belongs to version 0, which is what

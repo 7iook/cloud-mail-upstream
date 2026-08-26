@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
     SHARE_ESTABLISH_KEY_PREFIX,
+    SHARE_GONE_KEY_PREFIX,
     SHARE_SESSION_KEY_PREFIX,
     captureShareSecret,
     clearEstablishKey,
@@ -9,9 +10,11 @@ import {
     clearShareSession,
     consumeShareSecret,
     ensureEstablishKey,
+    markShareGone,
     readShareSecretFromFragment,
     readShareSession,
     shareEstablishKey,
+    shareGoneKey,
     shareSessionKey,
     takeShareSecret,
     writeShareSession
@@ -164,5 +167,19 @@ describe('share establish key', () => {
         expect(sessionStorage.getItem('share:session:lid-a')).toBeNull()
         expect(sessionStorage.getItem('share:est-key:lid-a')).not.toBeNull()
         expect(sessionStorage.getItem('share:status:lid-a')).toBe('{"0":7}')
+    })
+
+    // P4:第一眼 gone 打标并要求 reload(生产会落到 worker 文档拦截的原生 404);
+    // 第二眼(reload 又回到 SPA = vite 直出)则要求清空文档,绝不循环。
+    it('marks a gone lid for one reload, then answers blank forever after', () => {
+        expect(shareGoneKey('lid-a')).toBe('share:gone:lid-a')
+        expect(SHARE_GONE_KEY_PREFIX).toBe('share:gone:')
+
+        expect(markShareGone('lid-a')).toBe('reload')
+        expect(sessionStorage.getItem('share:gone:lid-a')).toBe('1')
+        expect(markShareGone('lid-a')).toBe('blank')
+        expect(markShareGone('lid-a')).toBe('blank')
+        // 不同 lid 各自记账,一条销毁不连坐别的分享。
+        expect(markShareGone('lid-b')).toBe('reload')
     })
 })

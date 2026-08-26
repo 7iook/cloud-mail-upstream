@@ -22,9 +22,18 @@ test('an attachment downloads through the controlled endpoint and fails after re
 	})
 	expect(String(bytes).replace(/\s+$/g, '')).toBe(ATTACHMENT_BODY)
 
+	// P4:撤销后的下载请求撞上裸 404(SHARE_DESTROYED),SPA reload 一次并落在
+	// worker 文档拦截给出的浏览器原生 404 上,不再回 unavailable 壳。
 	await world.api.revokeShare(world.seed, share.shareId)
+	const goneDocument = page.waitForResponse((res) =>
+		res.request().resourceType() === 'document'
+		&& res.url().includes(`/s/${share.lid}`)
+		&& res.status() === 404
+	)
 	await page.locator('[data-share-attachment]').click()
-	await waitShareState(page, 'unavailable')
-	await expect(page.locator('[data-share-mail-list]')).toHaveCount(0)
-	await expect(page.locator('[data-share-code]')).toHaveCount(0)
+	const gone = await goneDocument
+	expect(await gone.text()).toBe('')
+	await page.waitForLoadState('domcontentloaded')
+	await expect(page.locator('[data-share-shell]')).toHaveCount(0)
+	await expect(page.locator('[data-share-body]')).toHaveCount(0)
 })

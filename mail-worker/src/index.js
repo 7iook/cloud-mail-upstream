@@ -7,6 +7,7 @@ import kvObjService from './service/kv-obj-service';
 import oauthService from "./service/oauth-service";
 import analysisService from './service/analysis-service';
 import mailShareCleanupService from './service/mail-share-cleanup-service';
+import { shareDocumentIfGone } from './security/share-document-gone';
 export default {
 	 async fetch(req, env, ctx) {
 
@@ -21,6 +22,13 @@ export default {
 		 if (['/static/','/attachments/'].some(p => url.pathname.startsWith(p))) {
 			 return await kvObjService.toObjResp( { env }, url.pathname.substring(1));
 		 }
+
+		// P4:销毁的分享 URL 必须在 assets 之前变成浏览器原生 404,否则 SPA 的
+		// single-page-application 兜底会对任何 /s/:lid 都回 200 + 业务壳。
+		const gone = await shareDocumentIfGone(req, env);
+		if (gone) {
+			return gone;
+		}
 
 		return env.assets.fetch(req);
 	},

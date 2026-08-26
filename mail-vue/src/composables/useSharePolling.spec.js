@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it, vi } from 'vitest'
 import { effectScope, ref } from 'vue'
-import { ShareRateLimitedError, isShareUnavailable } from '@/request/share.js'
+import { ShareGoneError, ShareRateLimitedError, isShareUnavailable } from '@/request/share.js'
 import { POLL_INTERVAL_MS, useSharePolling } from './useSharePolling.js'
 
 const SESSION = 'share-session-token'
@@ -119,6 +119,25 @@ describe('useSharePolling', () => {
     assert.equal(listShareMails.mock.calls.length, 1)
     assert.equal(session.api.unavailable.value, true)
     assert.equal(onUnavailable.mock.calls.length, 1)
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3)
+    assert.equal(listShareMails.mock.calls.length, 1)
+  })
+
+  // P4:销毁后的裸 404 与 SHARE_UNAVAILABLE 走同一个终局出口 —— 停止轮询并上报,
+  // 由页面决定 reload 还是清空文档。绝不重试:404 是终态,不是抖动。
+  it('stops polling and reports a gone link exactly once (P4 HTTP 404)', async () => {
+    const listShareMails = vi.fn(async () => {
+      throw new ShareGoneError()
+    })
+    const onUnavailable = vi.fn()
+    session = runPolling({ listShareMails, onUnavailable })
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    assert.equal(listShareMails.mock.calls.length, 1)
+    assert.equal(session.api.unavailable.value, true)
+    assert.equal(onUnavailable.mock.calls.length, 1)
+    assert.ok(onUnavailable.mock.calls[0][0] instanceof ShareGoneError)
 
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3)
     assert.equal(listShareMails.mock.calls.length, 1)
