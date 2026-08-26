@@ -655,6 +655,7 @@ describe('share view visitor mailbox', () => {
 
         const src = readFileSync(path.join(process.cwd(), 'src/views/share/index.vue'), 'utf8')
         expect(src).not.toMatch(/\.share-otp\s*\{/)
+        expect(src).toMatch(/overflow-wrap:\s*anywhere/)
     })
 })
 
@@ -1801,5 +1802,20 @@ describe('share view gone link recovery (P4)', () => {
         expect(reloadShareDocument).not.toHaveBeenCalled()
         expect(blankShareDocument).not.toHaveBeenCalled()
         expect(sessionStorage.getItem(shareGoneKey('lid-exp'))).toBeNull()
+    })
+
+    it('still reloads a gone share when sessionStorage.removeItem throws SecurityError', async () => {
+        writeShareSession('lid-gone-sec', 'tok-live')
+        const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+            throw new DOMException('blocked', 'SecurityError')
+        })
+        try {
+            createShareSession.mockRejectedValue(new ShareGoneError())
+            await mountShare('lid-gone-sec', 'sec-gone')
+            expect(reloadShareDocument).toHaveBeenCalledTimes(1)
+            expect(blankShareDocument).not.toHaveBeenCalled()
+        } finally {
+            remove.mockRestore()
+        }
     })
 })

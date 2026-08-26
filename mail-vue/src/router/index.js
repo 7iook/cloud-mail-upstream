@@ -67,6 +67,7 @@ const routes = [
     },
     {
         path: '/s/:lid',
+        alias: '/S/:lid',
         name: 'share',
         component: () => import('@/views/share/index.vue')
     },

@@ -7,7 +7,7 @@ import { SHARE_EVENT, logShareEvent } from '../service/share-event';
 
 // 恰好一段路径(可带一个尾斜杠)。/s/a/b 这类形状不是分享 URL,交回 assets ——
 // 拦截面越窄,fail-open 的敞口越小。
-const SHARE_DOC_PATH = /^\/s\/([^/]+)\/?$/;
+const SHARE_DOC_PATH = /^\/s\/([^/]+)\/?$/i;
 
 export function parseShareLidPath(pathname) {
 	const matched = SHARE_DOC_PATH.exec(pathname);

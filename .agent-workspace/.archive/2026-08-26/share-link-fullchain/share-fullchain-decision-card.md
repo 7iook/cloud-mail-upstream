@@ -385,10 +385,10 @@ NOT「接口多字段 / 组件再 list 一次 / 单测绿」，BUT Owner 刷新�
 ## 任务清单
 
 - [x] DOC 决策卡补全 Goal→Outcome 并送 `artifact-decision-card` 审查
-  - **Evidence**: verify: `review_spec.py --template artifact-decision-card --emit-prompt` → JSON ok · files: `share-fullchain-decision-card.md` + `prompt.round1.sub.txt` · AC: 3.5-lite · commit: pending
+  - **Evidence**: verify: `review_spec.py --template artifact-decision-card --emit-prompt` → JSON ok · files: `share-fullchain-decision-card.md` + `prompt.round1.sub.txt` · AC: 3.5-lite · commit: 1288ac8
   - ✅ 2026-08-26: 用 skill 模板 F/H 送审，未自造评审清单
 - [x] REV 过筛评审；P0 改方向写回本卡 Update Log
-  - **Evidence**: verify: `--import-review` → NEEDS_CHANGES p0=3 p1=4 validation.ok · files: `share-fullchain-decision-card.review1.sub.md` · AC: 过筛后改方向 · commit: pending
+  - **Evidence**: verify: `--import-review` → NEEDS_CHANGES p0=3 p1=4 validation.ok · files: `share-fullchain-decision-card.review1.sub.md` · AC: 过筛后改方向 · commit: 1288ac8
   - ✅ 2026-08-26: 三条 P0 全部改方向（批量分流 / provision SSOT / D1 batch）
 - [x] P3 删除创建后关闭确认弹窗
   - **Evidence**: verify: `pnpm -C mail-vue test` → 370 passed；e2e `owner-share-lifecycle` 关窗无 confirm → EXIT=0 · files: `ShareCreateWizard.vue` · AC: P3 · commit: fabe6e8
@@ -397,9 +397,9 @@ NOT「接口多字段 / 组件再 list 一次 / 单测绿」，BUT Owner 刷新�
 - [x] P2 `emails[]` + `mailbox-provision.js` + V2=false 批量 N 条单分享 + API 文档 deprecated
   - **Evidence**: verify: worker 854 passed（含 `mail-share-emails.spec.js`）；e2e 粘贴两地址出两条链接 → EXIT=0 · files: `mailbox-provision.js` `mail-share-service.js` 向导 · AC: P2 · commit: fabe6e8
 - [x] P4 销毁/不存在 → 原生 404（文档+API+已打开 SPA+浏览器导航验收）
-  - **Evidence**: verify: e2e visitor-unavailable/revoke-live status 404 空 body → 23 passed · files: `share-document-gone.js` `index.js` `share-auth-service.js` · AC: P4 · commit: d602ec6
+  - **Evidence**: verify: e2e visitor-unavailable/revoke-live status 404 空 body → 23 passed · files: `share-document-gone.js` `index.js` `share-auth-service.js` `mail-vue/src/views/share/index.vue`（`handleShareGone` SPA 出口） · AC: P4 · commit: d602ec6（worker/API）+ e309ad4（已打开 SPA 接线）
 - [x] P5 按 UI 设计卡改访客视觉（桌面+移动验收）
-  - **Evidence**: verify: visitor specs 绿；截图 desktop 1280 / mobile 390 · files: `views/share/index.vue` `ShareOtpCard.vue` · AC: P5 · commit: e309ad4
+  - **Evidence**: verify: visitor specs 绿；截图 desktop 1280 / mobile 390 → `.agent-workspace/review-ledger/runs/2026-08-26-r1/artifacts/ui-t6-desktop-1280.webp` / `ui-t6-mobile-390.webp` · files: `views/share/index.vue` `ShareOtpCard.vue` · AC: P5 · commit: e309ad4
 - [x] SPEC shipped spec dated changelog（AC-VISIT-04 / AC-LIFE-08 Owner 展示 / create emails / 批量分流）
   - **Evidence**: files: `docs/specs/mail-share/*` `docs/specs/mailbox-share-capability/*` · commit: 82f330e
 - [x] VERIFY 五条成功状态各至少一条真实入口→sink 验收；环境不可用必须写 Evidence 阻塞原因，禁止静默跳过 e2e
@@ -419,3 +419,4 @@ NOT「接口多字段 / 组件再 list 一次 / 单测绿」，BUT Owner 刷新�
 - 2026-08-26 · R1 · DC-P1-4 「能跑则 e2e」 → **采纳**：VERIFY 改为五条 sink 必做，跳过必须写 Evidence。
 - 2026-08-26 · 落地决定改为 **立即开发**；P0 已在文档侧闭合。
 - 2026-08-26 · executor 按审后正文 TDD 落地；主调度独立复跑 worker 854 / vue 370 / e2e 23 全绿后勾任务清单。
+- 2026-08-26 · git-review-sweep 2026-08-26-r1：P4 Evidence 补 `e309ad4` SPA 接线；DOC/REV commit 回写 `1288ac8`；P5 截图落入 review-ledger artifacts。

@@ -52,7 +52,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 
 #### Acceptance Criteria (EARS)
 
-- [AC-CAP-01] WHEN Owner 携带一个或多个 `accountId` 请求创建分享, THE MailShareService SHALL 创建一条 `mail_share` 行与每个邮箱各一条 `mail_share_binding` 行,并返回完整 Share URL(`/s/<lid>#<sec>`)。
+- [AC-CAP-01] {amended: 2026-08-26, by: share-fullchain P2} WHEN Owner 携带一个或多个 `accountId`，或非空 `emails[]`（完整地址，服务端 find-or-create）请求创建分享, THE MailShareService SHALL 创建对应的 `mail_share` 行与每个邮箱各一条 `mail_share_binding` 行,并返回完整 Share URL(`/s/<lid>#<sec>`)。`emails[]` 格式/前缀不合规 → `SHARE_EMAIL_INVALID`；域名未配置 → `SHARE_DOMAIN_NOT_CONFIGURED`；账号侧不可用 → `SHARE_ACCOUNT_FORBIDDEN`。~~原文：WHEN Owner 携带一个或多个 `accountId` 请求创建分享~~
 - [AC-CAP-02] THE MailShareService SHALL 将 `share_type` 作为实时派生值(**不持久化**):由现存 Binding 计数派生,恰一条 → `single`,多于一条 → `multi`,0 条 → 分享已进入撤销路径;Owner/Visitor 响应中的 `shareType` SHALL 每次由 Binding 计数计算,单/多邮箱 SHALL 共用同一 `mail_share` + `mail_share_binding` 数据模型,`mail_share_binding` SHALL 为该类型的唯一真源。
 - [AC-CAP-03] IF 请求中任一 `accountId` 不属于当前 Owner 或已被删除, THEN THE MailShareService SHALL 拒绝创建整条分享并返回 `SHARE_ACCOUNT_FORBIDDEN`,SHALL NOT 留下部分 Binding。
 - [AC-CAP-04] THE MailShareService SHALL 沿用 mail-share 的凭据规格:CSPRNG 生成 `lid`(128-bit)与 `sec`(256-bit),`sec` 只以 `HMAC-SHA256(sec, PEPPER[pepper_kid])` 存库且明文仅创建响应返回一次。

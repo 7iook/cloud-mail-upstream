@@ -51,6 +51,7 @@ describe('share route guard and session lifecycle', () => {
 
         expect(share).toBeTruthy()
         expect(share.path).toBe('/s/:lid')
+        expect(router.resolve('/S/lid-alias').name).toBe('share')
         expect(layout.children.map((child) => child.name)).not.toContain('share')
         expect(share.parent && share.parent.name).not.toBe('layout')
     })
@@ -60,6 +61,13 @@ describe('share route guard and session lifecycle', () => {
 
         expect(router.currentRoute.value.name).toBe('share')
         expect(router.currentRoute.value.params.lid).toBe('lid-visit')
+    })
+
+    it('aliases /S/:lid onto the share route so the worker gone check is not skipped', async () => {
+        await go('/S/lid-upper')
+
+        expect(router.currentRoute.value.name).toBe('share')
+        expect(router.currentRoute.value.params.lid).toBe('lid-upper')
     })
 
     it('still sends an anonymous visitor to login for inbox', async () => {

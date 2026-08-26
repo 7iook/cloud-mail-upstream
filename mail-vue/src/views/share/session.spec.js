@@ -182,4 +182,16 @@ describe('share establish key', () => {
         // 不同 lid 各自记账,一条销毁不连坐别的分享。
         expect(markShareGone('lid-b')).toBe('reload')
     })
+
+    it('does not throw when sessionStorage refuses to clear (SecurityError)', () => {
+        const remove = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+            throw new DOMException('blocked', 'SecurityError')
+        })
+        try {
+            expect(() => clearShareSession('lid-a')).not.toThrow()
+            expect(() => clearEstablishKey('lid-a')).not.toThrow()
+        } finally {
+            remove.mockRestore()
+        }
+    })
 })

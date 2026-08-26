@@ -16,7 +16,7 @@ export function detectPreferredLang(storedLang, navigatorLanguage = '') {
 }
 
 export function isAnonymousShareVisit(pathname = '', token = '') {
-    return !token && /(?:^|\/)s\/[^/]+/.test(String(pathname || ''))
+    return !token && /(?:^|\/)s\/[^/]+/i.test(String(pathname || ''))
 }
 
 export async function init() {

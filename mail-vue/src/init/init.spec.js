@@ -44,6 +44,12 @@ describe('anonymous share bootstrap isolation', () => {
         expect(websiteConfig).not.toHaveBeenCalled()
     })
 
+    it('treats /S/:lid as an anonymous share visit (case-insensitive path)', async () => {
+        window.history.replaceState(window.history.state, '', '/S/lid-visit')
+        await expect(init()).resolves.toBeUndefined()
+        expect(websiteConfig).not.toHaveBeenCalled()
+    })
+
     it('still rejects anonymous login startup when websiteConfig fails', async () => {
         window.history.replaceState(window.history.state, '', '/login')
         await expect(init()).rejects.toThrow('websiteConfig down')

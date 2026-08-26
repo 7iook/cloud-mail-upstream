@@ -4,7 +4,7 @@ import { SEC_CIPHER_FAILURE, decryptShareSec, encryptShareSec, probeKek } from '
 import { toUtc } from '../utils/date-uitil';
 import { SHARE_EVENT, logShareEvent } from './share-event';
 import shareAuthService from './share-auth-service';
-import { PROVISION_DENIED, planMailboxProvision, prepareAccountInsert } from './mailbox-provision';
+import { PROVISION_DENIED, accountQuotaPredicateBinds, accountQuotaPredicateSql, planMailboxProvision, prepareAccountInsert, resolveNonAdminAccountQuota } from './mailbox-provision';
 
 const CREATE_OP = 'create';
 // `share_idempotency` 的唯一键含 `operation`,所以两个写入口可以共用同一把 Idempotency-Key
@@ -335,6 +335,10 @@ function isUniqueConflict(err) {
 	return /UNIQUE constraint failed/i.test(String(err && err.message || err));
 }
 
+function isPartialInsert(err) {
+	return /SHARE_PARTIAL_INSERT/i.test(String(err && err.message || err));
+}
+
 function placeholders(list) {
 	return list.map(() => '?').join(', ');
 }
@@ -616,11 +620,11 @@ async function readIdempotency(c, userId, idempotencyKey, operation) {
 
 // AC-CAP-14:重放补齐 shareType/bindings,但 sec 与 AuthKey 明文一个字符都不给。
 // Binding 计数用 LEFT JOIN 顺带取回,不比原来多一次往返。
-async function replayFromIdempotency(c, row) {
+async function replayFromIdempotency(c, row, userId) {
 	// P2 批量重放:response_fingerprint 里存的是当初那一批的 lid 清单。
 	const lids = batchReplayLids(row);
 	if (lids) {
-		return replayBatchFromLids(c, lids);
+		return replayBatchFromLids(c, lids, userId);
 	}
 	const found = await c.env.db.prepare(`
 		SELECT ms.share_id, ms.lid, ms.expires_at, b.binding_id, b.account_id
@@ -659,17 +663,21 @@ function batchReplayLids(row) {
 }
 
 // 与单条重放同一契约:sec/shareUrl 一个字符都不给,行没了(保留期清理)就整单 NOT_FOUND。
-async function replayBatchFromLids(c, lids) {
+async function replayBatchFromLids(c, lids, userId) {
 	const found = await c.env.db.prepare(`
 		SELECT ms.share_id, ms.lid, ms.expires_at, a.email AS mailbox, b.binding_id, b.account_id
 		FROM mail_share ms
 		LEFT JOIN mail_share_binding b ON b.share_id = ms.share_id
 		LEFT JOIN account a ON a.account_id = ms.account_id
-		WHERE ms.lid IN (SELECT value FROM json_each(?))
+		WHERE ms.user_id = ? AND ms.lid IN (SELECT value FROM json_each(?))
 		ORDER BY ms.share_id ASC, b.binding_id ASC
-	`).bind(JSON.stringify(lids)).all();
+	`).bind(userId, JSON.stringify(lids)).all();
 	const rows = found.results || [];
 	if (!rows.length) {
+		throw new BizError('SHARE_NOT_FOUND');
+	}
+	const foundLids = new Set(rows.map((item) => item.lid));
+	if (foundLids.size !== lids.length || lids.some((lid) => !foundLids.has(lid))) {
 		throw new BizError('SHARE_NOT_FOUND');
 	}
 	const byShare = new Map();
@@ -701,7 +709,7 @@ async function replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, ope
 	if (!accepted.includes(existing.request_fingerprint)) {
 		throw new BizError('SHARE_IDEMPOTENCY_CONFLICT');
 	}
-	return replayFromIdempotency(c, existing);
+	return replayFromIdempotency(c, existing, userId);
 }
 
 // 主表 `account_id` 与 `window_start_email_id` 都写 accountIds[0] 的口径 —— 升序去重后的首个
@@ -890,6 +898,18 @@ function prepareShareInsertByEmails(c, values) {
 		values.userId,
 		values.emailCount
 	);
+}
+
+// 0 行 INSERT 在 D1 里不算失败,不会触发 batch 回滚。末尾用 RAISE(ABORT) 把
+// 「minted lids 必须全部落库」变成语句错误,这样缺一条就整批回滚(AC-SHARE-12)。
+function prepareShareBatchComplete(c, lids) {
+	return c.env.db.prepare(`
+		SELECT CASE
+			WHEN (SELECT COUNT(*) FROM mail_share WHERE lid IN (SELECT value FROM json_each(?))) = ?
+			THEN 1
+			ELSE RAISE(ABORT, 'SHARE_PARTIAL_INSERT')
+		END AS ok
+	`).bind(JSON.stringify(lids), lids.length);
 }
 
 // `prepareBindingInsert` 的邮箱定位孪生,谓词结构(matched 全有或全无 + 空快照 +
@@ -1253,10 +1273,20 @@ async function createFromEmails(c, body, params, userId) {
 	// batch 内状态冻结,所以第 i 条 share 看到 base+i 条活跃行;把余量折进各自的绑定值,
 	// 「base + N ≤ limit」对所有语句是同一个判定 —— 全有或全无,不会插一半。
 	// account INSERT 同带这条余量守卫:限额竞态下 share 零行时 account 也零行,不留孤儿。
-	const accountGuardSql = ` AND (
+	// account 配额谓词与分享限额同形:COUNT + missing.length <= role.accountCount。
+	const accountGuardParts = [` AND (
 			SELECT COUNT(*) FROM mail_share
 			WHERE user_id = ? AND status = 'ACTIVE' AND expires_at > ?
-		) < ?`;
+		) < ?`];
+	const accountGuardBinds = [userId, createdAt, limit - (groups.length - 1)];
+	if (plan.missing.length) {
+		const accountCount = await resolveNonAdminAccountQuota(c, userId);
+		if (accountCount != null) {
+			accountGuardParts.push(accountQuotaPredicateSql());
+			accountGuardBinds.push(...accountQuotaPredicateBinds(userId, plan.missing.length, accountCount));
+		}
+	}
+	const accountGuardSql = accountGuardParts.join('');
 	for (let attempt = 0; ; attempt += 1) {
 		const statements = [];
 		if (idempotencyKey) {
@@ -1267,7 +1297,7 @@ async function createFromEmails(c, body, params, userId) {
 				email,
 				userId,
 				guardSql: accountGuardSql,
-				guardBinds: [userId, createdAt, limit - (groups.length - 1)]
+				guardBinds: accountGuardBinds
 			}));
 		}
 		const shareIndexes = [];
@@ -1310,6 +1340,7 @@ async function createFromEmails(c, body, params, userId) {
 			}));
 			statements.push(syncPrimaryAccountId(c, { lid: item.lid }));
 		});
+		statements.push(prepareShareBatchComplete(c, minted.map((item) => item.lid)));
 		if (idempotencyKey) {
 			statements.push(prepareIdempotencyInsert(c, idemValues));
 		}
@@ -1335,6 +1366,16 @@ async function createFromEmails(c, body, params, userId) {
 					plan = await planShareMailboxes(c, body.emails, userId);
 					continue;
 				}
+			}
+			if (isPartialInsert(err)) {
+				const replay = idempotencyKey
+					? await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, CREATE_OP)
+					: null;
+				if (replay) {
+					return replay;
+				}
+				await planShareMailboxes(c, body.emails, userId);
+				throw new BizError('SHARE_LIMIT_EXCEEDED');
 			}
 			throw err;
 		}

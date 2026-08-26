@@ -144,17 +144,18 @@ export async function planMailboxProvision(c, { emails, userId, requireNew = fal
 		// 与设置页同一条豁免:admin 不受配额与域名白名单约束。
 		if (userRow.email !== c.env.admin) {
 			const roleRow = await roleService.selectById(c, userRow.type);
-			if (roleRow && roleRow.accountCount > 0) {
+			if (!roleRow) {
+				deny(PROVISION_DENIED.QUOTA_EXCEEDED, { limit: 0 });
+			}
+			if (roleRow.accountCount > 0) {
 				const owned = await countOwnedMailboxes(c, userId);
 				if (owned + missing.length > roleRow.accountCount) {
 					deny(PROVISION_DENIED.QUOTA_EXCEEDED, { limit: roleRow.accountCount });
 				}
 			}
-			if (roleRow) {
-				for (const email of missing) {
-					if (!roleService.hasAvailDomainPerm(roleRow.availDomain, email)) {
-						deny(PROVISION_DENIED.DOMAIN_NOT_PERMITTED, { email });
-					}
+			for (const email of missing) {
+				if (!roleService.hasAvailDomainPerm(roleRow.availDomain, email)) {
+					deny(PROVISION_DENIED.DOMAIN_NOT_PERMITTED, { email });
 				}
 			}
 		}
@@ -207,4 +208,37 @@ export async function provisionMailbox(c, { email, userId }) {
 		sort: row.sort,
 		isDel: row.is_del
 	};
+}
+
+/**
+ * 非管理员的 account 配额上限。admin 与 accountCount<=0（角色未设上限）返回 null，
+ * 调用方不得注入配额谓词。role 行缺失 fail-closed（与 planMailboxProvision 同一条）。
+ */
+export async function resolveNonAdminAccountQuota(c, userId) {
+	const userRow = await userService.selectById(c, userId);
+	if (!userRow) {
+		throw new BizError(t('authExpired'), 401);
+	}
+	if (userRow.email === c.env.admin) {
+		return null;
+	}
+	const roleRow = await roleService.selectById(c, userRow.type);
+	if (!roleRow) {
+		deny(PROVISION_DENIED.QUOTA_EXCEEDED, { limit: 0 });
+	}
+	if (!(roleRow.accountCount > 0)) {
+		return null;
+	}
+	return roleRow.accountCount;
+}
+
+export function accountQuotaPredicateSql() {
+	return ` AND (
+			SELECT COUNT(*) FROM account
+			WHERE user_id = ? AND is_del = ${isDel.NORMAL}
+		) < ?`;
+}
+
+export function accountQuotaPredicateBinds(userId, missingCount, accountCount) {
+	return [userId, accountCount - (missingCount - 1)];
 }

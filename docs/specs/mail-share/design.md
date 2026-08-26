@@ -189,12 +189,12 @@ Visitor 侧（公开，精确路径）：
 | **验证** | 每请求：验签 → 查 `mail_share` 行 → 重算 `effectiveStatus` → 校验 account 仍有效 → 构建 `ShareContext` |
 | **重放** | 无 refresh；过期 token **不得**换新 token。过期后须重新 `POST /share/session` 提交 `lid`+`sec`。fragment 已从 URL 清除，故客户端须在**页面内存**保留 `sec`（不得写入 `sessionStorage`），或访问者重新打开含 `#<sec>` 的原链接。Share 行仍 `ACTIVE` 时该路径必须能建立新会话，不得因 fragment 已清而死结 |
 | **撤销** | 无服务端 session 表；撤销由 Share 行状态驱动，验签后立即查库即可 |
-| **失败响应** | 鉴权/过期/销毁/凭据错/超窗/功能关：统一 `SHARE_UNAVAILABLE` + JSON 形状（P-AUTH-01）。**HTTP 429 + `Retry-After`** 为独立运输层错误（P-TRANS-01），不属于 P-AUTH-01 集合 |
+| **失败响应** | gone（无行 / `REVOKED`）：裸 HTTP 404 空 body，内部码 `SHARE_DESTROYED` **不**出现在响应体。过期 / 凭据错 / 超窗 / 功能关 / 死账号：统一 `SHARE_UNAVAILABLE` + JSON 形状（P-AUTH-01）。**HTTP 429 + `Retry-After`** 为独立运输层错误（P-TRANS-01），不属于 P-AUTH-01 集合 |
 | **密钥轮换** | 环境变量 `SHARE_SESSION_SIGNING_KEY` + `kid`；支持双 key 验签窗口（新旧并行 ≤7 天） |
 
 **已知限制（AC-VISIT-12 与 AC-VISIT-15）**：硬导航不跑 Vue 守卫，`sessionStorage` token 会留给同 tab 下一个同源页。`pagehide` 不是修复——刷新也会触发，而 AC-VISIT-12 依赖刷新后仍能读到该 token（fragment 已清）。用户 2026-08-17 裁决：接受该残留，用 15 分钟绝对 TTL 封顶窗口。残留范围 = 同 tab + 同源 + ≤TTL；token 只授予访问者已经用完整链接换到的只读能力。
 
-错误码（稳定注册表）：`SHARE_UNAVAILABLE`（Visitor 不可区分：不存在/过期/销毁/凭据错/超窗/功能关）、`SHARE_ACCOUNT_FORBIDDEN`、`SHARE_DURATION_EXCEEDED`、`SHARE_LIMIT_EXCEEDED`、`SHARE_IDEMPOTENCY_CONFLICT`（同 Key 异请求体）、`SHARE_NOT_FOUND`（仅 Owner 侧）、`SHARE_FORBIDDEN`（缺 `share:manage`）、`SHARE_DISABLED`（Owner 创建时功能关闭）。**HTTP 429** 为运输层响应，**不**映射为 `SHARE_UNAVAILABLE`。
+错误码（稳定注册表）：`SHARE_UNAVAILABLE`（Visitor 族内不可区分：过期/凭据错/超窗/功能关/死账号）、`SHARE_DESTROYED`（内部码，gone 翻成裸 HTTP 404，**禁止**出现在响应体）、`SHARE_ACCOUNT_FORBIDDEN`、`SHARE_EMAIL_INVALID`（create `emails[]` 格式/前缀）、`SHARE_DOMAIN_NOT_CONFIGURED`（create `emails[]` 域名未配置）、`SHARE_DURATION_EXCEEDED`、`SHARE_LIMIT_EXCEEDED`、`SHARE_IDEMPOTENCY_CONFLICT`（同 Key 异请求体）、`SHARE_NOT_FOUND`（仅 Owner 侧）、`SHARE_FORBIDDEN`（缺 `share:manage`）、`SHARE_DISABLED`（Owner 创建时功能关闭）。**HTTP 429** 为运输层响应，**不**映射为 `SHARE_UNAVAILABLE`。
 
 ### Link table (§0.16)
 
@@ -408,7 +408,7 @@ R2 原文写的是 `PUT`，落地改用 **`POST`**：与 `resetAuthKey` 同理�
 | AC-VISIT-01 | `GET /s/<lid>` 响应体不含任何邮件字段 | E |
 | AC-VISIT-02 | `GET /s/<lid>` 前后对比 `access_count` 与 `last_access_at` 未变 | I |
 | AC-VISIT-03 | 篡改 `sec` 一个字符 → 拒绝；比较走常量时间 API（代码级断言调用点） | I |
-| AC-VISIT-04 | 四种非法输入（不存在/错 sec/过期/已销毁）响应逐字节相同 | P |
+| AC-VISIT-04 | gone（无行/`REVOKED`）文档与访客 API 裸 HTTP 404 空 body；族内 unavailable（错 sec/过期/功能关/死账号）响应逐字节相同 | P |
 | AC-VISIT-05 | 窗口前邮件与他邮箱邮件均不出现在列表中 | I |
 | AC-VISIT-06 | 响应键集合恒等于白名单（P-PROJ-01） | P |
 | AC-VISIT-07 | 建会话后销毁分享，再取列表 → `SHARE_UNAVAILABLE` | I |
@@ -423,7 +423,7 @@ R2 原文写的是 `PUT`，落地改用 **`POST`**：与 `resetAuthKey` 同理�
 | AC-VISIT-16 | 收件中间态（`status=SAVING` 或非 NORMAL `is_del`）不出现在列表/详情 | I |
 | AC-LIFE-01 | 把 `expires_at` 改为过去且不跑 cron，立即访问 → 拒绝（P-LIFE-01） | I |
 | AC-LIFE-02 | 销毁后断言 `status='REVOKED'` 且 `revoked_at` 非空 | I |
-| AC-LIFE-03 | 销毁后访问 → `SHARE_UNAVAILABLE` | I |
+| AC-LIFE-03 | 销毁后访问 → 裸 HTTP 404（gone），不是 `SHARE_UNAVAILABLE` | I |
 | AC-LIFE-04 | 对已销毁记录尝试延期/重新启用 → 被拒且状态未变 | I |
 | AC-LIFE-05 | {status: active, by: 2026-08-25-T-20a} regenerate 凭据轮换：新 lid/sec + cv+1 使在途会话失效,`expires_at` 与 Visible Window 不变 | U+I |
 | AC-LIFE-06 | 断言 `delete_at > expires_at` | U |
@@ -577,7 +577,7 @@ For any 直接传入 `shareMailService.project()` 的 `emailRow`（绕过 reposi
 
 ### P-AUTH-01: 失败不可区分
 
-For any 非法输入组合（`lid` 不存在 / `sec` 错误 / 已过期 / 已销毁 / 超窗 / 功能关），THE ShareAuthService SHALL 返回完全相同的错误码与响应形状。**HTTP 429 限速不属于本性质集合**（见 P-TRANS-01）。
+For any **族内**非法输入组合（`sec` 错误 / 已过期 / 超窗 / 功能关 / 死账号），THE ShareAuthService SHALL 返回完全相同的错误码与响应形状 `SHARE_UNAVAILABLE`。**不存在或已销毁（gone）不在本集合**：文档 `GET|HEAD /s/:lid` 与全部访客 API 返回裸 HTTP 404 空 body，内部错误码 `SHARE_DESTROYED` SHALL NOT 出现在响应体（AC-VISIT-04 revised 2026-08-26）。**HTTP 429 限速不属于本性质集合**（见 P-TRANS-01）。
 
 **Validates: AC-VISIT-04, AC-VISIT-09**
 
@@ -751,7 +751,7 @@ R3 当初把 `regenerate` 移出本期，理由是「revoke + create 已覆盖�
 - 入口全量收口：文档 `GET|HEAD /s/:lid` 由 `mail-worker/src/security/share-document-gone.js` 在 `env.assets.fetch` **之前**拦截；访客 API 由 `throwDestroyed()`（`BizError('SHARE_DESTROYED', 404)`）+ `withShare` 翻成裸 404；已打开 SPA 由 `ShareGoneError` + `share:gone:<lid>` 单次 reload 落到文档拦截（vite 直出环境清空 document 兜底防循环）。gone-check DB 失败 **fail-open** 到 assets 并打 `share.system.error`（reason=`gone-check-failed`）；正常 404 是成功态，不打事件。
 - 测试契约同步：`visitor-unavailable.spec.js` 拆为「gone 原生 404 / EXPIRED 仍 SPA」两族；`visitor-revoke-live.spec.js` 改为撤销后 reload 落原生 404；`visitor-headers.spec.js` 改打活链接；worker/vue 各 spec 中「销毁仍回 `SHARE_UNAVAILABLE` 信封」的断言按新口径重写。
 
-**P1 · 局部修订 Owner 展示纪律（AC-LIFE-08 行内 amended）**：Owner 展示侧由「只信 API `effectiveStatus`」改为 `liveEffectiveStatus(row, nowMs)`（`mail-vue/src/views/share/status.js` + `use-share-clock`），页面停留跨过 `expiresAt` 或刷新即翻 `EXPIRED`，不再要求重新登录；鉴权与写入仍以服务端每请求实时计算为唯一真源。
+**P1 · 局部修订 Owner 展示纪律（AC-LIFE-08 行内 amended）**：Owner 展示侧由「只信 API `effectiveStatus`」改为 `liveEffectiveStatus(row, nowMs)`（`mail-vue/src/views/share-admin/status.js` + `use-share-clock`），页面停留跨过 `expiresAt` 或刷新即翻 `EXPIRED`，不再要求重新登录；鉴权与写入仍以服务端每请求实时计算为唯一真源。
 
 ### 2026-08-17 · T-02 D1 事务探测 + spec 漂移修正（executor · 文档波）
 

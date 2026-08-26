@@ -595,8 +595,10 @@ function applyPreset(presetId) {
 
 function openDialog() {
   visible.value = true
+  if (unknownResult.value) {
+    return
+  }
   created.value = null
-  unknownResult.value = false
   formError.value = ''
   form.name = ''
   form.remark = ''
@@ -608,7 +610,6 @@ function openDialog() {
 function closeNow() {
   visible.value = false
   created.value = null
-  unknownResult.value = false
   formError.value = ''
 }
 
@@ -624,6 +625,7 @@ function onOpenChange(value) {
   // No second "shown only once" confirm on close: the link is retrievable from the detail
   // drawer (ADR-share-credential-recoverability), and the auth key already carries its own
   // one-shot warning inside the result pane.
+  // unknownResult 必须保留：AC-CAP-14 禁止关窗后换 Idempotency-Key 盲建。
   closeNow()
 }
 

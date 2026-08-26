@@ -358,6 +358,26 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / P2 emails)', () => 
         expect(keyAt(1)).toBe(keyAt(0))
     })
 
+    it('does not rotate the idempotency key when an unknown-result dialog is closed and reopened (AC-CAP-14)', async () => {
+        createMailShare.mockRejectedValueOnce(transportFailure())
+        const wrapper = await openWizard()
+        await fillEmails(wrapper)
+        await submit(wrapper)
+        const firstKey = keyAt(0)
+
+        await wrapper.get('[data-test="wizard-close"]').trigger('click')
+        await flushPromises()
+        await wrapper.get('[data-test="wizard-open"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="wizard-unknown"]').exists()).toBe(true)
+        await wrapper.get('[data-test="wizard-retry"]').trigger('click')
+        await flushPromises()
+
+        expect(createMailShare).toHaveBeenCalledTimes(2)
+        expect(keyAt(1)).toBe(firstKey)
+    })
+
     // W5
     it('keeps the form editable on a business reject and only then rotates the key', async () => {
         createMailShare.mockRejectedValueOnce({ code: 500, message: 'SHARE_DURATION_EXCEEDED' })

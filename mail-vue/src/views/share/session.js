@@ -17,25 +17,37 @@ function hasLid(lid) {
     return lid !== undefined && lid !== null && String(lid) !== ''
 }
 
+function storageCall(fn, fallback) {
+    try {
+        return fn()
+    } catch {
+        return fallback
+    }
+}
+
 export function readShareSession(lid) {
     if (!hasLid(lid)) {
         return ''
     }
-    return sessionStorage.getItem(shareSessionKey(lid)) || ''
+    return storageCall(() => sessionStorage.getItem(shareSessionKey(lid)) || '', '')
 }
 
 export function writeShareSession(lid, token) {
     if (!hasLid(lid) || typeof token !== 'string' || token === '') {
         return
     }
-    sessionStorage.setItem(shareSessionKey(lid), token)
+    storageCall(() => {
+        sessionStorage.setItem(shareSessionKey(lid), token)
+    })
 }
 
 export function clearShareSession(lid) {
     if (!hasLid(lid)) {
         return
     }
-    sessionStorage.removeItem(shareSessionKey(lid))
+    storageCall(() => {
+        sessionStorage.removeItem(shareSessionKey(lid))
+    })
 }
 
 // Written before the request goes out, so a lost response replays under the same
@@ -47,14 +59,16 @@ export function ensureEstablishKey(lid) {
         return ''
     }
     const storageKey = shareEstablishKey(lid)
-    const existing = sessionStorage.getItem(storageKey)
+    const existing = storageCall(() => sessionStorage.getItem(storageKey), '')
     if (existing) {
         return existing
     }
     const bytes = new Uint8Array(16)
     crypto.getRandomValues(bytes)
     const key = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-    sessionStorage.setItem(storageKey, key)
+    storageCall(() => {
+        sessionStorage.setItem(storageKey, key)
+    })
     return key
 }
 
@@ -62,20 +76,27 @@ export function clearEstablishKey(lid) {
     if (!hasLid(lid)) {
         return
     }
-    sessionStorage.removeItem(shareEstablishKey(lid))
+    storageCall(() => {
+        sessionStorage.removeItem(shareEstablishKey(lid))
+    })
 }
 
 export function clearOtherShareSessions(keepLid) {
     const keep = hasLid(keepLid) ? shareSessionKey(keepLid) : ''
-    const remove = []
-    for (let i = 0; i < sessionStorage.length; i++) {
-        const key = sessionStorage.key(i)
-        if (key && key.startsWith(SHARE_SESSION_KEY_PREFIX) && key !== keep) {
-            remove.push(key)
+    const remove = storageCall(() => {
+        const keys = []
+        for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i)
+            if (key && key.startsWith(SHARE_SESSION_KEY_PREFIX) && key !== keep) {
+                keys.push(key)
+            }
         }
-    }
+        return keys
+    }, [])
     for (const key of remove) {
-        sessionStorage.removeItem(key)
+        storageCall(() => {
+            sessionStorage.removeItem(key)
+        })
     }
 }
 

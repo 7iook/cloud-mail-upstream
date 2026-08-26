@@ -85,6 +85,12 @@ describe('P4 · document GET|HEAD /s/:lid before assets', () => {
 		expect(response.headers.get('Cache-Control')).toBe('no-store');
 	});
 
+	it('answers uppercase /S/:lid the same as /s/:lid (SPA alias must not skip gone)', async () => {
+		const response = await SELF.fetch('http://example.com/S/p4-never-existed');
+		expect(response.status).toBe(404);
+		expect(await response.text()).toBe('');
+	});
+
 	it('answers HEAD on a missing lid with 404', async () => {
 		const response = await SELF.fetch('http://example.com/s/p4-never-existed', { method: 'HEAD' });
 		expect(response.status).toBe(404);
@@ -122,6 +128,8 @@ describe('P4 · shareDocumentIfGone unit contract', () => {
 		expect(parseShareLidPath('/s')).toBe('');
 		expect(parseShareLidPath('/share/abc')).toBe('');
 		expect(parseShareLidPath('/s/a/b')).toBe('');
+		expect(parseShareLidPath('/S/abc123')).toBe('abc123');
+		expect(parseShareLidPath('/S/abc123/')).toBe('abc123');
 		expect(parseShareLidPath('/')).toBe('');
 	});
 

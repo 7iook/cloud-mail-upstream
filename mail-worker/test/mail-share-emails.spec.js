@@ -333,6 +333,25 @@ describe('mailShareService.create with emails[] (P2)', () => {
 		expect((await accountRows('p2-not-allowed@%')).length).toBe(0);
 	});
 
+	it('refuses to provision when the owner has no role row (fail-closed)', async () => {
+		await seedUser({ userId: USER_A, email: MAIL_OWNER_A, type: 909999 });
+		try {
+			await planMailboxProvision({ env: shareEnv() }, {
+				emails: ['p2-norole@example.com'],
+				userId: USER_A
+			});
+			throw new Error('expected ProvisionDenied');
+		} catch (err) {
+			expect(err).toBeInstanceOf(ProvisionDenied);
+			expect(err.reason).toBe(PROVISION_DENIED.QUOTA_EXCEEDED);
+		}
+		const message = await catchBiz(mailShareService.create(ctx(), createParams({
+			emails: ['p2-norole@example.com']
+		}), USER_A));
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect((await accountRows('p2-norole@%')).length).toBe(0);
+	});
+
 	it('replays a V2=false batch as shares[] without any plaintext sec', async () => {
 		await seedOwner();
 		const params = createParams({
@@ -352,6 +371,21 @@ describe('mailShareService.create with emails[] (P2)', () => {
 			expect(share.shareUrl).toBeUndefined();
 		}
 		expect((await shareRows(USER_A)).length).toBe(2);
+	});
+
+	it('does not treat a truncated batch as an idempotent replay', async () => {
+		await seedOwner();
+		const params = createParams({
+			emails: ['p2-partial-a@example.com', 'p2-partial-b@example.com'],
+			idempotencyKey: 'p2-partial-replay-key'
+		});
+		const first = await mailShareService.create(ctx(), params, USER_A);
+		const dropped = first.shares[1].lid;
+		await env.db.prepare('DELETE FROM mail_share_binding WHERE share_id IN (SELECT share_id FROM mail_share WHERE lid = ?)').bind(dropped).run();
+		await env.db.prepare('DELETE FROM mail_share WHERE lid = ?').bind(dropped).run();
+
+		const message = await catchBiz(mailShareService.create(ctx(), params, USER_A));
+		expect(message).toBe('SHARE_NOT_FOUND');
 	});
 
 	it('keeps an empty emails array out of the fingerprint (rolling-deploy compat)', async () => {

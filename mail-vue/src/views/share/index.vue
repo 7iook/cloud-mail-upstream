@@ -789,7 +789,16 @@ function showDeadShare(err) {
 function handleShareGone(err) {
     polling.stop()
     logShareFailure(err)
-    clearMailboxView()
+    try {
+        clearMailboxView()
+    } catch {
+        sessionToken.value = ''
+        mailbox.value = ''
+        mails.value = []
+        selectedId.value = ''
+        rateLimited.value = false
+        expiresAt.value = ''
+    }
     if (markShareGone(currentLid()) === 'reload') {
         reloadShareDocument()
         return
@@ -1133,6 +1142,7 @@ defineExpose({
     min-height: 100%;
     padding: 32px 16px 48px;
     box-sizing: border-box;
+    overflow-x: hidden;
     background: var(--sh-bg);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     color: var(--sh-text);
@@ -1420,6 +1430,15 @@ defineExpose({
 .share-list button[aria-current="true"] {
     border-color: var(--sh-accent);
     background: var(--sh-accent-soft);
+}
+
+.share-list-from,
+.share-from,
+.share-detail h2,
+.share-atts button,
+.share-list button span {
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .share-list-from,
