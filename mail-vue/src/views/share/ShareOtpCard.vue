@@ -143,35 +143,51 @@ async function copyCode() {
 </script>
 
 <style scoped>
+/* P5 · UI 设计卡:P0 信息 = OTP 大字 + 复制。token 继承自 .share-shell,
+   fallback 值与设计卡一致,组件单独渲染时形状不变。 */
 .share-otp {
     position: relative;
     margin: 24px 0;
-    padding: 16px;
-    border: 1px solid #d0d7de;
-    border-radius: 8px;
-    background: #f6f8fa;
+    padding: 20px;
+    border: 1px solid rgba(59, 91, 219, 0.25);
+    border-radius: calc(var(--sh-radius, 16px) - 4px);
+    background: var(--sh-accent-soft, #edf2ff);
 }
 
 .share-otp-label {
     margin: 0 0 8px;
     font-size: 13px;
-    color: #4b5563;
+    color: var(--sh-muted, #5c5f77);
 }
 
 .share-otp-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 12px 16px;
 }
 
 .share-otp-row button {
     font: inherit;
     cursor: pointer;
+    padding: 10px 18px;
+    color: #fff;
+    background: var(--sh-accent, #3b5bdb);
+    border: 1px solid var(--sh-accent, #3b5bdb);
+    border-radius: calc(var(--sh-radius, 16px) - 8px);
 }
 
+.share-otp-row button:focus-visible {
+    outline: 2px solid var(--sh-text, #1b1f3b);
+    outline-offset: 2px;
+}
+
+/* 设计卡:OTP clamp(30px, 8vw, 40px),等宽数字。 */
 .share-otp-value {
-    font-size: 32px;
+    font-size: clamp(30px, 8vw, 40px);
+    line-height: 1.2;
     letter-spacing: 0.12em;
+    color: var(--sh-text, #1b1f3b);
     font-variant-numeric: tabular-nums;
 }
 
@@ -186,12 +202,12 @@ async function copyCode() {
     max-width: 100%;
     overflow-wrap: anywhere;
     word-break: break-all;
-    color: #0969da;
+    color: var(--sh-accent, #3b5bdb);
 }
 
 .share-otp-empty {
     margin: 0;
-    color: #4b5563;
+    color: var(--sh-muted, #5c5f77);
 }
 
 .share-otp-select {
@@ -213,9 +229,18 @@ async function copyCode() {
     padding: 8px;
     clip: auto;
     overflow: visible;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    box-sizing: border-box;
+    border: 1px solid rgba(92, 95, 119, 0.35);
+    border-radius: calc(var(--sh-radius, 16px) - 8px);
     font: inherit;
     letter-spacing: 0.12em;
+}
+
+/* 移动(设计卡):复制按钮全宽,触控 ≥ 44px。 */
+@media (max-width: 640px) {
+    .share-otp-row button {
+        width: 100%;
+        min-height: 44px;
+    }
 }
 </style>
