@@ -370,14 +370,24 @@ describe('T-14 GET /share/mailboxes/status', () => {
 			token: ownerJwt
 		});
 
-		const bodies = [
+		// P4:有效 token 撞上撤销行 → 裸 404(与 /share/mails 同貌);token 伪造/缺失
+		// 从未触到行,仍是 UNAVAILABLE 信封。两族之内各自同貌。
+		const goneBodies = [
 			await status(bearer),
-			await status(''),
-			await status('not-a-token'),
-			await jsonApi('GET', '/share/mailboxes/status'),
 			await jsonApi('GET', '/share/mails', { bearer })
 		];
-		for (const item of bodies) {
+		for (const item of goneBodies) {
+			expect(item.status).toBe(404);
+			expect(item.text).toBe('');
+			expect(item.headers.get('Cache-Control')).toBe('no-store');
+		}
+
+		const unusableBodies = [
+			await status(''),
+			await status('not-a-token'),
+			await jsonApi('GET', '/share/mailboxes/status')
+		];
+		for (const item of unusableBodies) {
 			expect(item.status).toBe(200);
 			expect(item.text).toBe(UNAVAILABLE);
 			expect(item.headers.get('Cache-Control')).toBe('no-store');

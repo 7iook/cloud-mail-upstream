@@ -39,9 +39,15 @@ export function createMailShare(body, idempotencyKey) {
         name: source.name == null ? '' : String(source.name),
         remark: source.remark == null ? '' : String(source.remark)
     }
-    // toAccountIdSet prefers accountIds and only falls back to accountId, so sending both
-    // would leave a dead field in the body and fork the fingerprint from ShareDialog's shape.
-    if (source.accountIds === undefined) {
+    // P2: a non-empty emails list is the whole address statement — the worker ignores any
+    // accountIds arriving beside it, so forwarding them would only fork the fingerprint
+    // between two requests that mean the same thing.
+    const emails = Array.isArray(source.emails) ? source.emails : []
+    if (emails.length) {
+        payload.emails = emails
+    } else if (source.accountIds === undefined) {
+        // toAccountIdSet prefers accountIds and only falls back to accountId, so sending both
+        // would leave a dead field in the body and fork the fingerprint from ShareDialog's shape.
         payload.accountId = Number(source.accountId)
     } else {
         payload.accountIds = source.accountIds

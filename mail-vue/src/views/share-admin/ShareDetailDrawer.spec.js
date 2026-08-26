@@ -162,7 +162,9 @@ function sampleDetail(overrides = {}) {
         showFullAddress: false,
         authKeyEnabled: false,
         createTime: '2026-08-17 01:00:00',
-        expiresAt: '2026-08-18 01:00:00',
+        // Far future on purpose: the drawer now reads liveEffectiveStatus, so a detail meant
+        // to be writable must actually be unexpired; the live-expiry case supplies its own past.
+        expiresAt: '2099-08-18 01:00:00',
         lastAccessAt: '2026-08-17 02:00:00',
         revokedAt: null,
         deleteAt: null,
@@ -290,7 +292,7 @@ describe('share detail drawer · read side (AC-ADMIN-02 / AC-ADMIN-09 / AC-CAP-0
         const wrapper = await openDrawer()
 
         expectSameInstant(wrapper.get('[data-test="detail-created"]').text(), '2026-08-17 01:00:00')
-        expectSameInstant(wrapper.get('[data-test="detail-expires"]').text(), '2026-08-18 01:00:00')
+        expectSameInstant(wrapper.get('[data-test="detail-expires"]').text(), '2099-08-18 01:00:00')
         expectSameInstant(wrapper.get('[data-test="detail-last-access"]').text(), '2026-08-17 02:00:00')
     })
 
@@ -632,12 +634,14 @@ describe('share detail drawer · config patch (AC-ADMIN-03 / AC-EDGE-14 / AC-LIF
 
 // 交付契约:管理员看到一条分享快到期，能当场把它延长，链接不变、在看的访客不掉线。
 // 抽屉里的到期时刻一律是「本机墙上时钟」，与上面三个只读字段同一口径；请求要的是 UTC 裸串。
-// sampleDetail 的两个时刻都写死在 2026-08 中旬，所以这一组把系统时间也钉住 —— 否则真实
-// 时间一过 2026-08-18，样本分享就恒在过去，「新时刻必须在未来」这条会把每条用例都判红。
+// 这一组的样本时刻写死在 2026-08 中旬，所以把系统时间也钉住 —— 否则真实时间一过
+// 2026-08-18，样本分享就恒在过去，「新时刻必须在未来」这条会把每条用例都判红。
+// expiresAt 在此显式覆盖回 2026-08-18：续期的每个断言都从这个已存时刻起算。
 describe('share detail drawer · renewal (review-t22b P0-1)', () => {
     const NOW = '2026-08-17T12:00:00Z'
-    // sampleDetail: createTime 2026-08-17 01:00:00Z, expiresAt 2026-08-18 01:00:00Z。
-    // 后端上限判据是「新 expires_at − create_time ≤ 90 天」，基准是创建时刻。
+    const SAVED_EXPIRY = { expiresAt: '2026-08-18 01:00:00' }
+    // createTime 2026-08-17 01:00:00Z。后端上限判据是「新 expires_at − create_time ≤ 90 天」，
+    // 基准是创建时刻。
     const CEILING_UTC = '2026-11-15 01:00:00'
 
     beforeEach(() => {
@@ -650,8 +654,8 @@ describe('share detail drawer · renewal (review-t22b P0-1)', () => {
         accountList.mockReset()
         confirm.mockReset()
         message.mockReset()
-        getMailShare.mockResolvedValue(sampleDetail())
-        updateMailShare.mockImplementation(async () => sampleDetail())
+        getMailShare.mockResolvedValue(sampleDetail(SAVED_EXPIRY))
+        updateMailShare.mockImplementation(async () => sampleDetail(SAVED_EXPIRY))
         accountList.mockResolvedValue([])
         confirm.mockResolvedValue('confirm')
     })
@@ -1021,7 +1025,7 @@ describe('share detail drawer · link rotation (AC-LIFE-05 / AC-SHARE-13)', () =
         expect(getMailShare).toHaveBeenCalledTimes(2)
         expect(wrapper.get('[data-test="detail-name"]').text()).toBe('front desk')
         // 有效期原样保留:换链接不是续期,详情里的时刻不该动。
-        expectSameInstant(wrapper.get('[data-test="detail-expires"]').text(), '2026-08-18 01:00:00')
+        expectSameInstant(wrapper.get('[data-test="detail-expires"]').text(), '2099-08-18 01:00:00')
         expect(wrapper.get('[data-test="detail-status"]').attributes('data-status')).toBe('ACTIVE')
     })
 
@@ -1393,6 +1397,25 @@ describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', (
         // Read side survives: the owner still audits a dead share.
         expect(wrapper.get('[data-test="binding-row"]').text()).toContain('otp@example.com')
         expect(wrapper.get('[data-test="detail-quota"]').text()).toContain('2')
+    })
+
+    // P1: the badge and the write predicate follow liveEffectiveStatus, so a drawer opened on
+    // a stale ACTIVE snapshot reads as EXPIRED the moment the client clock says so.
+    it('turns read-only off a stale ACTIVE detail whose expiresAt has passed (P1 live)', async () => {
+        getMailShare.mockResolvedValue(sampleDetail({
+            status: 'ACTIVE',
+            effectiveStatus: 'ACTIVE',
+            expiresAt: '2020-01-01 00:00:00'
+        }))
+        const wrapper = await openDrawer()
+
+        expect(wrapper.get('[data-test="detail-status"]').attributes('data-status')).toBe('EXPIRED')
+        expect(wrapper.find('[data-test="detail-readonly"]').exists()).toBe(true)
+        expect(wrapper.get('[data-test="config-save"]').attributes('disabled')).toBeDefined()
+
+        await wrapper.get('[data-test="config-save"]').trigger('click')
+        await flushPromises()
+        expect(updateMailShare).not.toHaveBeenCalled()
     })
 
     it('leaves ACCESS_LIMIT_REACHED fully writable: that is when the quota needs raising (S2)', async () => {

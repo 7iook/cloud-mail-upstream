@@ -55,6 +55,8 @@ async function hmacHex(key, message) {
 
 const UNAVAILABLE_BODY = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
 const AUTH_REQUIRED_BODY = JSON.stringify(shareResult.fail('SHARE_AUTH_REQUIRED', 501));
+// P4:gone(无行 / REVOKED)从「不可用」家族里分出来,share-api 把它翻成裸 404。
+const DESTROYED_BODY = JSON.stringify(shareResult.fail('SHARE_DESTROYED', 404));
 const AUTH_KEY = 't08-auth-key-correct-value';
 
 function failEnvelope(err) {
@@ -371,20 +373,28 @@ describe('shareAuthService', () => {
 		const deadSec = randomSec();
 		await insertShare({ lid: deadLid, sec: deadSec, accountId: deadAccountId });
 
-		const bodies = await Promise.all([
-			catchFail(shareAuthService.establishSession(ctx(), randomLid('missing'), randomSec())),
+		// P4 把「不可用」拆成两族:gone(无行/REVOKED)→ SHARE_DESTROYED(HTTP 层裸 404),
+		// 其余(错 sec/过期/死信箱/功能关)仍是字节一致的 SHARE_UNAVAILABLE 信封。
+		const unavailableBodies = await Promise.all([
 			catchFail(shareAuthService.establishSession(ctx(), liveLid, randomSec())),
 			catchFail(shareAuthService.establishSession(ctx(), expiredLid, expiredSec)),
-			catchFail(shareAuthService.establishSession(ctx(), revokedLid, revokedSec)),
 			catchFail(shareAuthService.establishSession(ctx(), deadLid, deadSec)),
 			catchFail(shareAuthService.establishSession(ctx({ SHARE_ENABLED: '0' }), liveLid, liveSec))
 		]);
-
-		const expected = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
-		for (const body of bodies) {
-			expect(body).toBe(expected);
+		for (const body of unavailableBodies) {
+			expect(body).toBe(UNAVAILABLE_BODY);
 		}
-		expect(new Set(bodies).size).toBe(1);
+		expect(new Set(unavailableBodies).size).toBe(1);
+
+		const goneBodies = await Promise.all([
+			catchFail(shareAuthService.establishSession(ctx(), randomLid('missing'), randomSec())),
+			catchFail(shareAuthService.establishSession(ctx(), revokedLid, revokedSec)),
+			// gone 不看 sec:销毁的链接对谁都是 404,不因 sec 对错分叉出可探测面。
+			catchFail(shareAuthService.establishSession(ctx(), revokedLid, randomSec()))
+		]);
+		for (const body of goneBodies) {
+			expect(body).toBe(DESTROYED_BODY);
+		}
 	});
 	it('rejects a token on the next request after the share is revoked (AC-VISIT-07, AC-LIFE-03)', async () => {
 		await ensureAccount();
@@ -410,8 +420,9 @@ describe('shareAuthService', () => {
 			"UPDATE mail_share SET status = 'REVOKED', revoked_at = '2026-08-17 00:00:00' WHERE share_id = ?"
 		).bind(shareId).run();
 
+		// P4:销毁对已持会话的访客也是 gone,share-api 将其翻成裸 404。
 		const afterRevoke = await catchFail(shareAuthService.resolveSession(c, established.sessionToken));
-		expect(afterRevoke).toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+		expect(afterRevoke).toBe(DESTROYED_BODY);
 	});
 
 	it('treats expiry as computed from expires_at while persisted status stays ACTIVE (AC-LIFE-01)', async () => {
@@ -684,8 +695,9 @@ describe('shareAuthService', () => {
 		const revokedSession = await shareAuthService.establishSession(c, revokedLid, revokedSec);
 		await env.db.prepare("UPDATE mail_share SET status = 'REVOKED' WHERE share_id = ?")
 			.bind(revoked.shareId).run();
+		// 撤销仍旧盖过 cap,只是 P4 后它的形态是 gone 而不是「不可用」。
 		expect(await catchFail(shareAuthService.resolveSession(c, revokedSession.sessionToken)))
-			.toBe(JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501)));
+			.toBe(DESTROYED_BODY);
 	});
 
 	it('never persists a computed status on any seeded row (AC-LIFE-01)', async () => {
@@ -923,8 +935,9 @@ describe('shareAuthService session quota gate', () => {
 		expect(established.sessionToken).toEqual(expect.any(String));
 
 		// Documented TOCTOU window: the token is dead on its first trip back.
+		// P4 后「死」的形态是 gone(裸 404),因为杀死它的正是一次撤销。
 		expect(await catchFail(shareAuthService.resolveSession(ctx(), established.sessionToken)))
-			.toBe(UNAVAILABLE_BODY);
+			.toBe(DESTROYED_BODY);
 
 		const row = await quotaRow(shareId);
 		expect(row.access_count).toBe(1);
@@ -1391,10 +1404,12 @@ describe('shareAuthService AuthKey second factor', () => {
 
 		// The only thing separating these attempts is whether the visitor ever had a
 		// valid lid+sec. None of them may reveal that an AuthKey exists at all.
+		// P4 后 missing-lid 属于 gone 家族(裸 404),但族内不变量不变:回答只取决于
+		// 行的状态,与访客递交的任何 AuthKey 无关,也永远不是 SHARE_AUTH_REQUIRED。
 		const attempts = {
-			'missing-lid': () => [missingLid, randomSec()],
-			'wrong-sec-on-keyed': () => [keyedLid, randomSec()],
-			'wrong-sec-on-plain': () => [plainLid, randomSec()]
+			'missing-lid': { pick: () => [missingLid, randomSec()], body: DESTROYED_BODY },
+			'wrong-sec-on-keyed': { pick: () => [keyedLid, randomSec()], body: UNAVAILABLE_BODY },
+			'wrong-sec-on-plain': { pick: () => [plainLid, randomSec()], body: UNAVAILABLE_BODY }
 		};
 
 		await fc.assert(
@@ -1408,22 +1423,22 @@ describe('shareAuthService AuthKey second factor', () => {
 					fc.string({ maxLength: 40 })
 				),
 				async (which, authKey) => {
-					const [lid, sec] = attempts[which]();
+					const [lid, sec] = attempts[which].pick();
 					const body = await catchFail(
 						shareAuthService.establishSession(c, lid, sec, { authKey })
 					);
-					expect(body).toBe(UNAVAILABLE_BODY);
+					expect(body).toBe(attempts[which].body);
 				}
 			),
 			{ numRuns: 40 }
 		);
 
 		// The other half of AC-AUTH-02: a visitor who did pass lid+sec and does hold
-		// the key still gets the plain refusal for expiry and revocation.
+		// the key still gets the plain refusal for expiry — and gone for revocation.
 		expect(await catchFail(shareAuthService.establishSession(c, expiredLid, expiredSec, { authKey: AUTH_KEY })))
 			.toBe(UNAVAILABLE_BODY);
 		expect(await catchFail(shareAuthService.establishSession(c, revokedLid, revokedSec, { authKey: AUTH_KEY })))
-			.toBe(UNAVAILABLE_BODY);
+			.toBe(DESTROYED_BODY);
 	});
 
 	it('checks the AuthKey before the idempotency replay cache so a wrong key never gets a cached token (AC-AUTH-01, AC-SESS-10)', async () => {
@@ -2019,9 +2034,10 @@ describe('shareAuthService session renewal quota', () => {
 		const revSession = await shareAuthService.establishSession(c, revLid, revSec);
 		await env.db.prepare("UPDATE mail_share SET status = 'REVOKED' WHERE share_id = ?")
 			.bind(rev.shareId).run();
+		// P4:撤销后连续约也救不回来,而且形态是 gone(裸 404)而非「不可用」。
 		expect(await catchFail(shareAuthService.establishSession(c, revLid, revSec, {
 			previousSessionToken: revSession.sessionToken
-		}))).toBe(UNAVAILABLE_BODY);
+		}))).toBe(DESTROYED_BODY);
 
 		const expLid = randomLid('renew-exp');
 		const expSec = randomSec();

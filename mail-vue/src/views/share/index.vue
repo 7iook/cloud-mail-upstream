@@ -4,8 +4,11 @@
     data-share-shell="cloud-mail-share-shell"
     :data-share-state="state"
   >
+    <!-- P5 视觉包裹:桌面居中白卡片(max-width 640px),移动去浮层全宽。
+         data-share-* 钩子零改,逻辑零改。 -->
+    <div class="share-card">
     <header class="share-top">
-      <p v-if="state === 'loading'">{{ tx('shareVisitLoading', 'Opening shared mailbox...') }}</p>
+      <p v-if="state === 'loading'" class="share-loading"><span class="share-spinner" aria-hidden="true"></span>{{ tx('shareVisitLoading', 'Opening shared mailbox...') }}</p>
       <p v-else-if="state === 'authRequired'">{{ tx('shareVisitAuthTitle', 'This share needs an access key.') }}</p>
       <p v-else-if="state === 'ready'">{{ tx('shareVisitReady', 'Shared mailbox') }}{{ readyMailboxLabel }}</p>
       <p v-else-if="state === 'unavailable'">{{ tx('shareVisitUnavailable', 'This link is no longer available.') }}</p>
@@ -221,6 +224,7 @@
       </div>
     </div>
     <div v-else data-share-body></div>
+    </div>
   </div>
 </template>
 
@@ -236,17 +240,21 @@ import {
     getShareAttachment,
     getShareMailboxesStatus,
     isShareAuthRequired,
+    isShareGone,
     isShareRateLimited,
     isShareUnavailable,
     listShareMails
 } from '@/request/share.js'
 import {
+    blankShareDocument,
     clearEstablishKey,
     clearOtherShareSessions,
     clearShareSession,
     consumeShareSecret,
     ensureEstablishKey,
+    markShareGone,
     readShareSession,
+    reloadShareDocument,
     writeShareSession
 } from './session.js'
 import { senderLine } from './mail-fields.js'
@@ -697,6 +705,8 @@ function logShareFailure(err) {
     let code = 'SHARE_REQUEST_FAILED'
     if (err && (err.code === 'SHARE_UNAVAILABLE' || err.message === 'SHARE_UNAVAILABLE')) {
         code = 'SHARE_UNAVAILABLE'
+    } else if (isShareGone(err)) {
+        code = 'SHARE_DESTROYED'
     } else if (isShareRateLimited(err)) {
         code = 'RATE_LIMITED'
     } else if (status) {
@@ -710,14 +720,16 @@ function hadWorkingSession() {
 }
 
 // Only a request that never came back may be replayed. A rejected business envelope, a
-// 429 and anything carrying err.response all mean the worker already answered, so
-// resending would spend a second session slot and more rate-limit budget for nothing.
+// 429, a gone 404 and anything carrying err.response all mean the worker already
+// answered, so resending would spend a second session slot and more rate-limit budget
+// for nothing.
 function isLostResponse(err) {
     return Boolean(err)
         && !err.response
         && !isShareRateLimited(err)
         && !isShareUnavailable(err)
         && !isShareAuthRequired(err)
+        && !isShareGone(err)
         && (err instanceof Error || !Object.prototype.hasOwnProperty.call(err, 'code'))
 }
 
@@ -770,6 +782,21 @@ function showDeadShare(err) {
     }
 }
 
+// P4:销毁(HTTP 404)不许画任何业务页。第一眼 reload —— 生产环境 reload 会落到
+// worker 的文档拦截,访客看到浏览器原生 404;若 reload 又回到了 SPA(vite 直出、
+// 不经 worker),记账识破循环,清空文档兜底。死链接的 token 在离开前清干净,
+// 不留给 reload 之后的页面。
+function handleShareGone(err) {
+    polling.stop()
+    logShareFailure(err)
+    clearMailboxView()
+    if (markShareGone(currentLid()) === 'reload') {
+        reloadShareDocument()
+        return
+    }
+    blankShareDocument()
+}
+
 function showTimedOut(err) {
     polling.stop()
     clearMailboxView()
@@ -805,6 +832,12 @@ async function reestablishSession() {
 }
 
 async function recoverFromUnavailable(err, fromSession = false) {
+    // gone 先于一切恢复逻辑:它不是「暂时不可用」,重建会话/重放都救不回一条
+    // 已销毁的链接,唯一出路是把访客交还给浏览器原生 404。
+    if (isShareGone(err)) {
+        handleShareGone(err)
+        return false
+    }
     if (isShareRateLimited(err)) {
         rateLimited.value = true
         if (state.value !== 'ready') {
@@ -1085,15 +1118,55 @@ defineExpose({
 </script>
 
 <style scoped>
+/* P5 · UI 设计卡 token 挂 .share-shell;桌面居中白卡片,移动全宽。 */
 .share-shell {
+    --sh-bg: #f4f5f7;
+    --sh-surface: #ffffff;
+    --sh-accent: #3b5bdb;
+    --sh-accent-soft: #edf2ff;
+    --sh-text: #1b1f3b;
+    --sh-muted: #5c5f77;
+    --sh-warn: #f08c00;
+    --sh-danger: #c92a2a;
+    --sh-radius: 16px;
+
     min-height: 100%;
+    padding: 32px 16px 48px;
+    box-sizing: border-box;
+    background: var(--sh-bg);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--sh-text);
+    line-height: 1.5;
+}
+
+.share-card {
+    max-width: 640px;
+    margin: 0 auto;
     padding: 24px;
     box-sizing: border-box;
-    max-width: 720px;
-    margin: 0 auto;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    color: #1f2328;
-    line-height: 1.5;
+    background: var(--sh-surface);
+    border-radius: var(--sh-radius);
+    box-shadow: 0 12px 32px rgba(27, 31, 59, 0.08);
+}
+
+/* authRequired:窄卡,只留输入 + 提交。 */
+.share-shell[data-share-state="authRequired"] .share-card {
+    max-width: 420px;
+}
+
+/* unavailable / timedout / exited:居中终态卡。销毁态不经过这里(P4 原生 404),
+   所以本页不设计 gone 插画。 */
+.share-shell[data-share-state="unavailable"] .share-card,
+.share-shell[data-share-state="timedout"] .share-card,
+.share-shell[data-share-state="exited"] .share-card {
+    max-width: 480px;
+    text-align: center;
+}
+
+.share-shell[data-share-state="unavailable"] .share-top,
+.share-shell[data-share-state="timedout"] .share-top,
+.share-shell[data-share-state="exited"] .share-top {
+    justify-content: center;
 }
 
 .share-top {
@@ -1114,17 +1187,88 @@ defineExpose({
     cursor: pointer;
 }
 
-.share-wait,
+/* loading:卡片内 spinner,文案保留。动画包在 prefers-reduced-motion 里。 */
+.share-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
+    vertical-align: -3px;
+    border: 2px solid var(--sh-accent-soft);
+    border-top-color: var(--sh-accent);
+    border-radius: 50%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .share-spinner {
+        animation: share-spin 0.8s linear infinite;
+    }
+
+    @keyframes share-spin {
+        to {
+            transform: rotate(360deg);
+        }
+    }
+}
+
 .share-empty,
 .share-remote-hint {
-    color: #4b5563;
+    color: var(--sh-muted);
+}
+
+/* limited:警告横幅,不抢 OTP 的位置。 */
+.share-wait {
+    margin: 16px 0 0;
+    padding: 10px 14px;
+    color: var(--sh-text);
+    background: rgba(240, 140, 0, 0.12);
+    border: 1px solid var(--sh-warn);
+    border-radius: calc(var(--sh-radius) - 8px);
+}
+
+/* ready + 空收件箱:一等等待卡,不是冰冷 empty。 */
+.share-empty {
+    margin: 20px 0 24px;
+    padding: 28px 20px;
+    text-align: center;
+    background: var(--sh-bg);
+    border: 1px dashed rgba(92, 95, 119, 0.4);
+    border-radius: calc(var(--sh-radius) - 4px);
+}
+
+.share-empty::before {
+    content: '';
+    display: block;
+    width: 10px;
+    height: 10px;
+    margin: 0 auto 10px;
+    border-radius: 50%;
+    background: var(--sh-accent);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .share-empty::before {
+        animation: share-breathe 2s ease-in-out infinite;
+    }
+
+    @keyframes share-breathe {
+        0%,
+        100% {
+            opacity: 0.35;
+        }
+
+        50% {
+            opacity: 1;
+        }
+    }
 }
 
 /* Pushed to the right so the countdown sits with the Leave button, not between it and
-   the title. Tabular figures keep the row from twitching as the digits change. */
+   the title. Tabular figures keep the row from twitching as the digits change.
+   No aria-live, by design (P1 信息层级 + 读屏防洪)。 */
 .share-expires {
     margin-left: auto;
-    color: #4b5563;
+    color: var(--sh-muted);
     font-size: 13px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -1138,7 +1282,7 @@ defineExpose({
     display: block;
     margin-bottom: 6px;
     font-size: 13px;
-    color: #4b5563;
+    color: var(--sh-muted);
 }
 
 .share-auth-row {
@@ -1152,44 +1296,54 @@ defineExpose({
     min-width: 0;
     padding: 10px 12px;
     font: inherit;
-    color: #1f2328;
-    background: #fff;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    color: var(--sh-text);
+    background: var(--sh-surface);
+    border: 1px solid rgba(92, 95, 119, 0.35);
+    border-radius: calc(var(--sh-radius) - 8px);
 }
 
 .share-auth-input[aria-invalid="true"] {
-    border-color: #cf222e;
+    border-color: var(--sh-danger);
 }
 
-.share-auth-submit,
-.share-refresh {
-    padding: 10px 12px;
+.share-auth-submit {
+    padding: 10px 16px;
     font: inherit;
-    color: #1f2328;
-    background: #f6f8fa;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    color: #fff;
+    background: var(--sh-accent);
+    border: 1px solid var(--sh-accent);
+    border-radius: calc(var(--sh-radius) - 8px);
+    cursor: pointer;
+}
+
+.share-refresh,
+.share-top button {
+    padding: 10px 14px;
+    font: inherit;
+    color: var(--sh-text);
+    background: var(--sh-surface);
+    border: 1px solid rgba(92, 95, 119, 0.35);
+    border-radius: calc(var(--sh-radius) - 8px);
     cursor: pointer;
 }
 
 .share-auth-submit:disabled,
 .share-refresh:disabled {
-    color: #8c959f;
+    opacity: 0.55;
     cursor: default;
 }
 
 .share-auth-input:focus-visible,
 .share-auth-submit:focus-visible,
 .share-refresh:focus-visible {
-    outline: 2px solid #0969da;
+    outline: 2px solid var(--sh-accent);
     outline-offset: -2px;
 }
 
 /* Beside the field it belongs to, not in a banner at the top of the page. */
 .share-auth-error {
     margin: 8px 0 0;
-    color: #cf222e;
+    color: var(--sh-danger);
     font-size: 13px;
 }
 
@@ -1201,7 +1355,7 @@ defineExpose({
     display: flex;
     flex-wrap: wrap;
     margin: 16px 0 0;
-    border-bottom: 1px solid #d0d7de;
+    border-bottom: 1px solid rgba(92, 95, 119, 0.25);
 }
 
 .share-tab {
@@ -1211,28 +1365,29 @@ defineExpose({
     margin-bottom: -1px;
     padding: 10px 12px;
     font: inherit;
-    color: #4b5563;
+    color: var(--sh-muted);
     background: none;
     border: 0;
     border-bottom: 2px solid transparent;
-    border-radius: 6px 6px 0 0;
+    border-radius: calc(var(--sh-radius) - 8px) calc(var(--sh-radius) - 8px) 0 0;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .share-tab:hover {
-    color: #1f2328;
-    background: #f6f8fa;
+    color: var(--sh-text);
+    background: var(--sh-accent-soft);
 }
 
 /* Selection is weight plus a rule, not colour alone. */
 .share-tab[aria-selected="true"] {
-    color: #1f2328;
+    color: var(--sh-text);
     font-weight: 600;
-    border-bottom-color: #0969da;
+    border-bottom-color: var(--sh-accent);
 }
 
 .share-tab:focus-visible {
-    outline: 2px solid #0969da;
+    outline: 2px solid var(--sh-accent);
     outline-offset: -2px;
 }
 
@@ -1240,7 +1395,7 @@ defineExpose({
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #0969da;
+    background: var(--sh-accent);
 }
 
 .share-list {
@@ -1256,18 +1411,20 @@ defineExpose({
     margin: 0 0 8px;
     padding: 10px 12px;
     text-align: left;
-    background: #fff;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    color: var(--sh-text);
+    background: var(--sh-surface);
+    border: 1px solid rgba(92, 95, 119, 0.3);
+    border-radius: calc(var(--sh-radius) - 8px);
 }
 
 .share-list button[aria-current="true"] {
-    border-color: #0969da;
+    border-color: var(--sh-accent);
+    background: var(--sh-accent-soft);
 }
 
 .share-list-from,
 .share-from {
-    color: #4b5563;
+    color: var(--sh-muted);
     font-size: 13px;
 }
 
@@ -1282,23 +1439,23 @@ defineExpose({
 }
 
 .share-copy-all button {
-    padding: 6px 10px;
+    padding: 8px 12px;
     font: inherit;
-    color: #1f2328;
-    background: #f6f8fa;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    color: var(--sh-text);
+    background: var(--sh-surface);
+    border: 1px solid rgba(92, 95, 119, 0.35);
+    border-radius: calc(var(--sh-radius) - 8px);
     cursor: pointer;
 }
 
 .share-copy-all button:disabled {
-    color: #8c959f;
+    opacity: 0.55;
     cursor: default;
 }
 
 .share-copy-all p {
     margin: 8px 0 0;
-    color: #4b5563;
+    color: var(--sh-muted);
     font-size: 13px;
 }
 
@@ -1324,8 +1481,8 @@ defineExpose({
     clip: auto;
     overflow: auto;
     box-sizing: border-box;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    border: 1px solid rgba(92, 95, 119, 0.35);
+    border-radius: calc(var(--sh-radius) - 8px);
     font: inherit;
 }
 
@@ -1336,9 +1493,53 @@ defineExpose({
 }
 
 .share-atts button {
-    padding: 6px 10px;
-    background: #fff;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--sh-text);
+    background: var(--sh-surface);
+    border: 1px solid rgba(92, 95, 119, 0.35);
+    border-radius: calc(var(--sh-radius) - 8px);
+}
+
+/* 移动(设计卡):去浮层阴影、复制/操作全宽、Tab 横向滚动、触控 ≥ 44px。 */
+@media (max-width: 640px) {
+    .share-shell {
+        padding: 0 0 32px;
+    }
+
+    .share-card {
+        max-width: none;
+        padding: 20px 16px;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    .share-shell[data-share-state="authRequired"] .share-card,
+    .share-shell[data-share-state="unavailable"] .share-card,
+    .share-shell[data-share-state="timedout"] .share-card,
+    .share-shell[data-share-state="exited"] .share-card {
+        max-width: none;
+    }
+
+    .share-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .share-top button,
+    .share-auth-submit,
+    .share-refresh,
+    .share-tab,
+    .share-list button,
+    .share-copy-all button,
+    .share-atts button {
+        min-height: 44px;
+    }
+
+    .share-refresh,
+    .share-copy-all button,
+    .share-atts button {
+        width: 100%;
+    }
 }
 </style>

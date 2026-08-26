@@ -45,14 +45,14 @@
             class="share-card"
             data-test="share-row"
             :data-share-id="row.shareId"
-            :data-status="row.effectiveStatus"
+            :data-status="liveStatus(row)"
         >
           <div class="card-head">
             <span class="card-name" data-test="share-name">{{ row.name || row.mailbox || row.shareId }}</span>
             <div class="card-tags">
               <el-tag type="info" data-test="share-type">{{ tf(shareTypeLabelKey(row.shareType)) }}</el-tag>
-              <el-tag :type="statusMeta(row.effectiveStatus).tone" data-test="share-status">
-                {{ statusText(row.effectiveStatus) }}
+              <el-tag :type="statusMeta(liveStatus(row)).tone" data-test="share-status">
+                {{ statusText(liveStatus(row)) }}
               </el-tag>
             </div>
           </div>
@@ -98,12 +98,13 @@
 </template>
 
 <script setup>
-import {ref} from "vue"
+import {onMounted, onUnmounted, ref} from "vue"
 import {Icon} from "@iconify/vue"
 import {useI18n} from "vue-i18n"
 import loading from "@/components/loading/index.vue"
 import {isShareForbidden, listMailShares} from "@/request/mail-share.js"
 import {SHARE_STATUSES, bindingSummary, quotaText, shareTypeLabelKey, statusMeta} from "./status.js"
+import {useShareClock} from "./use-share-clock.js"
 import {tzText} from "@/utils/day.js"
 import ShareCreateWizard from "./ShareCreateWizard.vue"
 import ShareRowActions from "./ShareRowActions.vue"
@@ -138,6 +139,7 @@ function tf(key) {
 const statusOptions = SHARE_STATUSES
 const size = 20
 const isMobile = window.innerWidth < 1025
+const { liveStatus } = useShareClock()
 
 const activeShareId = ref(0)
 const status = ref('')
@@ -206,6 +208,22 @@ function onPageChange(next) {
 function refresh() {
   fetchList()
 }
+
+function onVisible() {
+  if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+    fetchList()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('focus', fetchList)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener('focus', fetchList)
+})
 
 fetchList()
 </script>

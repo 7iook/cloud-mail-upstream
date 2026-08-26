@@ -135,4 +135,23 @@ describe('share-admin row actions (AC-ADMIN-06 / AC-ADMIN-07)', () => {
 
         expect(wrapper.find('[data-test="row-revoke"]').exists()).toBe(true)
     })
+
+    // P1: the buttons read liveEffectiveStatus, not the raw API snapshot. A row whose
+    // persisted status already says REVOKED must not offer revoke off a stale effectiveStatus.
+    it('hides revoke when the persisted status says REVOKED even if the snapshot lags', () => {
+        const wrapper = mountActions(sampleRow({ status: 'REVOKED', effectiveStatus: 'ACTIVE' }))
+
+        expect(wrapper.find('[data-test="row-revoke"]').exists()).toBe(false)
+        expect(wrapper.find('[data-test="row-delete"]').exists()).toBe(true)
+    })
+
+    it('keeps revoke on a row that expired client-side after the list snapshot (P1)', () => {
+        const wrapper = mountActions(sampleRow({
+            status: 'ACTIVE',
+            effectiveStatus: 'ACTIVE',
+            expiresAt: '2020-01-01 00:00:00'
+        }))
+
+        expect(wrapper.find('[data-test="row-revoke"]').exists()).toBe(true)
+    })
 })

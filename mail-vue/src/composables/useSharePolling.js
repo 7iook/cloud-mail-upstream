@@ -1,5 +1,6 @@
 import { onScopeDispose, ref, toValue } from 'vue'
 import {
+  isShareGone,
   isShareRateLimited,
   isShareUnavailable,
   listShareMails as defaultListShareMails,
@@ -174,7 +175,9 @@ export function useSharePolling(options = {}) {
         schedule(retryAfterMs(err, readInterval()))
         return
       }
-      if (isShareUnavailable(err)) {
+      // gone(P4 裸 404)与 SHARE_UNAVAILABLE 同一个终局出口:停表并上报。
+      // 404 是终态不是抖动,重试只会空转;reload 还是清空文档由页面决定。
+      if (isShareUnavailable(err) || isShareGone(err)) {
         notifyUnavailable(err)
         return
       }

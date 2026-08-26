@@ -12,6 +12,7 @@ import {
 	SHARE_SESSION_RETRY_AFTER_SECONDS,
 	shareRateLimit
 } from '../security/share-rate-limit';
+import { nativeGoneResponse } from '../security/share-document-gone';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
@@ -31,6 +32,11 @@ function withShare(handler) {
 			return out;
 		} catch (err) {
 			if (err && err.name === 'BizError') {
+				// P4:销毁(无行/REVOKED)不再走 JSON 信封——与文档入口同貌的裸 404 空
+				// body,让 API 调用方和直接访问者看到同一个终局(#3-#7)。
+				if (err.message === 'SHARE_DESTROYED') {
+					return nativeGoneResponse();
+				}
 				return shareJson(c, shareResult.fail(err.message, err.code));
 			}
 			throw err;

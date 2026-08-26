@@ -3881,8 +3881,14 @@ describe('mailShareService.regenerate (T-20a)', () => {
 
 		// cv 已 +1 → 在飞会话当场断开。
 		expect((await getShareMails(established.data.sessionToken)).message).toBe('SHARE_UNAVAILABLE');
-		// 旧 lid+sec 再也换不到会话。
-		expect((await postSession({ lid: created.lid, sec: created.sec })).message).toBe('SHARE_UNAVAILABLE');
+		// 旧 lid 已从表中消失,P4 语义下它是 gone:裸 404 空 body,不再有 JSON 信封。
+		const oldLidResponse = await SELF.fetch('http://example.com/api/share/session', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json', 'accept-language': 'en' },
+			body: JSON.stringify({ lid: created.lid, sec: created.sec })
+		});
+		expect(oldLidResponse.status).toBe(404);
+		expect(await oldLidResponse.text()).toBe('');
 		const reissued = await postSession({ lid: rotated.lid, sec: rotated.sec });
 		expect(reissued.code).toBe(200);
 		expect((await getShareMails(reissued.data.sessionToken)).code).toBe(200);

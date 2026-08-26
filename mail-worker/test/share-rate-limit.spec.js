@@ -2,8 +2,23 @@ import { env, SELF } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import shareResult from '../src/model/share-result';
 import worker from '../src/index.js';
+import { seedShareRow } from './setup.js';
 
 const UNAVAILABLE = JSON.stringify(shareResult.fail('SHARE_UNAVAILABLE', 501));
+
+let t26Seq = 0;
+
+// P4 之后「无行」是裸 404 —— 要证明「限流器放行/坏掉时业务失败仍走 200 JSON 信封」,
+// 就得用一条真实存在的活分享配错 sec,否则断言测到的是 gone 而不是业务层。
+async function seedLiveLid() {
+	t26Seq += 1;
+	const row = await seedShareRow({
+		lid: `t26-live-${Date.now()}-${t26Seq}`,
+		userId: 926001,
+		accountId: 926002
+	});
+	return row.lid;
+}
 
 function sessionRequest({ lid, sec, ip, xff } = {}) {
 	const headers = {
@@ -41,9 +56,10 @@ async function getMails({ ip, bearer } = {}) {
 	}), env, {});
 }
 
-afterEach(() => {
+afterEach(async () => {
 	delete env.SHARE_SESSION_RATE_LIMITER;
 	delete env.SHARE_READ_RATE_LIMITER;
+	await env.db.prepare("DELETE FROM mail_share WHERE lid LIKE 't26-live-%'").run();
 });
 
 describe('T-26 anonymous share rate limit (AC-ABUSE-08, P-TRANS-01)', () => {
@@ -69,7 +85,8 @@ describe('T-26 anonymous share rate limit (AC-ABUSE-08, P-TRANS-01)', () => {
 				return { success: true };
 			}
 		};
-		const res = await postSession({ lid: 't26-never', sec: 'wrong', ip: '198.51.100.9' });
+		const lid = await seedLiveLid();
+		const res = await postSession({ lid, sec: 'wrong', ip: '198.51.100.9' });
 		expect(res.status).toBe(200);
 		expect(await res.text()).toBe(UNAVAILABLE);
 	});
@@ -115,7 +132,8 @@ describe('T-26 anonymous share rate limit (AC-ABUSE-08, P-TRANS-01)', () => {
 				throw new Error('rate limiter backend unavailable');
 			}
 		};
-		const res = await postSession({ ip: '198.51.100.11' });
+		const lid = await seedLiveLid();
+		const res = await postSession({ lid, sec: 'wrong', ip: '198.51.100.11' });
 		expect(res.status).toBe(200);
 		expect(await res.text()).toBe(UNAVAILABLE);
 	});

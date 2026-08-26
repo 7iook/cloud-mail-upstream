@@ -75,13 +75,13 @@
           :key="row.shareId"
           class="share-row"
           data-test="share-row"
-          :data-status="row.effectiveStatus"
+          :data-status="liveStatus(row)"
       >
         <div class="share-row-main">
           <div class="share-row-title">{{ row.name || row.mailbox || row.shareId }}</div>
           <div class="share-row-meta">
             <span>{{ t('shareMailbox') }}: {{ row.mailbox }}</span>
-            <span data-test="share-status">{{ statusLabel(row.effectiveStatus) }}</span>
+            <span data-test="share-status">{{ statusLabel(liveStatus(row)) }}</span>
             <span>{{ t('shareCreatedAt') }}: {{ tzText(row.createTime) }}</span>
             <span>{{ t('shareExpiresAt') }}: {{ tzText(row.expiresAt) }}</span>
           </div>
@@ -93,7 +93,7 @@
           </div>
         </div>
         <el-button
-            v-if="row.effectiveStatus !== 'REVOKED'"
+            v-if="liveStatus(row) !== 'REVOKED'"
             data-test="revoke-share"
             @click="askRevoke(row)"
         >
@@ -132,6 +132,7 @@ import {
   customDurationSeconds,
   durationError
 } from '@/views/share-admin/presets.js'
+import { useShareClock } from '@/views/share-admin/use-share-clock.js'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -140,6 +141,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'changed'])
 const { t, te } = useI18n()
 const { copy, selectableRef } = useCopyWithFallback()
+const { liveStatus } = useShareClock()
 
 // T-29 is the only writer of i18n/zh.js and i18n/en.js. Until it lands shareGoAdmin
 // (registered in exec-t23-note.md), fall back to the agreed copy instead of painting a raw

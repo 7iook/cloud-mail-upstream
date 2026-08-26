@@ -277,6 +277,7 @@ describe('T-11 mail share HTTP routes', () => {
 		expect(revoked.json.data.shareId).toBe(created.json.data.shareId);
 		expectNoStore(revoked.headers);
 
+		// P4:销毁后每个访客入口都是浏览器原生形态的 404 空 body,不再回 JSON 信封。
 		const after = await Promise.all([
 			jsonApi('POST', '/share/session', { body: { lid: created.json.data.lid, sec: created.json.data.sec } }),
 			jsonApi('GET', '/share/mails', { bearer: session.json.data.sessionToken }),
@@ -286,8 +287,8 @@ describe('T-11 mail share HTTP routes', () => {
 			})
 		]);
 		for (const item of after) {
-			expect(item.status).toBe(200);
-			expect(item.text).toBe(UNAVAILABLE);
+			expect(item.status).toBe(404);
+			expect(item.text).toBe('');
 			expectNoStore(item.headers);
 		}
 		expect(new Set(after.map((item) => item.text)).size).toBe(1);
@@ -312,18 +313,27 @@ describe('T-11 mail share HTTP routes', () => {
 		).bind(expired.json.data.lid).run();
 		await jsonApi('DELETE', `/mailShare/revoke?shareId=${revoked.json.data.shareId}`, { token: ownerJwt });
 
-		const bodies = await Promise.all([
-			jsonApi('POST', '/share/session', { body: { lid: 't11-never-existed', sec: 'nope' } }),
+		// P4 把四种失败拆成两族:错 sec / 过期仍是字节一致的 SHARE_UNAVAILABLE 信封,
+		// 无行 / 已销毁则是裸 404 空 body —— 与文档入口 GET /s/:lid 同貌。
+		const unavailable = await Promise.all([
 			jsonApi('POST', '/share/session', { body: { lid: live.json.data.lid, sec: 'wrong-secret' } }),
-			jsonApi('POST', '/share/session', { body: { lid: expired.json.data.lid, sec: expired.json.data.sec } }),
-			jsonApi('POST', '/share/session', { body: { lid: revoked.json.data.lid, sec: revoked.json.data.sec } })
+			jsonApi('POST', '/share/session', { body: { lid: expired.json.data.lid, sec: expired.json.data.sec } })
 		]);
-		for (const item of bodies) {
+		for (const item of unavailable) {
 			expect(item.status).toBe(200);
 			expect(item.text).toBe(UNAVAILABLE);
-			expect(item.headers.get('content-type')).toBe(bodies[0].headers.get('content-type'));
+			expect(item.headers.get('content-type')).toBe(unavailable[0].headers.get('content-type'));
 		}
-		expect(new Set(bodies.map((item) => item.text)).size).toBe(1);
+		expect(new Set(unavailable.map((item) => item.text)).size).toBe(1);
+
+		const gone = await Promise.all([
+			jsonApi('POST', '/share/session', { body: { lid: 't11-never-existed', sec: 'nope' } }),
+			jsonApi('POST', '/share/session', { body: { lid: revoked.json.data.lid, sec: revoked.json.data.sec } })
+		]);
+		for (const item of gone) {
+			expect(item.status).toBe(404);
+			expect(item.text).toBe('');
+		}
 	});
 
 	it('replays POST /share/session for a repeated Idempotency-Key without a second slot (AC-SESS-10)', async () => {

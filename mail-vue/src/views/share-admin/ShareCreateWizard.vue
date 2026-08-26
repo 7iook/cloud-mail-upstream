@@ -17,17 +17,43 @@
     <div v-if="created" class="result" data-test="wizard-result" aria-live="polite">
       <template v-if="replayWithoutSecret">
         <p class="result-title" data-test="share-replay">{{ $t('shareReplayNoSecret') }}</p>
-        <dl class="result-fields">
+        <!-- 单条与 V2=false 批量共用一个面板：批量重放的 response 是 { shares, idempotentReplay }，
+             每条都得列出来 —— 只报第一条会让 Owner 以为其余分享不存在，再建一遍。 -->
+        <dl v-for="item in replayShares" :key="item.lid" class="result-fields">
           <div class="field">
             <dt class="field-label">{{ tf('shareWizardShareId') }}</dt>
-            <dd class="field-value field-numeric" data-test="replay-share-id">{{ created.shareId }}</dd>
+            <dd class="field-value field-numeric" data-test="replay-share-id">{{ item.shareId }}</dd>
           </div>
           <div class="field">
             <dt class="field-label">{{ tf('shareWizardLinkId') }}</dt>
-            <dd class="field-value" data-test="replay-lid">{{ created.lid }}</dd>
+            <dd class="field-value" data-test="replay-lid">{{ item.lid }}</dd>
           </div>
         </dl>
         <p class="result-hint" data-test="replay-guidance">{{ tf('shareReplayGuidance') }}</p>
+      </template>
+
+      <!-- P2 批量分流（DC-P0-1）：V2=false 的多地址响应是 { shares: [...] }，一人一条链接。
+           批量分享不可能带 AuthKey —— 它只在 V2=false 下出现，而 authKeyEnabled 在那里
+           先被栅栏拒掉了，所以这个面板没有密钥区。 -->
+      <template v-else-if="createdShares.length">
+        <p class="result-title" data-test="secret-once">{{ tf('shareWizardBatchCreated', {count: createdShares.length}) }}</p>
+        <div v-for="item in createdShares" :key="item.lid" class="secret" data-test="share-url-item">
+          <label class="row-label" :for="`wizard-created-url-${item.lid}`">{{ item.mailbox || item.lid }}</label>
+          <div class="secret-row">
+            <input
+                :id="`wizard-created-url-${item.lid}`"
+                class="secret-input"
+                data-test="share-url"
+                type="text"
+                readonly
+                :value="shareItemUrl(item)"
+            />
+            <el-button data-test="copy-share-url" @click="copyItemLink(item)">{{ $t('shareCopyLink') }}</el-button>
+          </div>
+        </div>
+        <el-button type="primary" data-test="created-saved" @click="acknowledgeSecret">
+          {{ tf('shareCreatedSaved') }}
+        </el-button>
       </template>
 
       <template v-else>
@@ -108,37 +134,30 @@
       </section>
 
       <section class="section">
+        <!-- P2：完整地址即入口，「先注册账号再从下拉里挑」的前置被整个删除（决策卡标废弃）。
+             textarea 收批量粘贴，tag 区回显解析结果 —— 请求里带的就是这些 tag，一字不多。 -->
         <div class="row">
-          <label class="row-label" for="wizard-mailboxes">{{ tf('shareWizardMailboxes') }}</label>
-          <el-select
-              id="wizard-mailboxes"
-              v-model="mailboxModel"
+          <label class="row-label" for="wizard-emails">{{ tf('shareWizardEmails') }}</label>
+          <el-input
+              id="wizard-emails"
+              v-model="emailsInput"
               class="row-control"
-              data-test="mailbox-select"
-              :multiple="multiEnabled"
+              data-test="wizard-emails"
+              type="textarea"
+              :autosize="{minRows: 2, maxRows: 6}"
               :disabled="locked"
-              :placeholder="$t('shareMailbox')"
-          >
-            <el-option
-                v-for="item in accounts"
-                :key="item.accountId"
-                :label="item.email"
-                :value="item.accountId"
-            />
-          </el-select>
-          <el-button
-              v-if="!accountsDone"
-              text
-              data-test="mailbox-load-more"
-              :loading="accountsLoading"
-              :disabled="locked"
-              @click="loadAccounts"
-          >
-            {{ tf('shareBindingLoadMore') }}
-          </el-button>
+              :placeholder="tf('shareWizardEmailsPlaceholder')"
+          />
+          <p class="hint" data-test="wizard-emails-hint">{{ tf('shareWizardEmailsHint') }}</p>
+          <div v-if="emailList.length" class="email-tags" data-test="email-tags">
+            <el-tag v-for="email in emailList" :key="email" class="email-tag" data-test="email-tag">{{ email }}</el-tag>
+          </div>
+          <p v-if="emailList.length > 1" class="hint" data-test="emails-count">
+            {{ tf('shareWizardEmailsCount', {count: emailList.length}) }}
+          </p>
         </div>
-        <p v-if="overBindingLimit" class="notice notice-danger" data-test="binding-limit" role="alert">
-          {{ tf('shareBindingLimitReached') }}
+        <p v-if="overEmailLimit" class="notice notice-danger" data-test="binding-limit" role="alert">
+          {{ tf('shareWizardEmailsLimit') }}
         </p>
 
         <div class="row">
@@ -349,7 +368,7 @@
           type="primary"
           data-test="wizard-submit"
           :loading="submitting"
-          :disabled="submitting || overBindingLimit"
+          :disabled="submitting || overEmailLimit"
           @click="submit"
       >
         {{ $t('shareCreate') }}
@@ -362,10 +381,8 @@
 import {computed, reactive, ref, watch} from "vue"
 import {Icon} from "@iconify/vue"
 import {useI18n} from "vue-i18n"
-import {ElMessage, ElMessageBox} from "element-plus"
-import {useAccountStore} from "@/store/account.js"
+import {ElMessage} from "element-plus"
 import {useCopyWithFallback} from "@/composables/useCopyWithFallback.js"
-import {accountList} from "@/request/account.js"
 import {createMailShare, newIdempotencyKey} from "@/request/mail-share.js"
 import {buildShareUrl} from "@/views/email/build-share-url.js"
 import {
@@ -381,6 +398,7 @@ import {
   findPreset,
   hasFenceIntent,
   markCapabilityInactive,
+  parseShareEmails,
   presetFormValues,
   recheckCapabilityV2
 } from "./presets.js"
@@ -413,7 +431,14 @@ const PENDING_COPY = {
   sharePresetCustom: '自定义',
   sharePresetCustomHint: '全部选项展开，自己配。',
   shareWizardAdvanced: '高级选项',
-  shareWizardMailboxes: '分享的邮箱',
+  shareWizardEmails: '要分享的邮箱地址',
+  shareWizardEmailsPlaceholder: '输入完整邮箱地址；可一次粘贴多个，用空格、逗号、分号或换行分隔。',
+  shareWizardEmailsHint: '不需要预先注册：还不存在的地址会在创建分享时自动开通。',
+  shareWizardEmailsCount: '已识别 {count} 个地址。',
+  shareWizardEmailsLimit: '一次最多提交 50 个地址。',
+  shareEmailsRequired: '请输入至少一个完整邮箱地址。',
+  shareEmailInvalid: '不是完整的邮箱地址：{email}',
+  shareWizardBatchCreated: '已创建 {count} 条分享链接，请分别复制发放。日后也可以在分享详情里重新查看。',
   shareWizardDuration: '有效期',
   shareWizardLinkLabel: '分享链接',
   shareWizardShareId: '分享 ID',
@@ -428,7 +453,6 @@ const PENDING_COPY = {
   shareCreateUnknownHint: '分享可能已经建好了。请用同一把钥匙重试 —— 换一把会建出第二个分享。表单已锁定，以免重试时改动了内容。',
   shareCreateRetrySameKey: '用同一把钥匙重试',
   shareReplayGuidance: '这次提交命中了之前的同一请求，链接明文不会再发放。请撤销或删除这个分享，然后重新创建一个新链接。',
-  shareWizardCloseConfirm: '关闭后将无法再看到这个链接（和密钥）。确认已经保存好了吗？',
   shareCreatedSaved: '我已保存',
   shareWizardCountTooSmall: '上限至少是 1；留空表示不限。',
   shareName: '名称',
@@ -442,8 +466,6 @@ const PENDING_COPY = {
   shareShowFullAddress: '显示完整地址（展示选项）',
   shareShowFullAddressHint: '只影响分享页上邮箱地址的显示方式。关闭它不会改变邮件正文、主题或发件人里出现的地址。',
   shareAuthKey: '访问密钥',
-  shareBindingLoadMore: '加载更多邮箱',
-  shareBindingLimitReached: '一个分享最多绑定 50 个邮箱。',
   shareQuotaUnlimited: '不限'
 }
 
@@ -452,13 +474,12 @@ function tf(key, params) {
 }
 
 // Mirrors of backend constants the browser has to enforce before the request leaves:
-// SHARE_BINDING_LIMIT, account/list's hard size cap, and MIN_REFRESH_INTERVAL_MS.
-const BINDING_LIMIT = 50
-const ACCOUNT_PAGE_SIZE = 30
+// SHARE_BINDING_LIMIT (P2 applies it to emails.length on both batch paths) and
+// MIN_REFRESH_INTERVAL_MS.
+const EMAIL_LIMIT = 50
 const MIN_REFRESH_INTERVAL_MS = 3000
 
 const presetLabelId = 'share-wizard-preset-label'
-const accountStore = useAccountStore()
 
 const visible = ref(false)
 const submitting = ref(false)
@@ -476,14 +497,13 @@ const advancedNames = ref([])
 const customDurationOpen = ref(false)
 const customDurationAmount = ref(30)
 const customDurationUnit = ref('days')
-const accounts = ref([])
-const accountsDone = ref(false)
-const accountsLoading = ref(false)
+// The raw pasted text is the source of truth; the request carries its parsed projection.
+// Kept outside `form` so the key-rotation watcher below can treat it the same way.
+const emailsInput = ref('')
 const idempotencyKey = ref(newIdempotencyKey())
 
 const form = reactive({
   presetId: SHARE_PRESETS[0].id,
-  accountIds: [],
   name: '',
   remark: '',
   ...presetFormValues(SHARE_PRESETS[0].id)
@@ -491,9 +511,8 @@ const form = reactive({
 
 const locked = computed(() => unknownResult.value)
 const gatedDisabled = computed(() => capabilityV2.value === 'inactive')
-const activePreset = computed(() => findPreset(form.presetId))
-const multiEnabled = computed(() => activePreset.value.multi && !gatedDisabled.value)
-const overBindingLimit = computed(() => form.accountIds.length > BINDING_LIMIT)
+const emailList = computed(() => parseShareEmails(emailsInput.value).emails)
+const overEmailLimit = computed(() => emailList.value.length > EMAIL_LIMIT)
 
 // The select carries either a rung's seconds or the 'custom' sentinel, while durationSeconds
 // stays the resolved number the request speaks. Keeping the sentinel out of the form is what
@@ -518,93 +537,60 @@ watch([customDurationAmount, customDurationUnit], ([amount, unit]) => {
   form.durationSeconds = customDurationSeconds(amount, unit)
 })
 
-// The request always speaks accountIds, but a non-multiple el-select cannot render an array
-// and silently falls back to its placeholder — the owner sees "no mailbox chosen" over a
-// mailbox that is in fact chosen. One list inside, whichever shape the picker is in.
-const mailboxModel = computed({
-  get() {
-    if (multiEnabled.value) {
-      return form.accountIds
-    }
-    return form.accountIds.length > 0 ? form.accountIds[0] : null
-  },
-  set(value) {
-    if (Array.isArray(value)) {
-      form.accountIds = value
-      return
-    }
-    form.accountIds = value == null || value === '' ? [] : [value]
-  }
-})
-
-const createdShareUrl = computed(() => {
-  const data = created.value
-  if (!data) {
+// One resolver for the single pane and the batch pane: revealSec later returns the very same
+// string, so both panes must derive it the same way or one of them hands out a broken link.
+function shareItemUrl(item) {
+  if (!item) {
     return ''
   }
-  if (data.shareUrl) {
-    return data.shareUrl
+  if (item.shareUrl) {
+    return item.shareUrl
   }
-  if (data.lid && data.sec && typeof window !== 'undefined') {
-    return buildShareUrl(window.location.origin, data.lid, data.sec)
+  if (item.lid && item.sec && typeof window !== 'undefined') {
+    return buildShareUrl(window.location.origin, item.lid, item.sec)
   }
   return ''
-})
+}
+
+const createdShareUrl = computed(() => shareItemUrl(created.value))
 
 const createdAuthKey = computed(() => (created.value && created.value.authKey) || '')
+
+// P2 批量分流:V2=false 的多地址响应形状是 { shares: [...] }(向导按响应形状渲染,
+// 不猜 V2);单地址与 V2=true 的 multi 仍是单对象,走原来的单链接面板。
+const createdShares = computed(() => {
+  const data = created.value
+  return data && Array.isArray(data.shares) ? data.shares : []
+})
 
 const replayWithoutSecret = computed(() => {
   const data = created.value
   return Boolean(data && data.idempotentReplay && !data.sec && !data.shareUrl)
 })
 
-const hasUnsavedSecret = computed(() => Boolean(createdShareUrl.value || createdAuthKey.value))
+const replayShares = computed(() => {
+  const data = created.value
+  if (!data) {
+    return []
+  }
+  return Array.isArray(data.shares) ? data.shares : [data]
+})
 
 function rotateIdempotencyKey() {
   idempotencyKey.value = newIdempotencyKey()
 }
 
-function applyPreset(presetId, resetMailboxes = false) {
+// Presets are prefill only (AC-CAP-12), and since P2 that includes the address list: every
+// preset accepts a pasted batch, because V2=false serves it as N single shares anyway.
+function applyPreset(presetId) {
   const preset = findPreset(presetId)
   Object.assign(form, preset.form)
   form.presetId = presetId
   // preset.form carries a rung, so leaving custom mode open would show 'custom' over a
   // durationSeconds the two custom fields no longer describe.
   customDurationOpen.value = false
-  if (resetMailboxes) {
-    const current = Number(accountStore.currentAccountId) || 0
-    form.accountIds = current > 0 ? [current] : []
-  }
-  if (!(preset.multi && !gatedDisabled.value)) {
-    form.accountIds = form.accountIds.slice(0, 1)
-  }
   advancedNames.value = preset.advancedOpen ? ['advanced'] : []
   formError.value = ''
-}
-
-async function loadAccounts() {
-  if (accountsLoading.value || accountsDone.value) {
-    return
-  }
-  accountsLoading.value = true
-  try {
-    const last = accounts.value[accounts.value.length - 1]
-    const page = await accountList(
-        last ? last.accountId : 0,
-        ACCOUNT_PAGE_SIZE,
-        last ? last.sort : null
-    )
-    const rows = Array.isArray(page) ? page : []
-    accounts.value = accounts.value.concat(rows)
-    if (rows.length < ACCOUNT_PAGE_SIZE) {
-      accountsDone.value = true
-    }
-  } catch (err) {
-    accountsDone.value = true
-    console.error('account list failed', {code: err && err.code})
-  } finally {
-    accountsLoading.value = false
-  }
 }
 
 function openDialog() {
@@ -614,11 +600,9 @@ function openDialog() {
   formError.value = ''
   form.name = ''
   form.remark = ''
-  accounts.value = []
-  accountsDone.value = false
-  applyPreset(form.presetId, true)
+  emailsInput.value = ''
+  applyPreset(form.presetId)
   rotateIdempotencyKey()
-  loadAccounts()
 }
 
 function closeNow() {
@@ -637,16 +621,9 @@ function onOpenChange(value) {
   if (submitting.value) {
     return
   }
-  // Losing a form costs a minute of retyping; losing the plaintext costs the share. Only the
-  // second one is worth a confirm.
-  if (hasUnsavedSecret.value) {
-    ElMessageBox.confirm(tf('shareWizardCloseConfirm'), {
-      confirmButtonText: t('confirm'),
-      cancelButtonText: t('cancel'),
-      type: 'warning'
-    }).then(closeNow).catch(() => {})
-    return
-  }
+  // No second "shown only once" confirm on close: the link is retrievable from the detail
+  // drawer (ADR-share-credential-recoverability), and the auth key already carries its own
+  // one-shot warning inside the result pane.
   closeNow()
 }
 
@@ -664,13 +641,17 @@ function isCount(value) {
 
 // Every range the backend enforces, checked before the request leaves. This is not polish:
 // SHARE_INVALID_CONFIG names the offending write no more precisely than "not accepted", so a
-// range error that reaches the server comes back as one generic line instead of the field to fix.
-function localError() {
-  if (form.accountIds.length === 0) {
-    return 'shareAccountRequired'
+// range error that reaches the server comes back as one generic line instead of the field to
+// fix — and SHARE_EMAIL_INVALID cannot say which of 20 pasted addresses it meant.
+function localError(parsed) {
+  if (parsed.invalid) {
+    return 'shareEmailInvalid'
   }
-  if (form.accountIds.length > BINDING_LIMIT) {
-    return 'shareBindingLimitReached'
+  if (parsed.emails.length === 0) {
+    return 'shareEmailsRequired'
+  }
+  if (parsed.emails.length > EMAIL_LIMIT) {
+    return 'shareWizardEmailsLimit'
   }
   const duration = durationError(form.durationSeconds)
   if (duration) {
@@ -693,9 +674,11 @@ function localError() {
 // Explicit defaults are safe: the fingerprint is taken after normalizeCreateBody, where a
 // missing key and its default collapse to the same value. Absent keys are the ones the owner
 // left blank, which is not the same statement as "set this to zero".
-function buildBody() {
+// P2: the wizard speaks full addresses only — no accountIds key at all, so the deprecated
+// pick-a-registered-account path cannot leak back in as a dead field.
+function buildBody(emails) {
   const body = {
-    accountIds: [...form.accountIds],
+    emails: [...emails],
     durationSeconds: Number(form.durationSeconds),
     name: form.name,
     remark: form.remark,
@@ -723,9 +706,10 @@ function isBusinessError(err) {
   return Boolean(err) && Number.isInteger(err.code) && typeof err.message === 'string'
 }
 
+// The address list survives the degrade untouched: V2=false still serves a multi-address
+// batch as N single shares (DC-P0-1), so the fence has no claim on the emails.
 function degradeToInactive() {
   markCapabilityInactive()
-  form.accountIds = form.accountIds.slice(0, 1)
   form.authKeyEnabled = false
   form.maxSessions = null
   form.messageLimit = null
@@ -740,13 +724,14 @@ async function submit() {
     return
   }
   formError.value = ''
-  const invalid = localError()
+  const parsed = parseShareEmails(emailsInput.value)
+  const invalid = localError(parsed)
   if (invalid) {
-    formError.value = tf(invalid, {days: MAX_DURATION_DAYS})
+    formError.value = tf(invalid, {days: MAX_DURATION_DAYS, email: parsed.invalid})
     return
   }
   created.value = null
-  const body = buildBody()
+  const body = buildBody(parsed.emails)
   // Read before the request: degrading is only honest when this submission actually asked for
   // something the fence guards.
   const fenceIntent = hasFenceIntent(body)
@@ -792,6 +777,15 @@ async function copyCreatedLink() {
   }
 }
 
+// Batch pane: same composable instance as the single link, so the manual fallback keeps its
+// one selectableRef; with several inputs on screen it falls back to the injected host instead.
+async function copyItemLink(item) {
+  const result = await copyUrl(shareItemUrl(item))
+  if (result.copied) {
+    ElMessage({message: t('copySuccessMsg'), type: 'success', plain: true})
+  }
+}
+
 async function copyCreatedAuthKey() {
   const result = await copyKey(createdAuthKey.value)
   if (result.copied) {
@@ -802,7 +796,15 @@ async function copyCreatedAuthKey() {
 // ShareDialog rotates on every form edit so a changed body cannot collide with a stored
 // fingerprint. The wizard needs the same reflex plus one gate: while the result is unknown the
 // key must survive, and it does because an unknown result also freezes the form.
+// emailsInput lives outside `form`, so it needs its own watcher — an edited address list is a
+// different fingerprint just like an edited name.
 watch(form, () => {
+  if (!unknownResult.value) {
+    rotateIdempotencyKey()
+  }
+})
+
+watch(emailsInput, () => {
   if (!unknownResult.value) {
     rotateIdempotencyKey()
   }
@@ -909,6 +911,21 @@ watch(form, () => {
 
 .row-control {
   width: 100%;
+}
+
+.email-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.email-tag {
+  max-width: 100%;
+
+  :deep(.el-tag__content) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 .custom-duration {

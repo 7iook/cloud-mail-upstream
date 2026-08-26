@@ -259,7 +259,26 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         expect(revokeMailShare).toHaveBeenCalledWith(7)
     })
 
-    it('renders the API effectiveStatus instead of recomputing expiry (AC-LIFE-08)', async () => {
+    // P1 supersedes the old AC-LIFE-08 owner-display reading ("render the API effectiveStatus,
+    // never recompute expiry"): the display now overlays liveEffectiveStatus so a stale
+    // snapshot flips to EXPIRED without a re-login. Auth and writes still trust the server.
+    it('overlays EXPIRED on a stale ACTIVE snapshot whose expiresAt has passed (P1)', async () => {
+        listMailShares.mockResolvedValue({
+            list: [sampleShare({
+                effectiveStatus: 'ACTIVE',
+                status: 'ACTIVE',
+                expiresAt: '2020-01-01 00:00:00'
+            })],
+            total: 1
+        })
+        const wrapper = mountDialog()
+        await flushPromises()
+        const row = wrapper.get('[data-test="share-row"]')
+        expect(row.attributes('data-status')).toBe('EXPIRED')
+        expect(row.get('[data-test="share-status"]').text()).toMatch(/expired/i)
+    })
+
+    it('still trusts an API EXPIRED verdict the client clock cannot derive', async () => {
         listMailShares.mockResolvedValue({
             list: [sampleShare({
                 effectiveStatus: 'EXPIRED',
@@ -272,8 +291,7 @@ describe('ShareDialog owner management (AC-MGMT / AC-SHARE / AC-LEAK-01)', () =>
         await flushPromises()
         const row = wrapper.get('[data-test="share-row"]')
         expect(row.attributes('data-status')).toBe('EXPIRED')
-        expect(row.text()).toMatch(/expired/i)
-        expect(row.text()).not.toMatch(/active/i)
+        expect(row.get('[data-test="share-status"]').text()).toMatch(/expired/i)
     })
 
     it('labels access count as a successful link open, not a read receipt', async () => {

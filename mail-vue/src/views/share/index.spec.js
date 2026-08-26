@@ -6,11 +6,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createI18n } from 'vue-i18n'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { createShareSession, isShareRateLimited, isShareUnavailable } from '@/request/share.js'
+import { ShareGoneError, createShareSession, isShareRateLimited, isShareUnavailable } from '@/request/share.js'
 import en from '@/i18n/en.js'
 import zh from '@/i18n/zh.js'
 import { POLL_INTERVAL_MS } from '@/composables/useSharePolling.js'
-import { readShareSession, writeShareSession } from './session.js'
+import { readShareSession, shareGoneKey, writeShareSession } from './session.js'
 import ShareView from './index.vue'
 
 const {
@@ -18,13 +18,17 @@ const {
     listShareMails,
     getShareAttachment,
     getShareMailboxesStatus,
-    elMessage
+    elMessage,
+    reloadShareDocument,
+    blankShareDocument
 } = vi.hoisted(() => ({
     createShareSession: vi.fn(),
     listShareMails: vi.fn(),
     getShareAttachment: vi.fn(),
     getShareMailboxesStatus: vi.fn(),
-    elMessage: vi.fn()
+    elMessage: vi.fn(),
+    reloadShareDocument: vi.fn(),
+    blankShareDocument: vi.fn()
 }))
 
 // ElMessage reaches the SFC through unplugin-auto-import, which rewrites the bare
@@ -44,6 +48,13 @@ vi.mock('@/request/share.js', async (importOriginal) => {
         getShareAttachment,
         getShareMailboxesStatus
     }
+})
+
+// jsdom 的 location.reload 不可 spy(non-configurable),导航动作因此走 session.js 的
+// 模块级接缝;其余 session.js 函数保持真实现,规格里对 sessionStorage 的断言不受影响。
+vi.mock('./session.js', async (importOriginal) => {
+    const actual = await importOriginal()
+    return { ...actual, reloadShareDocument, blankShareDocument }
 })
 
 const wrappers = []
@@ -637,7 +648,8 @@ describe('share view visitor mailbox', () => {
 
     it('keeps the OTP typography and fallback styles with the card that owns the markup (T-24 Fog-3 source)', () => {
         const card = readFileSync(path.join(process.cwd(), 'src/views/share/ShareOtpCard.vue'), 'utf8')
-        expect(card).toMatch(/font-size:\s*32px/)
+        // P5 UI 设计卡:OTP 大字 clamp(30px, 8vw, 40px),等宽数字。
+        expect(card).toMatch(/font-size:\s*clamp\(30px,\s*8vw,\s*40px\)/)
         expect(card).toMatch(/letter-spacing:\s*0\.12em/)
         expect(card).toMatch(/\.share-otp-select\.is-visible/)
 
@@ -1701,5 +1713,93 @@ describe('share view arrival notice and full-body copy', () => {
 
         expect(wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-result')).toBe('manual')
         expect(wrapper.get('.share-copy-all-select').classes()).toContain('is-visible')
+    })
+})
+
+// ── P4 · 已打开的 SPA 撞上销毁(HTTP 404):单次 reload,再回到 SPA 则清空文档 ──
+// 生产环境 reload 会打到 worker 的文档拦截(原生 404);vite 直出 SPA 的环境靠
+// sessionStorage['share:gone:'+lid] 识破循环,清空 documentElement 兜底。
+describe('share view gone link recovery (P4)', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia())
+        sessionStorage.clear()
+        createShareSession.mockReset()
+        listShareMails.mockReset()
+        getShareAttachment.mockReset()
+        getShareMailboxesStatus.mockReset()
+        reloadShareDocument.mockReset()
+        blankShareDocument.mockReset()
+        listShareMails.mockResolvedValue({ list: [], nextCursor: null })
+        getShareAttachment.mockResolvedValue(new Blob(['x']))
+        getShareMailboxesStatus.mockResolvedValue({ mailboxes: [{ bindingId: 0, latestEmailId: null }] })
+    })
+
+    afterEach(() => {
+        while (wrappers.length) {
+            wrappers.pop().unmount()
+        }
+        sessionStorage.clear()
+        vi.clearAllMocks()
+        vi.useRealTimers()
+    })
+
+    it('flags share:gone:<lid> and reloads exactly once when the session answers 404', async () => {
+        createShareSession.mockRejectedValue(new ShareGoneError())
+
+        const wrapper = await mountShare('lid-gone', 'sec-gone')
+
+        expect(sessionStorage.getItem(shareGoneKey('lid-gone'))).toBe('1')
+        expect(reloadShareDocument).toHaveBeenCalledTimes(1)
+        expect(blankShareDocument).not.toHaveBeenCalled()
+        // 不许把销毁画成业务「不再可用」页 —— 原生 404 是唯一合法形态。
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).not.toBe('unavailable')
+    })
+
+    it('does not burn the establish replay on a gone answer (single POST, no retry)', async () => {
+        createShareSession.mockRejectedValue(new ShareGoneError())
+
+        await mountShare('lid-gone-once', 'sec-x')
+
+        expect(createShareSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('blanks the document instead of looping when the reload landed back on the SPA', async () => {
+        sessionStorage.setItem(shareGoneKey('lid-gone'), '1')
+        createShareSession.mockRejectedValue(new ShareGoneError())
+
+        await mountShare('lid-gone', 'sec-gone')
+
+        expect(reloadShareDocument).not.toHaveBeenCalled()
+        expect(blankShareDocument).toHaveBeenCalledTimes(1)
+    })
+
+    it('routes a refresh-time 404 through the same one-reload recovery and drops the token', async () => {
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-live', mailbox: 'a@example.com' })
+
+        const wrapper = await mountShare('lid-gone-live', 'sec-live')
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('ready')
+
+        getShareMailboxesStatus.mockRejectedValue(new ShareGoneError())
+        listShareMails.mockRejectedValue(new ShareGoneError())
+        await wrapper.get('[data-share-refresh]').trigger('click')
+        await flushPromises()
+
+        expect(sessionStorage.getItem(shareGoneKey('lid-gone-live'))).toBe('1')
+        expect(reloadShareDocument).toHaveBeenCalledTimes(1)
+        // 死链接的 token 不得留给 reload 之后的页面。
+        expect(readShareSession('lid-gone-live')).toBe('')
+    })
+
+    it('keeps EXPIRED (SHARE_UNAVAILABLE) on the business page — only gone reloads', async () => {
+        writeShareSession('lid-exp', 'sess-exp')
+
+        const wrapper = await mountShare('lid-exp')
+        await wrapper.vm.noteShareFailure({ code: 'SHARE_UNAVAILABLE', message: 'SHARE_UNAVAILABLE' }, true)
+        await flushPromises()
+
+        expect(wrapper.get('[data-share-state]').attributes('data-share-state')).toBe('unavailable')
+        expect(reloadShareDocument).not.toHaveBeenCalled()
+        expect(blankShareDocument).not.toHaveBeenCalled()
+        expect(sessionStorage.getItem(shareGoneKey('lid-exp'))).toBeNull()
     })
 })

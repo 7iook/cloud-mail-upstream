@@ -14,6 +14,16 @@ export class ShareRateLimitedError extends Error {
     }
 }
 
+// P4:worker 对销毁/不存在的分享回裸 404 空 body(与文档入口同貌)。请求层只翻译,
+// 不导航 —— reload 一次还是清空文档由页面按 sessionStorage 记账决定。
+export class ShareGoneError extends Error {
+    constructor() {
+        super('SHARE_DESTROYED')
+        this.name = 'ShareGoneError'
+        this.status = 404
+    }
+}
+
 export function parseRetryAfter(value) {
     if (value == null || value === '') {
         return null
@@ -45,6 +55,10 @@ export function isShareUnavailable(err) {
 
 export function isShareAuthRequired(err) {
     return Boolean(err) && (err.code === 'SHARE_AUTH_REQUIRED' || err.message === 'SHARE_AUTH_REQUIRED')
+}
+
+export function isShareGone(err) {
+    return Boolean(err && (err instanceof ShareGoneError || err.name === 'ShareGoneError'))
 }
 
 function readHeader(headers, name) {
@@ -151,6 +165,11 @@ shareHttp.interceptors.response.use(async (res) => {
         const raw = readHeader(error.response && error.response.headers, 'retry-after')
         const retryAfterRaw = raw == null ? null : String(raw)
         return Promise.reject(new ShareRateLimitedError(parseRetryAfter(raw), retryAfterRaw))
+    }
+    // 分享面的 404 只有一种来源:withShare / 文档拦截宣告的 gone(P4)。这些端点
+    // 路径是写死的,不存在「打错 URL 的 404」需要与之区分。
+    if (status === 404) {
+        return Promise.reject(new ShareGoneError())
     }
     return Promise.reject(error)
 })

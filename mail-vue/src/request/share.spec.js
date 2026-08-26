@@ -1,12 +1,14 @@
 import axios from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+    ShareGoneError,
     ShareRateLimitedError,
     createShareSession,
     getShareAttachment,
     getShareMail,
     getShareMailboxesStatus,
     isShareAuthRequired,
+    isShareGone,
     isShareRateLimited,
     isShareUnavailable,
     listShareMails,
@@ -330,6 +332,51 @@ describe('share request client', () => {
         // 反向:AUTH_REQUIRED 不得被读成死链,否则访客还没输 Key 页面就宣告链接失效。
         expect(isShareUnavailable({ code: 501, message: 'SHARE_AUTH_REQUIRED' })).toBe(false)
         expect(isShareRateLimited({ code: 501, message: 'SHARE_AUTH_REQUIRED' })).toBe(false)
+    })
+
+    // P4:销毁/不存在的分享在 HTTP 层是裸 404 空 body。请求层只负责翻译成
+    // ShareGoneError;reload / 清空文档是页面的职责,请求层自己绝不导航。
+    it('maps a bare HTTP 404 to ShareGoneError without navigating (P4)', async () => {
+        shareHttp.defaults.adapter = async (config) => {
+            captured.push(config)
+            httpError(config, 404, { 'cache-control': 'no-store' }, '')
+        }
+
+        let caught
+        try {
+            await listShareMails({ sessionToken: SHARE_TOKEN })
+        } catch (err) {
+            caught = err
+        }
+
+        expect(caught).toBeInstanceOf(ShareGoneError)
+        expect(caught.status).toBe(404)
+        expect(isShareGone(caught)).toBe(true)
+        expect(isShareUnavailable(caught)).toBe(false)
+        expect(isShareRateLimited(caught)).toBe(false)
+        expect(isShareAuthRequired(caught)).toBe(false)
+        expect(reload).not.toHaveBeenCalled()
+        expect(assign).not.toHaveBeenCalled()
+        expect(replace).not.toHaveBeenCalled()
+    })
+
+    it('maps a 404 on POST /share/session to the same gone shape (P4)', async () => {
+        shareHttp.defaults.adapter = async (config) => {
+            captured.push(config)
+            httpError(config, 404, {}, '')
+        }
+
+        await expect(createShareSession('lid-1', 'sec-1')).rejects.toBeInstanceOf(ShareGoneError)
+    })
+
+    it('tells a gone link apart from every other failure family', () => {
+        expect(isShareGone(new ShareGoneError())).toBe(true)
+        expect(isShareGone({ name: 'ShareGoneError' })).toBe(true)
+        expect(isShareGone({ code: 501, message: 'SHARE_UNAVAILABLE' })).toBe(false)
+        expect(isShareGone({ code: 501, message: 'SHARE_AUTH_REQUIRED' })).toBe(false)
+        expect(isShareGone(new ShareRateLimitedError(5, '5'))).toBe(false)
+        expect(isShareGone(null)).toBe(false)
+        expect(isShareGone(undefined)).toBe(false)
     })
 
     it('hands back SHARE_UNAVAILABLE when an attachment response is a JSON blob envelope', async () => {

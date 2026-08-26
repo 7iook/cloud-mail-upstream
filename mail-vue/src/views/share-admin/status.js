@@ -21,6 +21,32 @@ export function isMutableStatus(effectiveStatus) {
     return effectiveStatus === 'ACTIVE' || effectiveStatus === 'ACCESS_LIMIT_REACHED'
 }
 
+// Worker writes expires_at as a UTC bare 'YYYY-MM-DD HH:mm:ss'. The browser Date parser
+// would treat that as local time and hand a UTC+8 owner eight extra hours of "ACTIVE".
+export function expiresAtUtcMs(expiresAt) {
+    const raw = String(expiresAt || '').trim()
+    if (!raw) {
+        return NaN
+    }
+    return Date.parse(`${raw.replace(' ', 'T')}Z`)
+}
+
+// Owner-side display SSOT. Persistence is still ACTIVE/REVOKED; this only overlays a stale
+// API snapshot so keep-alive / a tab left open can flip to EXPIRED without a re-login.
+export function liveEffectiveStatus(row, nowMs = Date.now()) {
+    if (!row) {
+        return ''
+    }
+    if (row.status === 'REVOKED' || row.effectiveStatus === 'REVOKED') {
+        return 'REVOKED'
+    }
+    const expires = expiresAtUtcMs(row.expiresAt)
+    if (Number.isFinite(expires) && expires <= nowMs) {
+        return 'EXPIRED'
+    }
+    return row.effectiveStatus || 'ACTIVE'
+}
+
 export function shareTypeLabelKey(shareType) {
     return shareType === 'multi' ? 'shareTypeMulti' : 'shareTypeSingle'
 }

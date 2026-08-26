@@ -91,7 +91,11 @@ describe('create failure reporting', () => {
         expect(createErrorKey({ message: 'SHARE_CAPABILITY_NOT_ENABLED' })).toBe('shareCapabilityNotEnabled')
         expect(createErrorKey({ message: 'SHARE_DURATION_EXCEEDED' })).toBe('shareDurationServerRejected')
         expect(createErrorKey({ message: 'SHARE_INVALID_CONFIG' })).toBe('shareConfigRejected')
-        expect(createErrorKey({ message: 'SHARE_ACCOUNT_FORBIDDEN' })).toBe('shareCreateFailed')
+        // P2 的两个新码 + 账号侧不可用:域名未配置是决策卡点名的「友好提示」,不允许再落
+        // 到「稍后重试」那句谎话上 —— 重试一万次也不会把域名配上。
+        expect(createErrorKey({ message: 'SHARE_DOMAIN_NOT_CONFIGURED' })).toBe('shareDomainNotConfigured')
+        expect(createErrorKey({ message: 'SHARE_EMAIL_INVALID' })).toBe('shareEmailRejected')
+        expect(createErrorKey({ message: 'SHARE_ACCOUNT_FORBIDDEN' })).toBe('shareEmailUnavailable')
         expect(createErrorKey(null)).toBe('shareCreateFailed')
         expect(createErrorKey({})).toBe('shareCreateFailed')
     })
@@ -110,6 +114,8 @@ describe('create failure reporting', () => {
             'SHARE_CAPABILITY_NOT_ENABLED',
             'SHARE_DURATION_EXCEEDED',
             'SHARE_INVALID_CONFIG',
+            'SHARE_DOMAIN_NOT_CONFIGURED',
+            'SHARE_EMAIL_INVALID',
             'SHARE_ACCOUNT_FORBIDDEN'
         ]
         codes.forEach((code) => {
