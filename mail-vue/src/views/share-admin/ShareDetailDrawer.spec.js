@@ -1399,9 +1399,10 @@ describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', (
         expect(wrapper.get('[data-test="detail-quota"]').text()).toContain('2')
     })
 
-    // P1: the badge and the write predicate follow liveEffectiveStatus, so a drawer opened on
-    // a stale ACTIVE snapshot reads as EXPIRED the moment the client clock says so.
-    it('turns read-only off a stale ACTIVE detail whose expiresAt has passed (P1 live)', async () => {
+    // P1: the badge follows liveEffectiveStatus; the write predicate stays on the
+    // server snapshot (AC-LIFE-08: 前端不得回写). A stale ACTIVE row whose clock
+    // has passed still looks EXPIRED but remains writable until the next fetch.
+    it('keeps writes on the server snapshot while the badge follows the live clock (P1 live)', async () => {
         getMailShare.mockResolvedValue(sampleDetail({
             status: 'ACTIVE',
             effectiveStatus: 'ACTIVE',
@@ -1410,12 +1411,8 @@ describe('share detail drawer · write predicate (AC-ADMIN-04 / AC-ADMIN-09)', (
         const wrapper = await openDrawer()
 
         expect(wrapper.get('[data-test="detail-status"]').attributes('data-status')).toBe('EXPIRED')
-        expect(wrapper.find('[data-test="detail-readonly"]').exists()).toBe(true)
-        expect(wrapper.get('[data-test="config-save"]').attributes('disabled')).toBeDefined()
-
-        await wrapper.get('[data-test="config-save"]').trigger('click')
-        await flushPromises()
-        expect(updateMailShare).not.toHaveBeenCalled()
+        expect(wrapper.find('[data-test="detail-readonly"]').exists()).toBe(false)
+        expect(wrapper.get('[data-test="config-save"]').attributes('disabled')).toBeUndefined()
     })
 
     it('leaves ACCESS_LIMIT_REACHED fully writable: that is when the quota needs raising (S2)', async () => {

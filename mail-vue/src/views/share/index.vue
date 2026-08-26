@@ -123,6 +123,12 @@
         :aria-busy="refreshing ? 'true' : undefined"
         @click="manualRefresh"
       >{{ refreshing ? tx('shareVisitRefreshing', 'Checking...') : tx('shareVisitRefresh', 'Check for new mail') }}</button>
+      <p
+        v-if="newMailNotice"
+        class="share-new-mail"
+        data-share-new-mail
+        role="status"
+      >{{ newMailNotice }}</p>
 
       <div
         id="share-tabpanel"
@@ -249,6 +255,7 @@ import {
     blankShareDocument,
     clearEstablishKey,
     clearOtherShareSessions,
+    clearShareGone,
     clearShareSession,
     consumeShareSecret,
     ensureEstablishKey,
@@ -288,6 +295,7 @@ const pageSecret = ref('')
 const mails = ref([])
 const selectedId = ref('')
 const rateLimited = ref(false)
+const newMailNotice = ref('')
 const otpEnabled = ref(true)
 const shareType = ref('single')
 const mailboxes = ref([])
@@ -387,11 +395,8 @@ function onPolledMails(list) {
     rateLimited.value = false
     const before = maxVisibleMailId()
     mergeMails(list)
-    if (newMailToastArmed && maxVisibleMailId() > before && typeof ElMessage === 'function') {
-        ElMessage({
-            message: tx('shareVisitNewMailToast', 'New mail received'),
-            type: 'info'
-        })
+    if (newMailToastArmed && maxVisibleMailId() > before) {
+        newMailNotice.value = tx('shareVisitNewMailToast', 'New mail received')
     }
 }
 
@@ -533,12 +538,6 @@ async function copyFullMail() {
     }
     const result = await copyBody(fullMailText.value)
     copyAllResult.value = result.copied ? 'copied' : 'manual'
-    if (result.copied && typeof ElMessage === 'function') {
-        ElMessage({
-            message: tx('shareVisitCopiedAll', 'Full email copied'),
-            type: 'success'
-        })
-    }
 }
 
 // The confirmation belongs to one mail's body, exactly as the code card's does.
@@ -753,6 +752,7 @@ async function postSession(lid, sec, authKey, previousSessionToken = '') {
 function enterReady(lid, data) {
     writeShareSession(lid, data.sessionToken)
     clearEstablishKey(lid)
+    clearShareGone(lid)
     sessionToken.value = data.sessionToken
     applyShareConfig(data)
     mailbox.value = (data && data.mailbox) || ''
@@ -1174,10 +1174,18 @@ defineExpose({
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
+    min-width: 0;
 }
 
 .share-top p {
     margin: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.share-new-mail {
+    margin: 8px 0 0;
+    color: var(--sh-text, #1b1f3b);
 }
 
 .share-top button,

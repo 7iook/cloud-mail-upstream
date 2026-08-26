@@ -52,6 +52,44 @@ export function limitedShareResponse(c, retryAfterSeconds) {
 	});
 }
 
+export function readRateLimitKeyFromRequest(req) {
+	const ip = req && req.headers && typeof req.headers.get === 'function'
+		? req.headers.get('CF-Connecting-IP')
+		: '';
+	if (typeof ip === 'string') {
+		const trimmed = ip.trim();
+		if (trimmed) {
+			return trimmed;
+		}
+	}
+	return MISSING_CONNECTING_IP_KEY;
+}
+
+export async function enforceShareRateLimitOnRequest(req, limiter, retryAfterSeconds) {
+	if (!limiter || typeof limiter.limit !== 'function') {
+		return null;
+	}
+	const key = readRateLimitKeyFromRequest(req);
+	let outcome;
+	try {
+		outcome = await limiter.limit({ key });
+	} catch (err) {
+		const detail = err && err.message ? err.message : String(err);
+		console.error('share rate limiter.limit failed', detail);
+		return null;
+	}
+	if (outcome && outcome.success === false) {
+		return new Response(null, {
+			status: 429,
+			headers: {
+				'Retry-After': String(retryAfterSeconds),
+				'Cache-Control': 'no-store'
+			}
+		});
+	}
+	return null;
+}
+
 export async function enforceShareRateLimit(c, limiter, retryAfterSeconds) {
 	if (!limiter || typeof limiter.limit !== 'function') {
 		return null;

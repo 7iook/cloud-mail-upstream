@@ -102,6 +102,14 @@ export function markShareGone(lid) {
     }
 }
 
+export function clearShareGone(lid) {
+    try {
+        sessionStorage.removeItem(shareGoneKey(lid))
+    } catch {
+        // sessionStorage 不可用时本来就不会留下 gone 标。
+    }
+}
+
 // 独立可 mock 的导航动作:jsdom 的 location.reload 不可 spy,页面单测经由这两个
 // 接缝断言「reload 一次 / 清空文档」而不真的导航。
 export function reloadShareDocument() {

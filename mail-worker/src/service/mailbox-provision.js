@@ -136,6 +136,7 @@ export async function planMailboxProvision(c, { emails, userId, requireNew = fal
 		reused.push({ accountId: row.account_id, email });
 	}
 
+	let accountQuota = null;
 	if (missing.length) {
 		const userRow = await userService.selectById(c, userId);
 		if (!userRow) {
@@ -145,6 +146,7 @@ export async function planMailboxProvision(c, { emails, userId, requireNew = fal
 		if (userRow.email !== c.env.admin) {
 			const roleRow = await roleService.selectById(c, userRow.type);
 			if (roleRow && roleRow.accountCount > 0) {
+				accountQuota = roleRow.accountCount;
 				const owned = await countOwnedMailboxes(c, userId);
 				if (owned + missing.length > roleRow.accountCount) {
 					deny(PROVISION_DENIED.QUOTA_EXCEEDED, { limit: roleRow.accountCount });
@@ -160,7 +162,7 @@ export async function planMailboxProvision(c, { emails, userId, requireNew = fal
 		}
 	}
 
-	return { reused, missing };
+	return { reused, missing, accountQuota };
 }
 
 // account 的唯一 INSERT 文本。刻意**不带** NOT EXISTS 守卫:并发抢注同一地址必须以

@@ -83,6 +83,10 @@ describe('P4 · document GET|HEAD /s/:lid before assets', () => {
 		expect(response.status).toBe(404);
 		expect(await response.text()).toBe('');
 		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+		expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+		expect(response.headers.get('X-CloudMail-Share-Gone')).toBe('1');
+		expect(response.headers.get('Content-Security-Policy')).toContain("script-src 'self'");
 	});
 
 	it('answers HEAD on a missing lid with 404', async () => {
@@ -130,6 +134,9 @@ describe('P4 · shareDocumentIfGone unit contract', () => {
 		expect(response.status).toBe(404);
 		expect(await response.text()).toBe('');
 		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+		expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+		expect(response.headers.get('X-CloudMail-Share-Gone')).toBe('1');
 	});
 
 	it('never touches the database for a non-GET/HEAD or non-/s/ request', async () => {
@@ -139,6 +146,27 @@ describe('P4 · shareDocumentIfGone unit contract', () => {
 		const fakeEnv = { db: { prepare } };
 		expect(await shareDocumentIfGone(new Request('http://x/s/abc', { method: 'POST' }), fakeEnv)).toBeNull();
 		expect(await shareDocumentIfGone(new Request('http://x/other'), fakeEnv)).toBeNull();
+		expect(prepare).not.toHaveBeenCalled();
+	});
+
+	it('rate-limits the document entry before touching D1', async () => {
+		const prepare = vi.fn(() => {
+			throw new Error('must not be called');
+		});
+		const fakeEnv = {
+			db: { prepare },
+			SHARE_READ_RATE_LIMITER: {
+				async limit() {
+					return { success: false };
+				}
+			}
+		};
+		const denied = await shareDocumentIfGone(new Request('http://x/s/guess', {
+			headers: { 'CF-Connecting-IP': '203.0.113.9' }
+		}), fakeEnv);
+		expect(denied.status).toBe(429);
+		expect(denied.headers.get('Retry-After')).toBe('60');
+		expect(await denied.text()).toBe('');
 		expect(prepare).not.toHaveBeenCalled();
 	});
 

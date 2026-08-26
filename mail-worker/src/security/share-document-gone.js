@@ -4,6 +4,11 @@
 // 放在 security/ 而不是 service/:它跑在 hono 之前的裸 fetch 入口,只读一列、不进业务域,
 // 和 share-rate-limit 一样属于「请求还没成为业务请求之前」的那一层。
 import { SHARE_EVENT, logShareEvent } from '../service/share-event';
+import {
+	SHARE_READ_RATE_LIMITER,
+	SHARE_READ_RETRY_AFTER_SECONDS,
+	enforceShareRateLimitOnRequest
+} from './share-rate-limit';
 
 // 恰好一段路径(可带一个尾斜杠)。/s/a/b 这类形状不是分享 URL,交回 assets ——
 // 拦截面越窄,fail-open 的敞口越小。
@@ -26,8 +31,22 @@ export function parseShareLidPath(pathname) {
 // 都会顶掉它 —— 而「销毁后是浏览器原生 404」正是 P4 的成功状态原话。
 // no-store:销毁是终态,但一条被中间缓存住的 404 会在 lid 复用(不可能)之外
 // 掩盖 fail-open 恢复 —— DB 抖动窗口里发出的 404 不该被缓存进 CDN。
+export const SHARE_GONE_HEADER = 'X-CloudMail-Share-Gone';
+export const SHARE_GONE_HEADER_VALUE = '1';
+
+const SHARE_DOC_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' http: https:; img-src 'self' data: blob: http: https:; font-src 'self' data: http: https:; media-src data: blob: http: https:; connect-src 'self'; frame-src 'none'; object-src 'none'";
+
 export function nativeGoneResponse() {
-	return new Response(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+	return new Response(null, {
+		status: 404,
+		headers: {
+			'Cache-Control': 'no-store',
+			'Referrer-Policy': 'no-referrer',
+			'X-Robots-Tag': 'noindex, nofollow',
+			'Content-Security-Policy': SHARE_DOC_CSP,
+			[SHARE_GONE_HEADER]: SHARE_GONE_HEADER_VALUE
+		}
+	});
 }
 
 /**
@@ -45,6 +64,14 @@ export async function shareDocumentIfGone(req, env) {
 	const lid = parseShareLidPath(new URL(req.url).pathname);
 	if (!lid) {
 		return null;
+	}
+	const denied = await enforceShareRateLimitOnRequest(
+		req,
+		env[SHARE_READ_RATE_LIMITER],
+		SHARE_READ_RETRY_AFTER_SECONDS
+	);
+	if (denied) {
+		return denied;
 	}
 	try {
 		const row = await env.db.prepare('SELECT status FROM mail_share WHERE lid = ?').bind(lid).first();

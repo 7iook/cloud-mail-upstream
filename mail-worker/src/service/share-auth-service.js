@@ -598,19 +598,17 @@ async function writeReplayCache(c, lid, key, shareId, result, exp) {
 // never reads c.req, so the transport decides where each one comes from: the key
 // travels in the JSON body, the idempotency key in a header.
 async function establishSession(c, lid, sec, options = {}) {
-	if (isShareDisabled(c)) {
-		throwUnavailable();
-	}
 	const lidText = lid == null ? '' : String(lid);
 	const secText = sec == null ? '' : String(sec);
 	const row = lidText
 		? await orm(c).select().from(mailShare).where(eq(mailShare.lid, lidText)).get()
 		: null;
-	// P4:gone 在 sec 之前判——销毁的链接对谁都是 404,不因 sec 对错而不同
-	// (p4-destroyed-entrypoints.md #3)。原本 matchSec 恒跑是为了不让「lid 不存在」
-	// 与「sec 错」在时序上可分,而 gone 现在本来就通过 404 可观测,该顾虑不复存在。
+	// P4:gone 在功能关与 sec 之前判——销毁的链接对谁都是 404。
 	if (!row || row.status === 'REVOKED') {
 		throwDestroyed();
+	}
+	if (isShareDisabled(c)) {
+		throwUnavailable();
 	}
 	const matched = await matchSec(c, secText, row);
 	if (!matched) {
@@ -690,20 +688,22 @@ async function establishSession(c, lid, sec, options = {}) {
 }
 
 async function resolveSession(c, sessionToken) {
-	if (isShareDisabled(c)) {
-		throwUnavailable();
-	}
 	const payload = await verifyToken(c, sessionToken);
 	if (!payload) {
 		throwUnavailable();
 	}
 	const row = await orm(c).select().from(mailShare).where(eq(mailShare.shareId, payload.shareId)).get();
-	// 行被删 = gone(P4:一个仍有效的 token 撞上被删的行必须收到 404,不是重试提示)。
-	// lid 对不上则不是 gone —— token 与行的绑定坏了,按不可用处理。
+	// 行被删 = gone。lid 对不上则不是 gone —— token 与行的绑定坏了,按不可用处理。
 	if (!row) {
 		throwDestroyed();
 	}
+	if (row.status === 'REVOKED') {
+		throwDestroyed();
+	}
 	if (row.lid !== payload.lid) {
+		throwUnavailable();
+	}
+	if (isShareDisabled(c)) {
 		throwUnavailable();
 	}
 	// A token minted before T-08 carries no cv and belongs to version 0, which is what

@@ -7,6 +7,7 @@ import {
     clearEstablishKey,
     clearOtherShareSessions,
     clearShareFragment,
+    clearShareGone,
     clearShareSession,
     consumeShareSecret,
     ensureEstablishKey,
@@ -181,5 +182,12 @@ describe('share establish key', () => {
         expect(markShareGone('lid-a')).toBe('blank')
         // 不同 lid 各自记账,一条销毁不连坐别的分享。
         expect(markShareGone('lid-b')).toBe('reload')
+    })
+
+    it('clears the gone flag so a later live session can reload once again', () => {
+        expect(markShareGone('lid-a')).toBe('reload')
+        clearShareGone('lid-a')
+        expect(sessionStorage.getItem('share:gone:lid-a')).toBeNull()
+        expect(markShareGone('lid-a')).toBe('reload')
     })
 })

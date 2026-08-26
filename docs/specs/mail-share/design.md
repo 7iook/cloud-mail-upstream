@@ -159,7 +159,7 @@ mail-worker/src/entity/mail-share.js
 
 **错误码边界**：
 - `SHARE_DISABLED`：**仅 Owner 写操作**（创建）在功能关闭时返回；Visitor 侧统一 `SHARE_UNAVAILABLE`。
-- `SHARE_UNAVAILABLE`：Visitor 侧一切失败（含功能关闭、过期、销毁、凭据错）。
+- `SHARE_UNAVAILABLE`：Visitor 侧非 gone 失败（功能关闭、过期、凭据错）。**无行 / `REVOKED` 走裸 HTTP 404**（P4，2026-08-26）。
 - `SHARE_FORBIDDEN`：用户缺少 `share:manage` 权限。
 - `SHARE_NOT_FOUND`：Owner 操作他人分享。
 
@@ -189,12 +189,12 @@ Visitor 侧（公开，精确路径）：
 | **验证** | 每请求：验签 → 查 `mail_share` 行 → 重算 `effectiveStatus` → 校验 account 仍有效 → 构建 `ShareContext` |
 | **重放** | 无 refresh；过期 token **不得**换新 token。过期后须重新 `POST /share/session` 提交 `lid`+`sec`。fragment 已从 URL 清除，故客户端须在**页面内存**保留 `sec`（不得写入 `sessionStorage`），或访问者重新打开含 `#<sec>` 的原链接。Share 行仍 `ACTIVE` 时该路径必须能建立新会话，不得因 fragment 已清而死结 |
 | **撤销** | 无服务端 session 表；撤销由 Share 行状态驱动，验签后立即查库即可 |
-| **失败响应** | 鉴权/过期/销毁/凭据错/超窗/功能关：统一 `SHARE_UNAVAILABLE` + JSON 形状（P-AUTH-01）。**HTTP 429 + `Retry-After`** 为独立运输层错误（P-TRANS-01），不属于 P-AUTH-01 集合 |
+| **失败响应** | 鉴权/过期/凭据错/超窗/功能关：统一 `SHARE_UNAVAILABLE` + JSON 形状（P-AUTH-01）。无行或 `REVOKED`：裸 HTTP 404（P4）。**HTTP 429 + `Retry-After`** 为独立运输层错误（P-TRANS-01），不属于 P-AUTH-01 集合 |
 | **密钥轮换** | 环境变量 `SHARE_SESSION_SIGNING_KEY` + `kid`；支持双 key 验签窗口（新旧并行 ≤7 天） |
 
 **已知限制（AC-VISIT-12 与 AC-VISIT-15）**：硬导航不跑 Vue 守卫，`sessionStorage` token 会留给同 tab 下一个同源页。`pagehide` 不是修复——刷新也会触发，而 AC-VISIT-12 依赖刷新后仍能读到该 token（fragment 已清）。用户 2026-08-17 裁决：接受该残留，用 15 分钟绝对 TTL 封顶窗口。残留范围 = 同 tab + 同源 + ≤TTL；token 只授予访问者已经用完整链接换到的只读能力。
 
-错误码（稳定注册表）：`SHARE_UNAVAILABLE`（Visitor 不可区分：不存在/过期/销毁/凭据错/超窗/功能关）、`SHARE_ACCOUNT_FORBIDDEN`、`SHARE_DURATION_EXCEEDED`、`SHARE_LIMIT_EXCEEDED`、`SHARE_IDEMPOTENCY_CONFLICT`（同 Key 异请求体）、`SHARE_NOT_FOUND`（仅 Owner 侧）、`SHARE_FORBIDDEN`（缺 `share:manage`）、`SHARE_DISABLED`（Owner 创建时功能关闭）。**HTTP 429** 为运输层响应，**不**映射为 `SHARE_UNAVAILABLE`。
+错误码（稳定注册表）：`SHARE_UNAVAILABLE`（Visitor 不可区分：过期/凭据错/超窗/功能关）、`SHARE_DESTROYED`（无行/`REVOKED`，HTTP 层翻成裸 404）、`SHARE_ACCOUNT_FORBIDDEN`、`SHARE_DURATION_EXCEEDED`、`SHARE_LIMIT_EXCEEDED`、`SHARE_IDEMPOTENCY_CONFLICT`（同 Key 异请求体）、`SHARE_NOT_FOUND`（仅 Owner 侧）、`SHARE_FORBIDDEN`（缺 `share:manage`）、`SHARE_DISABLED`（Owner 创建时功能关闭）。**HTTP 429** 为运输层响应，**不**映射为 `SHARE_UNAVAILABLE`。
 
 ### Link table (§0.16)
 
@@ -363,7 +363,8 @@ R2 原文写的是 `PUT`，落地改用 **`POST`**：与 `resetAuthKey` 同理�
 
 | Scenario | Layer | Handling |
 |---|---|---|
-| `lid` 不存在 / `sec` 错 / `pepper_kid` 未配置 / 过期 / 销毁 / 超窗 / 功能关 | share-auth-service | 抛 `SHARE_UNAVAILABLE`（不可区分，防 oracle） |
+| `lid` 不存在 / 销毁（`REVOKED`） | share-auth-service | 抛 `SHARE_DESTROYED` → 裸 HTTP 404 |
+| `sec` 错 / `pepper_kid` 未配置 / 过期 / 超窗 / 功能关 | share-auth-service | 抛 `SHARE_UNAVAILABLE`（族内不可区分） |
 | account 非本人 | mail-share-service | `SHARE_ACCOUNT_FORBIDDEN` |
 | 有效期超上限 / 数量超上限 | mail-share-service | `SHARE_DURATION_EXCEEDED` / `SHARE_LIMIT_EXCEEDED` |
 | 同 Idempotency-Key 异请求体 | mail-share-service | `SHARE_IDEMPOTENCY_CONFLICT` |
@@ -751,7 +752,7 @@ R3 当初把 `regenerate` 移出本期，理由是「revoke + create 已覆盖�
 - 入口全量收口：文档 `GET|HEAD /s/:lid` 由 `mail-worker/src/security/share-document-gone.js` 在 `env.assets.fetch` **之前**拦截；访客 API 由 `throwDestroyed()`（`BizError('SHARE_DESTROYED', 404)`）+ `withShare` 翻成裸 404；已打开 SPA 由 `ShareGoneError` + `share:gone:<lid>` 单次 reload 落到文档拦截（vite 直出环境清空 document 兜底防循环）。gone-check DB 失败 **fail-open** 到 assets 并打 `share.system.error`（reason=`gone-check-failed`）；正常 404 是成功态，不打事件。
 - 测试契约同步：`visitor-unavailable.spec.js` 拆为「gone 原生 404 / EXPIRED 仍 SPA」两族；`visitor-revoke-live.spec.js` 改为撤销后 reload 落原生 404；`visitor-headers.spec.js` 改打活链接；worker/vue 各 spec 中「销毁仍回 `SHARE_UNAVAILABLE` 信封」的断言按新口径重写。
 
-**P1 · 局部修订 Owner 展示纪律（AC-LIFE-08 行内 amended）**：Owner 展示侧由「只信 API `effectiveStatus`」改为 `liveEffectiveStatus(row, nowMs)`（`mail-vue/src/views/share/status.js` + `use-share-clock`），页面停留跨过 `expiresAt` 或刷新即翻 `EXPIRED`，不再要求重新登录；鉴权与写入仍以服务端每请求实时计算为唯一真源。
+**P1 · 局部修订 Owner 展示纪律（AC-LIFE-08 行内 amended）**：Owner 展示侧由「只信 API `effectiveStatus`」改为 `liveEffectiveStatus(row, nowMs)`（`mail-vue/src/views/share-admin/status.js` + `use-share-clock`），页面停留跨过 `expiresAt` 或刷新即翻 `EXPIRED`，不再要求重新登录；鉴权与写入仍以服务端每请求实时计算为唯一真源（前端时钟不得充当写闸门）。
 
 ### 2026-08-17 · T-02 D1 事务探测 + spec 漂移修正（executor · 文档波）
 

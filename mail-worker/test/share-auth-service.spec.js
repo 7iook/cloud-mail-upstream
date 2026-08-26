@@ -390,7 +390,10 @@ describe('shareAuthService', () => {
 			catchFail(shareAuthService.establishSession(ctx(), randomLid('missing'), randomSec())),
 			catchFail(shareAuthService.establishSession(ctx(), revokedLid, revokedSec)),
 			// gone 不看 sec:销毁的链接对谁都是 404,不因 sec 对错分叉出可探测面。
-			catchFail(shareAuthService.establishSession(ctx(), revokedLid, randomSec()))
+			catchFail(shareAuthService.establishSession(ctx(), revokedLid, randomSec())),
+			// 功能关不得把 gone 折回 UNAVAILABLE 族。
+			catchFail(shareAuthService.establishSession(ctx({ SHARE_ENABLED: '0' }), randomLid('gone-off'), randomSec())),
+			catchFail(shareAuthService.establishSession(ctx({ SHARE_ENABLED: '0' }), revokedLid, revokedSec))
 		]);
 		for (const body of goneBodies) {
 			expect(body).toBe(DESTROYED_BODY);

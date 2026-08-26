@@ -1,0 +1,820 @@
+{
+  "run_id": "2026-08-26-r1",
+  "repo": "/workspace",
+  "mode": "cursor",
+  "range": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3..9b6eb8072fe73c93518e872037702a2e8e54056b + 12cec61a0d4a1e7c99d1316b9ef9b75715c893b3..6985f0ef09421798c6cac2495bc2f501dcf7c7e7",
+  "range_note": "首轮 bootstrap · 多 ref 游标 + 完成信号。新分支从 merge-base origin/main 起审。",
+  "feature_note": "",
+  "effective_since": null,
+  "effective_until": null,
+  "ref": "origin/cursor/share-link-fullchain-8a38",
+  "resolved_ref_sha": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+  "merge_policy": "include-first-parent-churn",
+  "cursor_eligible": true,
+  "head_sha": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+  "resolved_at": "2026-08-26T19:32:41+0000",
+  "external_requested": false,
+  "dry_run": false,
+  "bootstrapped": true,
+  "commit_count": 9,
+  "form": "B",
+  "models": {
+    "recon": "claude-opus-5-thinking-high-fast",
+    "reviewer": "gpt-5.6-sol-xhigh-fast",
+    "converge": "claude-opus-5-thinking-high-fast"
+  },
+  "completion_filter": {
+    "now_utc": "2026-08-26T19:29:52Z",
+    "silence_hours": 6,
+    "refs": [
+      {
+        "ref": "cursor/git-5c8a",
+        "sha": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+        "signal": "silent>=6h",
+        "status": "completed",
+        "unique_commits": 0,
+        "note": "本轮审查工作分支, SHA 与 origin/main 相同"
+      },
+      {
+        "ref": "main",
+        "sha": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+        "signal": "silent>=6h",
+        "status": "completed",
+        "unique_commits": 0,
+        "note": "首轮无游标退回 --since=yesterday, 结果为空"
+      },
+      {
+        "ref": "origin",
+        "sha": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+        "signal": "silent>=6h",
+        "status": "completed",
+        "unique_commits": 0,
+        "note": "origin/HEAD 别名, 与 origin/main 同 SHA"
+      },
+      {
+        "ref": "origin/main",
+        "sha": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+        "signal": "silent>=6h",
+        "status": "completed",
+        "unique_commits": 0,
+        "note": "首轮 --since=yesterday 空; 最近提交 12cec61 在 36.86h 前"
+      },
+      {
+        "ref": "origin/cursor/mailbox-share-capability-dcb6",
+        "sha": "f99459d699043f513fc4c9b97504aa087d355c15",
+        "signal": "pr-merged#3",
+        "status": "completed",
+        "unique_commits": 0,
+        "note": "PR #3 已合并; merge-base==HEAD, 无领先于 main 的独有提交"
+      },
+      {
+        "ref": "origin/cursor/mailbox-share-capability-spec-4743",
+        "sha": "e120a040387214b2bad73b12eb4a69420bf84de0",
+        "signal": "pr-merged#2",
+        "status": "completed",
+        "unique_commits": 0,
+        "note": "PR #2 已合并; merge-base==HEAD, 无独有提交"
+      },
+      {
+        "ref": "origin/cursor/setup-cloud-agent-env-3558",
+        "sha": "6985f0ef09421798c6cac2495bc2f501dcf7c7e7",
+        "signal": "pr-merged#1",
+        "status": "completed",
+        "unique_commits": 1,
+        "note": "PR #1 已合并; 仍领先 main 1 个 leftover commit (.cursor/environment.json + install.sh)"
+      },
+      {
+        "ref": "origin/cursor/share-link-fullchain-8a38",
+        "sha": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+        "signal": "silent>=6h (10.47h) + open-pr#4",
+        "status": "completed",
+        "unique_commits": 8,
+        "note": "开放 PR #4 仍未合并, 但最新提交距今 >=6h, 视为任务告一段落"
+      }
+    ],
+    "skipped_in_progress": []
+  },
+  "totals": {
+    "insertions": 4805,
+    "deletions": 518,
+    "files": 65,
+    "merges": 0
+  },
+  "commits": [
+    {
+      "sha": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+      "short": "9b6eb80",
+      "date": "2026-08-26T09:02:08+00:00",
+      "author_date": "2026-08-26T09:02:08+00:00",
+      "committer_date": "2026-08-26T09:02:08+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "docs(share): 回写决策卡任务清单与独立复跑证据",
+      "files": [
+        {
+          "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md",
+          "added": 15,
+          "deleted": 7
+        }
+      ],
+      "insertions": 15,
+      "deletions": 7,
+      "type": "docs",
+      "scope": "share"
+    },
+    {
+      "sha": "37062220afc2be6dd4002a74c0dc8f20f03578f6",
+      "short": "3706222",
+      "date": "2026-08-26T09:01:44+00:00",
+      "author_date": "2026-08-26T09:01:44+00:00",
+      "committer_date": "2026-08-26T09:01:44+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "test(e2e): 补 Owner 创建/过期/关窗的浏览器验收",
+      "files": [
+        {
+          "path": "tests/e2e/harness/worker-entry.js",
+          "added": 11,
+          "deleted": 0
+        },
+        {
+          "path": "tests/e2e/specs/owner-share-lifecycle.spec.js",
+          "added": 73,
+          "deleted": 0
+        }
+      ],
+      "insertions": 84,
+      "deletions": 0,
+      "type": "test",
+      "scope": "e2e"
+    },
+    {
+      "sha": "82f330e720acb70069e77dda1f84ee0360b96c67",
+      "short": "82f330e",
+      "date": "2026-08-26T09:01:44+00:00",
+      "author_date": "2026-08-26T09:01:44+00:00",
+      "committer_date": "2026-08-26T09:01:44+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "docs(share): 回写 shipped spec 的 404 与 emails 契约",
+      "files": [
+        {
+          "path": "docs/specs/mail-share/design.md",
+          "added": 11,
+          "deleted": 0
+        },
+        {
+          "path": "docs/specs/mail-share/requirements.md",
+          "added": 3,
+          "deleted": 3
+        },
+        {
+          "path": "docs/specs/mailbox-share-capability/design.md",
+          "added": 7,
+          "deleted": 1
+        },
+        {
+          "path": "docs/specs/mailbox-share-capability/requirements.md",
+          "added": 3,
+          "deleted": 3
+        }
+      ],
+      "insertions": 24,
+      "deletions": 7,
+      "type": "docs",
+      "scope": "share"
+    },
+    {
+      "sha": "e309ad4a17c46dcfff896b9d967b322cca4389a7",
+      "short": "e309ad4",
+      "date": "2026-08-26T09:01:44+00:00",
+      "author_date": "2026-08-26T09:01:44+00:00",
+      "committer_date": "2026-08-26T09:01:44+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "feat(share): 按设计卡重做访客收码页视觉",
+      "files": [
+        {
+          "path": "mail-vue/src/views/share/ShareOtpCard.vue",
+          "added": 36,
+          "deleted": 11
+        },
+        {
+          "path": "mail-vue/src/views/share/index.spec.js",
+          "added": 105,
+          "deleted": 5
+        },
+        {
+          "path": "mail-vue/src/views/share/index.vue",
+          "added": 255,
+          "deleted": 54
+        }
+      ],
+      "insertions": 396,
+      "deletions": 70,
+      "type": "feat",
+      "scope": "share"
+    },
+    {
+      "sha": "d602ec6690e9671487ecd735c7fa640d41496bde",
+      "short": "d602ec6",
+      "date": "2026-08-26T09:01:28+00:00",
+      "author_date": "2026-08-26T09:01:28+00:00",
+      "committer_date": "2026-08-26T09:01:28+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "fix(share): 销毁与不存在的分享返回原生 404",
+      "files": [
+        {
+          "path": "mail-vue/src/composables/useSharePolling.js",
+          "added": 4,
+          "deleted": 1
+        },
+        {
+          "path": "mail-vue/src/composables/useSharePolling.spec.js",
+          "added": 20,
+          "deleted": 1
+        },
+        {
+          "path": "mail-vue/src/request/share.js",
+          "added": 19,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/request/share.spec.js",
+          "added": 47,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share/session.js",
+          "added": 37,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share/session.spec.js",
+          "added": 17,
+          "deleted": 0
+        },
+        {
+          "path": "mail-worker/src/api/share-api.js",
+          "added": 6,
+          "deleted": 0
+        },
+        {
+          "path": "mail-worker/src/index.js",
+          "added": 8,
+          "deleted": 0
+        },
+        {
+          "path": "mail-worker/src/security/share-document-gone.js",
+          "added": 59,
+          "deleted": 0
+        },
+        {
+          "path": "mail-worker/src/service/share-auth-service.js",
+          "added": 26,
+          "deleted": 2
+        },
+        {
+          "path": "mail-worker/test/account-delete-share.spec.js",
+          "added": 9,
+          "deleted": 6
+        },
+        {
+          "path": "mail-worker/test/share-api.spec.js",
+          "added": 19,
+          "deleted": 9
+        },
+        {
+          "path": "mail-worker/test/share-auth-service.spec.js",
+          "added": 34,
+          "deleted": 18
+        },
+        {
+          "path": "mail-worker/test/share-document-gone.spec.js",
+          "added": 271,
+          "deleted": 0
+        },
+        {
+          "path": "mail-worker/test/share-integration.spec.js",
+          "added": 38,
+          "deleted": 10
+        },
+        {
+          "path": "mail-worker/test/share-rate-limit.spec.js",
+          "added": 21,
+          "deleted": 3
+        },
+        {
+          "path": "mail-worker/test/share-status.spec.js",
+          "added": 14,
+          "deleted": 4
+        },
+        {
+          "path": "tests/e2e/specs/visitor-attachment.spec.js",
+          "added": 12,
+          "deleted": 3
+        },
+        {
+          "path": "tests/e2e/specs/visitor-headers.spec.js",
+          "added": 5,
+          "deleted": 2
+        },
+        {
+          "path": "tests/e2e/specs/visitor-revoke-live.spec.js",
+          "added": 26,
+          "deleted": 42
+        },
+        {
+          "path": "tests/e2e/specs/visitor-unavailable.spec.js",
+          "added": 28,
+          "deleted": 17
+        }
+      ],
+      "insertions": 720,
+      "deletions": 118,
+      "type": "fix",
+      "scope": "share"
+    },
+    {
+      "sha": "fabe6e841109dfb84b8b4da651c7caa03a5d7db4",
+      "short": "fabe6e8",
+      "date": "2026-08-26T09:01:20+00:00",
+      "author_date": "2026-08-26T09:01:20+00:00",
+      "committer_date": "2026-08-26T09:01:20+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "feat(share): 完整邮箱创建分享并去掉关闭确认",
+      "files": [
+        {
+          "path": "mail-vue/src/i18n/en.js",
+          "added": 11,
+          "deleted": 2
+        },
+        {
+          "path": "mail-vue/src/i18n/zh.js",
+          "added": 11,
+          "deleted": 2
+        },
+        {
+          "path": "mail-vue/src/request/mail-share.js",
+          "added": 9,
+          "deleted": 3
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/ShareCreateWizard.spec.js",
+          "added": 193,
+          "deleted": 75
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/ShareCreateWizard.vue",
+          "added": 153,
+          "deleted": 136
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/presets.js",
+          "added": 45,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/presets.spec.js",
+          "added": 7,
+          "deleted": 1
+        },
+        {
+          "path": "mail-worker/src/service/account-service.js",
+          "added": 40,
+          "deleted": 45
+        },
+        {
+          "path": "mail-worker/src/service/mail-share-service.js",
+          "added": 474,
+          "deleted": 18
+        },
+        {
+          "path": "mail-worker/src/service/mailbox-provision.js",
+          "added": 210,
+          "deleted": 0
+        },
+        {
+          "path": "mail-worker/test/mail-share-emails.spec.js",
+          "added": 518,
+          "deleted": 0
+        },
+        {
+          "path": "mail-worker/test/mail-share-service.spec.js",
+          "added": 8,
+          "deleted": 2
+        }
+      ],
+      "insertions": 1679,
+      "deletions": 284,
+      "type": "feat",
+      "scope": "share"
+    },
+    {
+      "sha": "b36581046fcf40d6d2476facfed78f05f3115d93",
+      "short": "b365810",
+      "date": "2026-08-26T09:01:15+00:00",
+      "author_date": "2026-08-26T09:01:15+00:00",
+      "committer_date": "2026-08-26T09:01:15+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "fix(share): Owner 过期状态按 expiresAt 实时覆盖",
+      "files": [
+        {
+          "path": "mail-vue/src/views/email/ShareDialog.spec.js",
+          "added": 21,
+          "deleted": 3
+        },
+        {
+          "path": "mail-vue/src/views/email/ShareDialog.vue",
+          "added": 5,
+          "deleted": 3
+        },
+        {
+          "path": "mail-vue/src/views/email/ShareIndicator.spec.js",
+          "added": 86,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/email/ShareIndicator.vue",
+          "added": 22,
+          "deleted": 2
+        },
+        {
+          "path": "mail-vue/src/views/email/index.vue",
+          "added": 5,
+          "deleted": 1
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/ShareDetailDrawer.spec.js",
+          "added": 32,
+          "deleted": 9
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/ShareDetailDrawer.vue",
+          "added": 8,
+          "deleted": 4
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/ShareRowActions.spec.js",
+          "added": 19,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/ShareRowActions.vue",
+          "added": 8,
+          "deleted": 3
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/index.spec.js",
+          "added": 25,
+          "deleted": 3
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/index.vue",
+          "added": 22,
+          "deleted": 4
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/status.js",
+          "added": 26,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/status.spec.js",
+          "added": 48,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/use-share-clock.js",
+          "added": 55,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/use-share-clock.spec.js",
+          "added": 75,
+          "deleted": 0
+        }
+      ],
+      "insertions": 457,
+      "deletions": 32,
+      "type": "fix",
+      "scope": "share"
+    },
+    {
+      "sha": "1288ac85af8d51329862355cbc8d07b1ad7d22b9",
+      "short": "1288ac8",
+      "date": "2026-08-26T06:42:37+00:00",
+      "author_date": "2026-08-26T06:42:37+00:00",
+      "committer_date": "2026-08-26T06:42:37+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "docs(share): 决策卡 Goal→Outcome 与 spec 审查改向",
+      "files": [
+        {
+          "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/p4-destroyed-entrypoints.md",
+          "added": 24,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/prompt.round1.sub.txt",
+          "added": 644,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-expired-status-rca.md",
+          "added": 71,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md",
+          "added": 413,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.review1.sub.md",
+          "added": 177,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/visitor-share-ui-design.md",
+          "added": 52,
+          "deleted": 0
+        }
+      ],
+      "insertions": 1381,
+      "deletions": 0,
+      "type": "docs",
+      "scope": "share"
+    },
+    {
+      "sha": "6985f0ef09421798c6cac2495bc2f501dcf7c7e7",
+      "short": "6985f0e",
+      "date": "2026-08-24T03:03:34+00:00",
+      "author_date": "2026-08-24T03:03:34+00:00",
+      "committer_date": "2026-08-24T03:03:34+00:00",
+      "author": "Cursor Agent",
+      "is_merge": false,
+      "subject": "chore: add Cloud Agent development environment config",
+      "files": [
+        {
+          "path": ".cursor/environment.json",
+          "added": 14,
+          "deleted": 0
+        },
+        {
+          "path": ".cursor/install.sh",
+          "added": 35,
+          "deleted": 0
+        }
+      ],
+      "insertions": 49,
+      "deletions": 0,
+      "type": "chore",
+      "scope": null
+    }
+  ],
+  "dir_rollup": [
+    {
+      "dir": "mail-vue/src/views",
+      "file_count": 24,
+      "churn": 1619
+    },
+    {
+      "dir": ".agent-workspace/.archive/2026-08-26",
+      "file_count": 6,
+      "churn": 1403
+    },
+    {
+      "dir": "mail-worker/src/service",
+      "file_count": 4,
+      "churn": 815
+    },
+    {
+      "dir": "mail-worker/test/mail-share-emails.spec.js",
+      "file_count": 1,
+      "churn": 518
+    },
+    {
+      "dir": "mail-worker/test/share-document-gone.spec.js",
+      "file_count": 1,
+      "churn": 271
+    },
+    {
+      "dir": "tests/e2e/specs",
+      "file_count": 5,
+      "churn": 208
+    },
+    {
+      "dir": "mail-vue/src/request",
+      "file_count": 3,
+      "churn": 78
+    },
+    {
+      "dir": "mail-worker/src/security",
+      "file_count": 1,
+      "churn": 59
+    },
+    {
+      "dir": "mail-worker/test/share-auth-service.spec.js",
+      "file_count": 1,
+      "churn": 52
+    },
+    {
+      "dir": "mail-worker/test/share-integration.spec.js",
+      "file_count": 1,
+      "churn": 48
+    },
+    {
+      "dir": ".cursor/install.sh",
+      "file_count": 1,
+      "churn": 35
+    },
+    {
+      "dir": "mail-worker/test/share-api.spec.js",
+      "file_count": 1,
+      "churn": 28
+    },
+    {
+      "dir": "mail-vue/src/composables",
+      "file_count": 2,
+      "churn": 26
+    },
+    {
+      "dir": "mail-vue/src/i18n",
+      "file_count": 2,
+      "churn": 26
+    },
+    {
+      "dir": "mail-worker/test/share-rate-limit.spec.js",
+      "file_count": 1,
+      "churn": 24
+    },
+    {
+      "dir": "mail-worker/test/share-status.spec.js",
+      "file_count": 1,
+      "churn": 18
+    },
+    {
+      "dir": "docs/specs/mail-share",
+      "file_count": 2,
+      "churn": 17
+    },
+    {
+      "dir": "mail-worker/test/account-delete-share.spec.js",
+      "file_count": 1,
+      "churn": 15
+    },
+    {
+      "dir": "docs/specs/mailbox-share-capability",
+      "file_count": 2,
+      "churn": 14
+    },
+    {
+      "dir": ".cursor/environment.json",
+      "file_count": 1,
+      "churn": 14
+    },
+    {
+      "dir": "tests/e2e/harness",
+      "file_count": 1,
+      "churn": 11
+    },
+    {
+      "dir": "mail-worker/test/mail-share-service.spec.js",
+      "file_count": 1,
+      "churn": 10
+    },
+    {
+      "dir": "mail-worker/src/index.js",
+      "file_count": 1,
+      "churn": 8
+    },
+    {
+      "dir": "mail-worker/src/api",
+      "file_count": 1,
+      "churn": 6
+    }
+  ],
+  "stack_fingerprint": {
+    "extensions": [
+      {
+        "extension": ".js",
+        "file_count": 44
+      },
+      {
+        "extension": ".md",
+        "file_count": 9
+      },
+      {
+        "extension": ".vue",
+        "file_count": 9
+      },
+      {
+        "extension": ".txt",
+        "file_count": 1
+      },
+      {
+        "extension": ".json",
+        "file_count": 1
+      },
+      {
+        "extension": ".sh",
+        "file_count": 1
+      }
+    ],
+    "top_level_segments": [
+      {
+        "segment": "mail-vue",
+        "file_count": 31
+      },
+      {
+        "segment": "mail-worker",
+        "file_count": 16
+      },
+      {
+        "segment": ".agent-workspace",
+        "file_count": 6
+      },
+      {
+        "segment": "tests",
+        "file_count": 6
+      },
+      {
+        "segment": "docs",
+        "file_count": 4
+      },
+      {
+        "segment": ".cursor",
+        "file_count": 2
+      }
+    ]
+  },
+  "risk_signals": [
+    {
+      "signal": "public_contract",
+      "paths": [
+        "mail-worker/src/api/share-api.js"
+      ]
+    },
+    {
+      "signal": "auth_security",
+      "paths": [
+        "mail-worker/src/security/share-document-gone.js"
+      ]
+    }
+  ],
+  "criteria_sources": [
+    {
+      "path": "docs/specs/mail-share/design.md",
+      "why": "改动路径沿途规范(DESIGN.md 大小写不敏感)"
+    },
+    {
+      "path": "docs/specs/mail-share/requirements.md",
+      "why": "同主题 requirements, 被本轮 docs 提交改动"
+    },
+    {
+      "path": "docs/specs/mailbox-share-capability/design.md",
+      "why": "改动路径沿途规范(DESIGN.md 大小写不敏感)"
+    },
+    {
+      "path": "docs/specs/mailbox-share-capability/requirements.md",
+      "why": "同主题 requirements, 被本轮 docs 提交改动"
+    },
+    {
+      "path": "docs/architecture/ADR-mail-share-capability-boundary.md",
+      "why": "ADR"
+    },
+    {
+      "path": "docs/architecture/ADR-mailbox-share-capability-extension.md",
+      "why": "ADR"
+    },
+    {
+      "path": "docs/architecture/ADR-share-credential-recoverability.md",
+      "why": "ADR"
+    }
+  ],
+  "adrs": [
+    {
+      "path": "docs/architecture/ADR-mail-share-capability-boundary.md",
+      "title": "ADR: Mail Share 资源级 Capability 授权边界"
+    },
+    {
+      "path": "docs/architecture/ADR-mailbox-share-capability-extension.md",
+      "title": "ADR: Mailbox Share 能力扩展 —— 多邮箱 Binding、Session 配额闸门与可选认证 Key"
+    },
+    {
+      "path": "docs/architecture/ADR-share-credential-recoverability.md",
+      "title": "ADR: 分享凭据 `sec` 的可恢复性(部分取代「明文恰一次」不变量)"
+    }
+  ],
+  "mechanical_gates": [
+    "ci-workflow: deploy-cloudflare.yml"
+  ],
+  "ledger_carryover": [],
+  "ledger_dir": "/workspace/.agent-workspace/review-ledger",
+  "run_dir": "/workspace/.agent-workspace/review-ledger/runs/2026-08-26-r1",
+  "worktree": "/tmp/share-review"
+}

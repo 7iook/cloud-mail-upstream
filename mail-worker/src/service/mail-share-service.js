@@ -672,6 +672,11 @@ async function replayBatchFromLids(c, lids) {
 	if (!rows.length) {
 		throw new BizError('SHARE_NOT_FOUND');
 	}
+	const expected = new Set(lids);
+	const foundLids = new Set(rows.map((row) => row.lid));
+	if (foundLids.size !== expected.size || [...expected].some((lid) => !foundLids.has(lid))) {
+		throw new BizError('SHARE_NOT_FOUND');
+	}
 	const byShare = new Map();
 	for (const item of rows) {
 		const entry = byShare.get(item.share_id) || {
@@ -817,8 +822,9 @@ function prepareBindingInsert(c, values) {
 // `prepareAccountInsert` 落下,D1 batch 是一个事务、语句顺序可见,所以子查询解析得到
 // 刚插入的行。主表 `account_id` 取集合内最小 id(与 Binding `ORDER BY account_id` 的
 // 主 Binding 恒等),同批随后的 `syncPrimaryAccountId` 再按主 Binding 收口一次。
-// 归属谓词按邮箱计数:任何一枚地址在预校验与 batch 之间易主/被删,计数就对不上,
-// 本语句零行(batch 内状态冻结,同批 N 条会得出同一个判定 —— 全有或全无)。
+// 归属谓词按**整单** emails 计数(不是当前 group):V2=false 拆成 N 组时,任何一枚
+// 地址易主/被删必须让每一条 share INSERT 都零行。零行本身仍不会回滚 batch,
+// 真正的全有或全无靠同批 `prepareOwnershipAbort` 的 RAISE。
 // 限额谓词的余量由调用方按批内位次折算进 `limit` 绑定值,见 `createFromEmails`。
 function prepareShareInsertByEmails(c, values) {
 	const primaryAccountSql = `SELECT MIN(pa.account_id) FROM account pa
@@ -886,9 +892,9 @@ function prepareShareInsertByEmails(c, values) {
 		values.userId,
 		values.now,
 		values.limit,
-		values.emailsJson,
+		values.allEmailsJson || values.emailsJson,
 		values.userId,
-		values.emailCount
+		values.allEmailCount != null ? values.allEmailCount : values.emailCount
 	);
 }
 
@@ -1060,6 +1066,8 @@ function prepareStaleIdempotencyDelete(c, values) {
 // `responseFingerprint` 缺省 `{ lid }`;P2 的 V2=false 批量写 `{ lids: [...] }` ——
 // 一把幂等键只有一行,N 条单分享的重放靠这份 lid 清单回读(share_id 只能记第一条)。
 function prepareIdempotencyInsert(c, values) {
+	const lidsJson = values.lidsJson || JSON.stringify([values.lid]);
+	const lidCount = values.lidCount != null ? values.lidCount : 1;
 	return c.env.db.prepare(`
 		INSERT INTO share_idempotency (
 			user_id, idempotency_key, operation, request_fingerprint, share_id, response_fingerprint, created_at
@@ -1067,6 +1075,10 @@ function prepareIdempotencyInsert(c, values) {
 		SELECT ?, ?, ?, ?, share_id, ?, ?
 		FROM mail_share
 		WHERE lid = ?
+		AND (
+			SELECT COUNT(*) FROM mail_share
+			WHERE lid IN (SELECT value FROM json_each(?))
+		) = ?
 	`).bind(
 		values.userId,
 		values.idempotencyKey,
@@ -1074,8 +1086,62 @@ function prepareIdempotencyInsert(c, values) {
 		values.fingerprint,
 		values.responseFingerprint || JSON.stringify({ lid: values.lid }),
 		values.createdAt,
-		values.lid
+		values.lid,
+		lidsJson,
+		lidCount
 	);
+}
+
+// D1/SQLite 的 RAISE() 只能写在 trigger 里。条件 INSERT 的 0 行又不会回滚,
+// 所以用 1/0 让语句报错,整个 batch 一起撤。catch 侧把 division-by-zero 映射回稳定码。
+function prepareOwnershipAbort(c, { emailsJson, userId, emailCount }) {
+	return c.env.db.prepare(`
+		SELECT 1 / CASE
+			WHEN (
+				SELECT COUNT(*) FROM account
+				WHERE lower(email) IN (SELECT value FROM json_each(?))
+					AND user_id = ? AND is_del = ${isDel.NORMAL}
+			) = ? THEN 1
+			ELSE 0
+		END
+	`).bind(emailsJson, userId, emailCount);
+}
+
+function prepareAccountQuotaAbort(c, { userId, adminEmail }) {
+	return c.env.db.prepare(`
+		SELECT 1 / CASE
+			WHEN (SELECT email FROM user WHERE user_id = ?) = ? THEN 1
+			WHEN NOT EXISTS (
+				SELECT 1 FROM user u
+				INNER JOIN role r ON r.role_id = u.type
+				WHERE u.user_id = ? AND r.account_count > 0
+			) THEN 1
+			WHEN (
+				SELECT COUNT(*) FROM account
+				WHERE user_id = ? AND is_del = ${isDel.NORMAL}
+			) <= (
+				SELECT r.account_count FROM user u
+				INNER JOIN role r ON r.role_id = u.type
+				WHERE u.user_id = ?
+			) THEN 1
+			ELSE 0
+		END
+	`).bind(userId, adminEmail || '', userId, userId, userId);
+}
+
+function mapEmailBatchError(err) {
+	if (err instanceof BizError) {
+		return err;
+	}
+	const msg = String((err && err.message) || err || '');
+	if (
+		msg.includes('SHARE_ACCOUNT_FORBIDDEN')
+		|| /division by zero/i.test(msg)
+		|| /DIVIDE/i.test(msg)
+	) {
+		return new BizError('SHARE_ACCOUNT_FORBIDDEN');
+	}
+	return err;
 }
 
 async function resolveReplay(c, values) {
@@ -1236,6 +1302,9 @@ async function createFromEmails(c, body, params, userId) {
 			authKeyKid: authKey ? creds.pepperKid : null
 		});
 	}
+	const allEmailsJson = JSON.stringify(body.emails);
+	const allEmailCount = body.emails.length;
+	const mintedLids = minted.map((item) => item.lid);
 	const idemValues = {
 		userId,
 		idempotencyKey,
@@ -1244,8 +1313,10 @@ async function createFromEmails(c, body, params, userId) {
 		accepted,
 		cutoff,
 		lid: minted[0].lid,
+		lidsJson: JSON.stringify(mintedLids),
+		lidCount: mintedLids.length,
 		responseFingerprint: groups.length > 1
-			? JSON.stringify({ lids: minted.map((item) => item.lid) })
+			? JSON.stringify({ lids: mintedLids })
 			: JSON.stringify({ lid: minted[0].lid }),
 		createdAt
 	};
@@ -1263,11 +1334,31 @@ async function createFromEmails(c, body, params, userId) {
 			statements.push(prepareStaleIdempotencyDelete(c, idemValues));
 		}
 		for (const email of plan.missing) {
+			let guardSql = accountGuardSql;
+			const guardBinds = [userId, createdAt, limit - (groups.length - 1)];
+			if (plan.accountQuota != null) {
+				guardSql += ` AND (
+					SELECT COUNT(*) FROM account
+					WHERE user_id = ? AND is_del = ${isDel.NORMAL}
+				) < ?`;
+				guardBinds.push(userId, plan.accountQuota);
+			}
 			statements.push(prepareAccountInsert(c, {
 				email,
 				userId,
-				guardSql: accountGuardSql,
-				guardBinds: [userId, createdAt, limit - (groups.length - 1)]
+				guardSql,
+				guardBinds
+			}));
+		}
+		statements.push(prepareOwnershipAbort(c, {
+			emailsJson: allEmailsJson,
+			userId,
+			emailCount: allEmailCount
+		}));
+		if (plan.missing.length) {
+			statements.push(prepareAccountQuotaAbort(c, {
+				userId,
+				adminEmail: c.env.admin
 			}));
 		}
 		const shareIndexes = [];
@@ -1283,6 +1374,8 @@ async function createFromEmails(c, body, params, userId) {
 				userId,
 				emailsJson,
 				emailCount: item.group.length,
+				allEmailsJson,
+				allEmailCount,
 				name: body.name,
 				remark: body.remark,
 				maxSessions: body.maxSessions,
@@ -1318,8 +1411,9 @@ async function createFromEmails(c, body, params, userId) {
 		try {
 			results = await c.env.db.batch(statements);
 		} catch (err) {
-			if (err instanceof BizError) {
-				throw err;
+			const mapped = mapEmailBatchError(err);
+			if (mapped instanceof BizError) {
+				throw mapped;
 			}
 			if (isUniqueConflict(err)) {
 				// 撞车有两个来源,顺序即消歧:同一把幂等键并发 → 回读幂等行按重放收场;

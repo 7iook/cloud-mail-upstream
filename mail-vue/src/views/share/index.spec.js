@@ -1659,22 +1659,21 @@ describe('share view arrival notice and full-body copy', () => {
             })
             .mockResolvedValue({ list: [], nextCursor: null })
 
-        await mountShare('lid-a', 'sec-a')
+        const wrapper = await mountShare('lid-a', 'sec-a')
         // 首屏那封不是"新到",不该弹。
+        expect(wrapper.find('[data-share-new-mail]').exists()).toBe(false)
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        // 页内一条 status,不是 Element Plus toast(设计卡禁止访客页引入 EP)。
+        expect(wrapper.get('[data-share-new-mail]').text()).toBe(en.shareVisitNewMailToast)
         expect(toast).not.toHaveBeenCalled()
 
         await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
         await flushPromises()
-
-        // 一拍回来两封 = 一条 toast,不是一串。
-        expect(toast).toHaveBeenCalledTimes(1)
-        expect(toast).toHaveBeenCalledWith(expect.objectContaining({
-            message: en.shareVisitNewMailToast
-        }))
-
-        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
-        await flushPromises()
-        expect(toast).toHaveBeenCalledTimes(1)
+        expect(wrapper.findAll('[data-share-new-mail]').length).toBe(1)
+        expect(toast).not.toHaveBeenCalled()
     })
 
     it('copies the whole body of the selected mail, not just the code', async () => {
@@ -1696,6 +1695,7 @@ describe('share view arrival notice and full-body copy', () => {
 
         expect(writeText).toHaveBeenCalledWith(expect.stringContaining('ada@example.com'))
         expect(wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-result')).toBe('copied')
+        expect(toast).not.toHaveBeenCalled()
     })
 
     it('offers a selectable body instead of claiming success when the clipboard is unusable', async () => {
@@ -1713,6 +1713,7 @@ describe('share view arrival notice and full-body copy', () => {
 
         expect(wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-result')).toBe('manual')
         expect(wrapper.get('.share-copy-all-select').classes()).toContain('is-visible')
+        expect(toast).not.toHaveBeenCalled()
     })
 })
 

@@ -600,7 +600,7 @@ const form = reactive({
 const renewChoice = ref(RENEW_KEEP)
 
 const open = computed(() => props.shareId > 0)
-const writable = computed(() => Boolean(detail.value) && isMutableStatus(liveStatus(detail.value)))
+const writable = computed(() => Boolean(detail.value) && isMutableStatus(detail.value.effectiveStatus))
 
 const bindingRows = computed(() => {
   const rows = detail.value && Array.isArray(detail.value.bindings) ? detail.value.bindings : []

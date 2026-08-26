@@ -339,7 +339,7 @@ describe('share request client', () => {
     it('maps a bare HTTP 404 to ShareGoneError without navigating (P4)', async () => {
         shareHttp.defaults.adapter = async (config) => {
             captured.push(config)
-            httpError(config, 404, { 'cache-control': 'no-store' }, '')
+            httpError(config, 404, { 'cache-control': 'no-store', 'x-cloudmail-share-gone': '1' }, '')
         }
 
         let caught
@@ -363,10 +363,22 @@ describe('share request client', () => {
     it('maps a 404 on POST /share/session to the same gone shape (P4)', async () => {
         shareHttp.defaults.adapter = async (config) => {
             captured.push(config)
-            httpError(config, 404, {}, '')
+            httpError(config, 404, { 'x-cloudmail-share-gone': '1' }, '')
         }
 
         await expect(createShareSession('lid-1', 'sec-1')).rejects.toBeInstanceOf(ShareGoneError)
+    })
+
+    it('leaves an unmarked HTTP 404 as a transport error (P4)', async () => {
+        shareHttp.defaults.adapter = async (config) => {
+            captured.push(config)
+            httpError(config, 404, { 'cache-control': 'no-store' }, '')
+        }
+
+        await expect(listShareMails({ sessionToken: SHARE_TOKEN })).rejects.not.toBeInstanceOf(ShareGoneError)
+        expect(isShareGone(
+            await listShareMails({ sessionToken: SHARE_TOKEN }).catch((err) => err)
+        )).toBe(false)
     })
 
     it('tells a gone link apart from every other failure family', () => {

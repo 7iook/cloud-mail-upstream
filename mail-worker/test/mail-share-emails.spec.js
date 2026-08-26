@@ -439,6 +439,60 @@ describe('mailShareService.create with emails[] (P2)', () => {
 		expect((await shareRows(USER_A)).length).toBe(0);
 	});
 
+	it('rolls the whole V2=false batch back when a reused mailbox is stolen before commit', async () => {
+		await seedOwner();
+		await seedUser({ userId: USER_B, email: MAIL_OWNER_B });
+		const keep = 'p2-keep@example.com';
+		const steal = 'p2-steal@example.com';
+		await seedAccount({ email: keep, userId: USER_A });
+		await seedAccount({ email: steal, userId: USER_A });
+		const probe = batchProbe({
+			async beforeBatch(call) {
+				if (call === 1) {
+					await env.db.prepare('UPDATE account SET user_id = ? WHERE email = ?')
+						.bind(USER_B, steal).run();
+				}
+			}
+		});
+		const message = await catchBiz(mailShareService.create({ env: shareEnv({ db: probe.db }) }, createParams({
+			emails: [keep, steal],
+			idempotencyKey: 'p2-partial-key'
+		}), USER_A));
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect((await shareRows(USER_A)).length).toBe(0);
+		expect((await shareRows(USER_B)).length).toBe(0);
+		const stealRow = await env.db.prepare('SELECT user_id FROM account WHERE email = ?').bind(steal).first();
+		expect(stealRow.user_id).toBe(USER_B);
+		const keepRow = await env.db.prepare('SELECT user_id FROM account WHERE email = ?').bind(keep).first();
+		expect(keepRow.user_id).toBe(USER_A);
+		const idem = await env.db.prepare(
+			'SELECT COUNT(*) AS n FROM share_idempotency WHERE user_id = ? AND idempotency_key = ?'
+		).bind(USER_A, 'p2-partial-key').first();
+		expect(idem.n).toBe(0);
+	});
+
+	it('aborts provisioning when a concurrent request consumes the last role mailbox slot', async () => {
+		await seedOwner();
+		await env.db.prepare(`
+			INSERT INTO role (role_id, name, send_type, account_count, avail_domain, ban_email)
+			VALUES (?, 'p2-tight', 'ban', 2, '', '')
+		`).bind(ROLE_TIGHT).run();
+		await env.db.prepare('UPDATE user SET type = ? WHERE user_id = ?').bind(ROLE_TIGHT, USER_A).run();
+		const probe = batchProbe({
+			async beforeBatch(call) {
+				if (call === 1) {
+					await seedAccount({ email: 'p2-quota-winner@example.com', userId: USER_A });
+				}
+			}
+		});
+		const message = await catchBiz(mailShareService.create({ env: shareEnv({ db: probe.db }) }, createParams({
+			emails: ['p2-quota-race@example.com']
+		}), USER_A));
+		expect(message).toBe('SHARE_ACCOUNT_FORBIDDEN');
+		expect((await accountRows('p2-quota-race@%')).length).toBe(0);
+		expect((await shareRows(USER_A)).length).toBe(0);
+	});
+
 	it('still fences AuthKey / quotas behind V2 for the emails path (single share included)', async () => {
 		await seedOwner();
 		const message = await catchBiz(mailShareService.create(ctx(), createParams({

@@ -166,9 +166,9 @@ shareHttp.interceptors.response.use(async (res) => {
         const retryAfterRaw = raw == null ? null : String(raw)
         return Promise.reject(new ShareRateLimitedError(parseRetryAfter(raw), retryAfterRaw))
     }
-    // 分享面的 404 只有一种来源:withShare / 文档拦截宣告的 gone(P4)。这些端点
-    // 路径是写死的,不存在「打错 URL 的 404」需要与之区分。
-    if (status === 404) {
+    // 分享面的 404 只有带 Worker gone 标记时才是销毁。运输层/反代的普通 404
+    // 不得翻成 ShareGoneError,否则活链接会被 markShareGone 钉死。
+    if (status === 404 && readHeader(error.response && error.response.headers, 'x-cloudmail-share-gone') === '1') {
         return Promise.reject(new ShareGoneError())
     }
     return Promise.reject(error)

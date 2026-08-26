@@ -133,12 +133,6 @@ async function copyCode() {
     }
     const result = await copy(code.value)
     copyResult.value = result.copied ? 'copied' : 'manual'
-    if (result.copied && typeof ElMessage === 'function') {
-        ElMessage({
-            message: tx('shareVisitCopied', 'Copied'),
-            type: 'success'
-        })
-    }
 }
 </script>
 
@@ -149,6 +143,8 @@ async function copyCode() {
     position: relative;
     margin: 24px 0;
     padding: 20px;
+    max-width: 100%;
+    overflow-x: auto;
     border: 1px solid rgba(59, 91, 219, 0.25);
     border-radius: calc(var(--sh-radius, 16px) - 4px);
     background: var(--sh-accent-soft, #edf2ff);
@@ -198,7 +194,9 @@ async function copyCode() {
 /* Wraps rather than truncates: a URL cut off mid-host is exactly the part a visitor
    needs to read before deciding to follow it. */
 .share-otp-url {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
     max-width: 100%;
     overflow-wrap: anywhere;
     word-break: break-all;
