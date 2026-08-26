@@ -138,6 +138,16 @@ async function seedOwner(env) {
 		userId = row.user_id
 	}
 
+	// The owner's own primary mailbox. Production registration always creates this row, and
+	// loginUserInfo dereferences it (`user.name = account.name`), so the owner UI cannot boot
+	// without it. Visitor-only specs never noticed because they never log the owner in.
+	let ownerAccount = await env.db.prepare('SELECT account_id FROM account WHERE email = ?').bind(OWNER_EMAIL).first()
+	if (!ownerAccount) {
+		ownerAccount = await env.db.prepare(
+			'INSERT INTO account (email, name, user_id, is_del) VALUES (?, ?, ?, 0) RETURNING account_id'
+		).bind(OWNER_EMAIL, 'e2e-owner', userId).first()
+	}
+
 	let account = await env.db.prepare('SELECT account_id FROM account WHERE email = ?').bind(MAILBOX).first()
 	if (!account) {
 		account = await env.db.prepare(
@@ -166,6 +176,7 @@ async function seedOwner(env) {
 		userId,
 		accountId: account.account_id,
 		accountId2: account2.account_id,
+		ownerAccountId: ownerAccount.account_id,
 		ownerJwt: jwt,
 		mailbox: MAILBOX,
 		mailbox2: MAILBOX_2,
