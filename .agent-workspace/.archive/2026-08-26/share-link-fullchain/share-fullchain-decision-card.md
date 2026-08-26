@@ -390,13 +390,20 @@ NOT「接口多字段 / 组件再 list 一次 / 单测绿」，BUT Owner 刷新�
 - [x] REV 过筛评审；P0 改方向写回本卡 Update Log
   - **Evidence**: verify: `--import-review` → NEEDS_CHANGES p0=3 p1=4 validation.ok · files: `share-fullchain-decision-card.review1.sub.md` · AC: 过筛后改方向 · commit: pending
   - ✅ 2026-08-26: 三条 P0 全部改方向（批量分流 / provision SSOT / D1 batch）
-- [ ] P3 删除创建后关闭确认弹窗
-- [ ] P1 Owner 过期状态 live SSOT + 五面接线（收口或重写半成品）
-- [ ] P2 `emails[]` + `mailbox-provision.js` + V2=false 批量 N 条单分享 + API 文档 deprecated
-- [ ] P4 销毁/不存在 → 原生 404（文档+API+已打开 SPA+浏览器导航验收）
-- [ ] P5 按 UI 设计卡改访客视觉（桌面+移动验收）
-- [ ] SPEC shipped spec dated changelog（AC-VISIT-04 / AC-LIFE-08 Owner 展示 / create emails / 批量分流）
-- [ ] VERIFY 五条成功状态各至少一条真实入口→sink 验收；环境不可用必须写 Evidence 阻塞原因，禁止静默跳过 e2e
+- [x] P3 删除创建后关闭确认弹窗
+  - **Evidence**: verify: `pnpm -C mail-vue test` → 370 passed；e2e `owner-share-lifecycle` 关窗无 confirm → EXIT=0 · files: `ShareCreateWizard.vue` · AC: P3 · commit: fabe6e8
+- [x] P1 Owner 过期状态 live SSOT + 五面接线（收口或重写半成品）
+  - **Evidence**: verify: vue 370 passed；e2e 短 TTL 停页翻 EXPIRED → EXIT=0 · files: `status.js` `use-share-clock.js` 五面 · AC: P1 · commit: b365810
+- [x] P2 `emails[]` + `mailbox-provision.js` + V2=false 批量 N 条单分享 + API 文档 deprecated
+  - **Evidence**: verify: worker 854 passed（含 `mail-share-emails.spec.js`）；e2e 粘贴两地址出两条链接 → EXIT=0 · files: `mailbox-provision.js` `mail-share-service.js` 向导 · AC: P2 · commit: fabe6e8
+- [x] P4 销毁/不存在 → 原生 404（文档+API+已打开 SPA+浏览器导航验收）
+  - **Evidence**: verify: e2e visitor-unavailable/revoke-live status 404 空 body → 23 passed · files: `share-document-gone.js` `index.js` `share-auth-service.js` · AC: P4 · commit: d602ec6
+- [x] P5 按 UI 设计卡改访客视觉（桌面+移动验收）
+  - **Evidence**: verify: visitor specs 绿；截图 desktop 1280 / mobile 390 · files: `views/share/index.vue` `ShareOtpCard.vue` · AC: P5 · commit: e309ad4
+- [x] SPEC shipped spec dated changelog（AC-VISIT-04 / AC-LIFE-08 Owner 展示 / create emails / 批量分流）
+  - **Evidence**: files: `docs/specs/mail-share/*` `docs/specs/mailbox-share-capability/*` · commit: 82f330e
+- [x] VERIFY 五条成功状态各至少一条真实入口→sink 验收；环境不可用必须写 Evidence 阻塞原因，禁止静默跳过 e2e
+  - **Evidence**: verify: `pnpm -C mail-worker test` → 25 files / 854 passed；`pnpm -C mail-vue test` → 26 files / 370 passed；`SHARE_E2E_REBUILD=1 node tests/e2e/run.mjs` → 23 passed · commit: 3706222
 
 ## Update Log
 
@@ -411,3 +418,4 @@ NOT「接口多字段 / 组件再 list 一次 / 单测绿」，BUT Owner 刷新�
 - 2026-08-26 · R1 · DC-P1-3 fail-open 无观测 → **采纳（改法不同）**：不新开监控产品；复用已有 `logShareEvent` / `share.system.error`。
 - 2026-08-26 · R1 · DC-P1-4 「能跑则 e2e」 → **采纳**：VERIFY 改为五条 sink 必做，跳过必须写 Evidence。
 - 2026-08-26 · 落地决定改为 **立即开发**；P0 已在文档侧闭合。
+- 2026-08-26 · executor 按审后正文 TDD 落地；主调度独立复跑 worker 854 / vue 370 / e2e 23 全绿后勾任务清单。
