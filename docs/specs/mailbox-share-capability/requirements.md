@@ -104,7 +104,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 - [AC-SESS-10] WHEN Visitor 在 `POST /share/session` 携带 `Idempotency-Key`(客户端 SHALL 在发请求**前**生成并写入 sessionStorage), THE ShareAuthService SHALL 在成功签发后把 sessionToken 短存于 KV 键 `share:est:<lid>:<key>`,TTL = min(120 秒, token 剩余寿命);WHEN 同一 `Idempotency-Key` 重放命中缓存, THE ShareAuthService SHALL 返回缓存 token 且 SHALL NOT 再消耗配额、SHALL NOT 再执行条件 UPDATE;WHERE 请求无 key、key 未命中或缓存已过期, THE ShareAuthService SHALL 走 AC-SESS-01 正常条件 UPDATE;THE 访客页 SHALL 在超时/响应丢失后以同一 `Idempotency-Key` 重试,SHALL NOT 换 key 盲重试;IF KV 不可用, THEN THE ShareAuthService SHALL 仍正常签发(fail-open,该次无重放保护)并记 `share.system.error` 结构化日志(文档化风险,R3-A3);E2E SHALL 覆盖 `max_sessions=1` 下响应丢失后同 key 重试成功且 `used_sessions` 恒为 1。
 - [AC-SESS-11] WHEN 配额条件 UPDATE 的 RETURNING 为空,或该语句本身抛错, THE ShareAuthService SHALL 拒绝签发 `sessionToken` 且 SHALL NOT 增加 `access_count`。本条取代旧 charter `mail-share` AC-LIFE-14 对配额闸门的适用(统计写失败仍签发);KV 写失败的 fail-open 仍由 AC-SESS-10 管辖。
 - [AC-AUTH-01] WHERE 分享启用了 AuthKey, WHEN Visitor 提交的 `lid`+`sec` 匹配但未携带或携带错误 AuthKey, THE ShareAuthService SHALL 返回 `SHARE_AUTH_REQUIRED` 且 SHALL NOT 签发 token、SHALL NOT 消耗配额。
-- [AC-AUTH-02] THE ShareAuthService SHALL 仅在 `lid`+`sec` 校验通过后才暴露 `SHARE_AUTH_REQUIRED`;`lid` 不存在、`sec` 错误、过期、撤销、配额触顶等一切其余 Visitor 失败 SHALL 统一返回不可区分的 `SHARE_UNAVAILABLE`。
+- [AC-AUTH-02] {revised: 2026-08-26, by: share-fullchain P4} THE ShareAuthService SHALL 仅在 `lid`+`sec` 校验通过后才暴露 `SHARE_AUTH_REQUIRED`;**`lid` 不存在与已撤销(gone)SHALL 返回浏览器原生 HTTP 404 空 body(`SHARE_DESTROYED` 内部码,见 mail-share AC-VISIT-04 修订)**;`sec` 错误、过期、配额触顶等其余 Visitor 失败 SHALL 统一返回不可区分的 `SHARE_UNAVAILABLE`。~~原文:含「lid 不存在、撤销」在内一切失败统一 `SHARE_UNAVAILABLE`~~——gone 一支被用户 P4 指令有意推翻。
 - [AC-AUTH-03] THE ShareAuthService SHALL 以 `HMAC-SHA256(authKey, PEPPER[auth_key_kid])` 常量时间比较校验 AuthKey,SHALL NOT 存储或记录 AuthKey 明文。
 - [AC-AUTH-04] WHEN Owner 重置或修改 AuthKey, THE MailShareService SHALL 将 `credentials_version` 加一;THE ShareAuthService SHALL 在每次 `resolveSession` 时比对 token 内版本号与行上 `credentials_version`,不一致 SHALL 立即拒绝(旧 Session 立即失效)。
 - [AC-AUTH-05] THE ShareAuthService SHALL **仅**依赖既有 IP 边缘限流(AC-AUTH-06)作为 AuthKey 请求成本约束,SHALL NOT 维护任何 per-share 或 per-`(shareId, IP)` 失败计数、锁定状态或对应存储表(R2-A6:AuthKey 为 128-bit 服务端 CSPRNG 生成凭据,在线穷举不可行,「防猜中」不需要锁定机制);任一来源的 AuthKey 校验失败 SHALL NOT 影响其他访客的可用性,SHALL NOT 将分享置为不可用。
@@ -175,7 +175,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 - [AC-SEC-04] THE ShareMailService SHALL 拒绝一切写操作(删邮件、标已读、发信、改邮箱、改分享自身);Visitor 面 SHALL 只存在读端点。
 - [AC-SEC-05] THE ShareAttachmentService SHALL 继续经受控端点逐请求校验附件归属(扩展多 Binding 校验 `share-attachment-service.js:126-161`),SHALL NOT 下发 `/oss/<key>` 直链。
 - [AC-SEC-06] THE 访客页(单/多邮箱) SHALL 保持匿名 chunk 隔离:不引入登录态 axios、layout、Dexie 或 `websiteConfig`(守护测试 `mail-vue/src/views/share/assert-share-chunk.js` 扩展覆盖新页面)。
-- [AC-SEC-07] WHEN Visitor 离开分享路由或收到 `SHARE_UNAVAILABLE`, THE 访客页 SHALL 清除对应 `share:session:<lid>` 存储(沿用 mail-share 旧 charter 的 VISIT-14/15 清理契约,含多邮箱路由)。
+- [AC-SEC-07] WHEN Visitor 离开分享路由或收到 `SHARE_UNAVAILABLE`, THE 访客页 SHALL 清除对应 `share:session:<lid>` 存储(沿用 mail-share 旧 charter 的 VISIT-14/15 清理契约,含多邮箱路由)。{amended: 2026-08-26, by: share-fullchain P4} 收到 gone(HTTP 404 → `ShareGoneError`)同样 SHALL 先清除 `share:session:<lid>` 与 `share:est-key:<lid>` 再离开页面(reload/清空文档)。
 - [AC-SEC-08] THE ShareAuthService SHALL 对 AuthKey 与 `sec` 的一切比较使用常量时间比较;配额等一切服务端状态变更 SHALL 以单条原子条件写实现,SHALL NOT 采用先读后写两步。
 - [AC-SEC-09] THE MailShareApp SHALL NOT 将 `sec`、AuthKey 明文或 sessionToken 写入服务端日志、URL 查询串或 `Referer` 可见位置。
 - [AC-SEC-10] IF 请求路径形如 `/share-evil` 等前缀近似路径, THEN THE Security 中间件 SHALL 不予豁免(精确匹配封闭性,沿用 mail-share 旧 charter 的 LEAK-06 基线)。
@@ -207,7 +207,7 @@ Verified once by:未登录干净浏览器打开单邮箱与多邮箱链接各一
 
 - [AC-EDGE-01] WHEN 同一 Visitor 在 TTL 内以同一 sessionToken 高频轮询, THE ShareAuthService SHALL 保持 `used_sessions` 不变(轮询零配额消耗;仅受 429 边缘限流约束)。
 - [AC-EDGE-02] WHEN 第 `max_sessions` 次 Session 建立成功后立即有并发的第 `max_sessions+1` 次建立请求, THE ShareAuthService SHALL 凭单条原子条件 UPDATE 保证恰好 `max_sessions` 次成功,SHALL NOT 出现超发。
-- [AC-EDGE-03] WHEN Visitor 正在浏览时 Owner 撤销分享, THE 访客页 SHALL 在下一次轮询/请求收到 `SHARE_UNAVAILABLE` 后停止轮询、清除会话存储并展示不可用态。
+- [AC-EDGE-03] {revised: 2026-08-26, by: share-fullchain P4} WHEN Visitor 正在浏览时 Owner 撤销分享, THE 访客页 SHALL 在下一次轮询/请求收到 **HTTP 404(gone)** 后停止轮询、清除会话存储、写入 `share:gone:<lid>` 记账并 **reload 一次**;reload 的文档请求 SHALL 被 worker 文档拦截答以浏览器原生 404(不经 worker 的开发环境 SHALL 清空文档兜底,禁止 reload 循环)。~~原文:收到 `SHARE_UNAVAILABLE` 后展示不可用态~~——撤销一支被用户 P4 指令有意推翻;非撤销的不可用(过期/冻结等)仍按原文展示 SPA 不可用态。
 - [AC-EDGE-04] WHEN Visitor 正在浏览多邮箱分享时其中一个邮箱被 Owner 移除或删除, THE 访客页 SHALL 在下一次拉取后不再展示该邮箱及其邮件,剩余邮箱 SHALL 不受影响。
 - [AC-EDGE-05] WHEN Owner 重置 AuthKey 时有 Visitor 正持有效 Session, THE ShareAuthService SHALL 使该 Session 的下一次请求因 `credentials_version` 不匹配而失败;Visitor 重新进入 SHALL 需要新 AuthKey 且消耗新配额。
 - [AC-EDGE-06] IF `message_limit=1` 且窗口内恰有一封邮件, THEN THE ShareMailService SHALL 返回恰这一封;WHEN 更新的邮件到达, THE ShareMailService SHALL 只返回新的一封。

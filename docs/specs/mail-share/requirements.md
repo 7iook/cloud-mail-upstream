@@ -83,7 +83,7 @@ Verified once by：在一个全新的浏览器上下文（无 localStorage、无
 - [AC-VISIT-01] WHEN 浏览器请求 `/s/<lid>`, THE MailShareApp SHALL 返回一个不含任何邮件内容的落地页。
 - [AC-VISIT-02] THE MailShareApp SHALL 在落地页阶段 SHALL NOT 产生任何持久状态变更。
 - [AC-VISIT-03] WHEN Visitor 提交 `lid` 与 `sec` 请求建立 Share Session, THE ShareAuthService SHALL 用 `HMAC-SHA256(sec, PEPPER[pepper_kid])` 与 `mail_share.sec_hmac` 做常量时间比较，并 SHALL 在 PEPPER 轮换窗口内尝试当前与上一 `pepper_kid`。
-- [AC-VISIT-04] IF `lid` 不存在、或 `sec` 摘要不匹配、或 `effectiveStatus` 不是 `ACTIVE`, THEN THE ShareAuthService SHALL 返回同一个不可区分的错误码 `SHARE_UNAVAILABLE`。
+- [AC-VISIT-04] {revised: 2026-08-26, by: share-fullchain P4} IF `lid` **无对应行**或 `status='REVOKED'`（销毁态，gone）, THEN THE 系统 SHALL 返回浏览器原生 **HTTP 404 空 body**（文档 `GET|HEAD /s/:lid` 与全部访客 API 一致；`Cache-Control: no-store`；内部错误码 `SHARE_DESTROYED` 不出现在响应体中）；IF `sec` 摘要不匹配、或 `effectiveStatus` 为 `EXPIRED`、或功能关闭、或指向账号已删, THEN THE ShareAuthService SHALL 仍返回同一个不可区分的错误码 `SHARE_UNAVAILABLE`。~~原文：四种非法输入统一不可区分 `SHARE_UNAVAILABLE`~~——「不存在/已销毁」一支被用户 P4 指令**有意推翻**（销毁 URL 禁止任何业务 HTML），gone 与 unavailable 两族从此可区分，族内仍不可区分。
 - [AC-VISIT-11] WHILE Share Session 有效, THE ShareMailService SHALL 通过 `Authorization: Bearer <sessionToken>` 请求头承载会话凭据；SHALL NOT 在查询参数或请求体中重复发送 `sec`。
 - [AC-VISIT-05] WHILE Share Session 有效, THE ShareMailService SHALL 只返回同时满足以下**全部**条件的邮件：`account_id` 等于 `mail_share.account_id`（**且** `mail_share.account_id > 0`）、`email_id` 大于 `mail_share.window_start_email_id`、`is_del = NORMAL`（`0`）、`status != SAVING`（排除收件两阶段写入中间态；`is_del` 列同时承担用户删除与收件未完成两种语义，见 design.md）。
 - [AC-VISIT-16] WHILE 邮件处于收件保存中间态（`status = SAVING` 或 `is_del != NORMAL`）, THE ShareMailService SHALL NOT 将其返回于列表或详情；即使其 `email_id` 落在 Visible Window 内亦 SHALL 排除。
@@ -107,13 +107,13 @@ Verified once by：在一个全新的浏览器上下文（无 localStorage、无
 
 - [AC-LIFE-01] THE ShareAuthService SHALL 在每次访问时以服务端当前时间与 `mail_share.expires_at` 比较判定是否过期，SHALL NOT 依赖定时任务改写状态。
 - [AC-LIFE-02] WHEN Owner 请求销毁一条 MailShare, THE MailShareService SHALL 将 `status` 置为 `REVOKED` 并记录 `revoked_at`。
-- [AC-LIFE-03] WHEN 一条 MailShare 被销毁后再次被访问, THE ShareAuthService SHALL 返回 `SHARE_UNAVAILABLE`。
+- [AC-LIFE-03] {revised: 2026-08-26, by: share-fullchain P4} WHEN 一条 MailShare 被销毁后再次被访问, THE 系统 SHALL 返回浏览器原生 **HTTP 404 空 body**（与 `lid` 不存在同貌，见 AC-VISIT-04 修订）。~~原文：返回 `SHARE_UNAVAILABLE`~~。
 - [AC-LIFE-04] IF 一条 MailShare 已被销毁, THEN THE MailShareService SHALL 拒绝对其做任何状态变更，包括延长有效期与重新启用。
 - [AC-LIFE-05] WHEN Owner 对 `effectiveStatus=ACTIVE` 的 MailShare 请求重新生成链接, THE MailShareService SHALL 生成新的 `lid` 与 `sec` 并使旧链接立即失效；SHALL **保持**原 `expires_at` 与 `window_start_email_id`（Visible Window）不变；且 SHALL 将 `credentials_version` 加一，使在途 Visitor Session 当场失效。（T-20a 落地，见 design.md「regenerate 约定」）
 - [AC-LIFE-11] IF MailShare 的 `effectiveStatus` 为 `EXPIRED` 或 `REVOKED`, THEN THE MailShareService SHALL 拒绝 `regenerate` 并返回 `SHARE_NOT_FOUND`（与他人/不存在共用同一个码，存在性探针保持封闭）；过期授权 SHALL NOT 通过只换 `lid`/`sec` 原地复活，Owner 须新建一条授权。（T-20a 落地）
 - [AC-LIFE-06] THE MailShareService SHALL 区分 `expires_at`（链接失效时刻）与 `delete_at`（记录物理清除时刻），且 `delete_at` SHALL 晚于 `expires_at`。
 - [AC-LIFE-07] WHEN 定时任务运行, THE MailShareCleanupTask SHALL 只删除 `delete_at` 早于当前时间的记录。
-- [AC-LIFE-08] WHILE 一条 MailShare 的 `effectiveStatus` 为 `EXPIRED` 或 `REVOKED` 且尚未到 `delete_at`, THE MailShareService SHALL 仍向 Owner 展示该记录及其 `effectiveStatus`（含由 `expires_at` 实时计算出的 `EXPIRED`）。
+- [AC-LIFE-08] WHILE 一条 MailShare 的 `effectiveStatus` 为 `EXPIRED` 或 `REVOKED` 且尚未到 `delete_at`, THE MailShareService SHALL 仍向 Owner 展示该记录及其 `effectiveStatus`（含由 `expires_at` 实时计算出的 `EXPIRED`）。{amended: 2026-08-26, by: share-fullchain P1} Owner **展示层**自本日起以 `liveEffectiveStatus(row, nowMs)` 为准：前端持有 `expiresAt` 与共享时钟（`use-share-clock`），页面停留跨过过期时刻或刷新即翻转为 `EXPIRED`，无需重新登录或重新拉取；~~此前「只信 API `effectiveStatus`、前端不重算过期」的展示纪律~~仅对**鉴权与写入**保留——服务端仍每请求实时计算，前端结果不得回写。
 - [AC-LIFE-09] IF MailShare 指向的 `account` 已被删除, THEN THE ShareAuthService SHALL 返回 `SHARE_UNAVAILABLE`。
 - [AC-LIFE-12] WHEN MailShare 指向的 `account` **转移所有者**（`account.user_id` 变更）, THE MailShareService SHALL **永久撤销**所有指向该 `account_id` 的 MailShare（写入 `status='REVOKED'` 与 `revoked_at`），SHALL NOT 仅在访问时动态拒绝而保留 `ACTIVE` 行。**注**：仓内**当前不存在** Account 转移能力——本条为未来新增转移入口时的必挂钩点；**本期**撤销挂钩实现于 account **软删与硬删**路径（与 AC-LIFE-09 协同）。
 - [AC-LIFE-13] WHERE 管理员关闭了分享功能, THE MailShareService SHALL 将其视为**临时冻结**：关闭期间 Visitor 访问返回 `SHARE_UNAVAILABLE`；**重新开启后**，此前 `effectiveStatus=ACTIVE` 的 MailShare SHALL **恢复可用**，SHALL NOT 被视同永久销毁（Owner 须知晓：关停不等于终止授权，只是暂停）。

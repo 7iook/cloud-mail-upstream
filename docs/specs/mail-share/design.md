@@ -742,6 +742,17 @@ R3 当初把 `regenerate` 移出本期，理由是「revoke + create 已覆盖�
 
 ## Update Log
 
+### 2026-08-26 · share-fullchain 整改：P4 销毁原生 404 + P1 Owner live 展示（executor）
+
+依据已审决策卡 `.agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md`（用户五条原话整改，dated changelog 记入本 shipped spec，不新开 ADR）：
+
+**P4 · 有意推翻 AC-VISIT-04 的「不存在/已销毁」一支（用户点名：销毁 URL 禁止任何业务 HTML）**：
+- 新口径：`lid` 无行 **或** `status='REVOKED'`（gone）→ 浏览器原生 **HTTP 404 空 body**（`Cache-Control: no-store`）；`EXPIRED` / 错 `sec` / 功能关 / 死账号 → 仍不可区分 `SHARE_UNAVAILABLE`。gone 与 unavailable **两族从此可区分**，族内仍不可区分。AC-VISIT-04、AC-LIFE-03 已行内修订。
+- 入口全量收口：文档 `GET|HEAD /s/:lid` 由 `mail-worker/src/security/share-document-gone.js` 在 `env.assets.fetch` **之前**拦截；访客 API 由 `throwDestroyed()`（`BizError('SHARE_DESTROYED', 404)`）+ `withShare` 翻成裸 404；已打开 SPA 由 `ShareGoneError` + `share:gone:<lid>` 单次 reload 落到文档拦截（vite 直出环境清空 document 兜底防循环）。gone-check DB 失败 **fail-open** 到 assets 并打 `share.system.error`（reason=`gone-check-failed`）；正常 404 是成功态，不打事件。
+- 测试契约同步：`visitor-unavailable.spec.js` 拆为「gone 原生 404 / EXPIRED 仍 SPA」两族；`visitor-revoke-live.spec.js` 改为撤销后 reload 落原生 404；`visitor-headers.spec.js` 改打活链接；worker/vue 各 spec 中「销毁仍回 `SHARE_UNAVAILABLE` 信封」的断言按新口径重写。
+
+**P1 · 局部修订 Owner 展示纪律（AC-LIFE-08 行内 amended）**：Owner 展示侧由「只信 API `effectiveStatus`」改为 `liveEffectiveStatus(row, nowMs)`（`mail-vue/src/views/share/status.js` + `use-share-clock`），页面停留跨过 `expiresAt` 或刷新即翻 `EXPIRED`，不再要求重新登录；鉴权与写入仍以服务端每请求实时计算为唯一真源。
+
 ### 2026-08-17 · T-02 D1 事务探测 + spec 漂移修正（executor · 文档波）
 
 **spec-changing finding（T-02）**：drizzle D1 `.transaction()` 不可用（SQL `BEGIN` 被 D1 拒绝）；T-09 须用单语句 `INSERT ... SELECT MAX(...)` + 条件 INSERT + `c.env.db.batch()`。证据：`mail-worker/test/transaction.spec.js` 10/10；`.agent-workspace/.archive/2026-08-17/t-02-d1-transaction/t-02-d1-transaction-findings.md`。
