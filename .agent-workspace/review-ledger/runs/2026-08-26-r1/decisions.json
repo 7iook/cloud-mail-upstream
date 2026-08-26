@@ -814,7 +814,68 @@
     }
   ],
   "persists": [],
-  "resolved": [],
+  "resolved": [
+    {
+      "id": "F-0001",
+      "close_note": "commit 0f4f52c · cd mail-vue && pnpm exec vitest run src/views/share/session.spec.js src/views/share/index.spec.js → EXIT=0"
+    },
+    {
+      "id": "F-0002",
+      "close_note": "commit 0f4f52c · cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0 (27 passed)"
+    },
+    {
+      "id": "F-0003",
+      "close_note": "commit 0f4f52c · cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0"
+    },
+    {
+      "id": "F-0004",
+      "close_note": "commit 0f4f52c + 8a80014 · D1 禁止触发器外 RAISE，哨兵改为 SELECT 1/0；test/mail-share-emails.spec.js 27 passed → EXIT=0"
+    },
+    {
+      "id": "F-0005",
+      "close_note": "commit 0f4f52c · cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0"
+    },
+    {
+      "id": "F-0006",
+      "close_note": "commit 0f4f52c · design.md P-AUTH-01/注册表含 SHARE_DESTROYED 且路径 views/share-admin/status.js"
+    },
+    {
+      "id": "F-0007",
+      "close_note": "commit 0f4f52c · AC-CAP-01 amended 收录 emails[] + SHARE_EMAIL_INVALID / SHARE_DOMAIN_NOT_CONFIGURED"
+    },
+    {
+      "id": "F-0011",
+      "close_note": "commit 0f4f52c · replayBatchFromLids lid 集合精确相等；test/mail-share-emails.spec.js → EXIT=0"
+    },
+    {
+      "id": "F-0015",
+      "close_note": "commit 0f4f52c · 决策卡 P4 Evidence 补 e309ad4 SPA 接线"
+    },
+    {
+      "id": "F-0016",
+      "close_note": "commit 0f4f52c · P5 截图 artifacts/ui-t6-desktop-1280.webp / ui-t6-mobile-390.webp"
+    },
+    {
+      "id": "F-0017",
+      "close_note": "commit 0f4f52c · 决策卡 DOC/REV 无 commit: pending（已回写 1288ac8）"
+    },
+    {
+      "id": "F-0018",
+      "close_note": "commit 0f4f52c · design.md 错误码注册表含 SHARE_DESTROYED / SHARE_EMAIL_INVALID / SHARE_DOMAIN_NOT_CONFIGURED"
+    },
+    {
+      "id": "F-0019",
+      "close_note": "commit 0f4f52c · design.md Update Log 路径改为 views/share-admin/status.js"
+    },
+    {
+      "id": "F-0022",
+      "close_note": "commit 0f4f52c · SHARE_DOC_PATH 加 i + Vue alias /S/:lid；test/share-document-gone.spec.js 16 passed → EXIT=0"
+    },
+    {
+      "id": "F-0028",
+      "close_note": "commit 0f4f52c · overflow-wrap:anywhere + .share-shell overflow-x:hidden；index.spec.js → EXIT=0"
+    }
+  ],
   "invalidated": [],
   "superseded": [],
   "batches": [

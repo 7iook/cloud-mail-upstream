@@ -1,6 +1,7 @@
 ## RUN
 run: 2026-08-26-r1 | range: 12cec61a0d4a1e7c99d1316b9ef9b75715c893b3..9b6eb8072fe73c93518e872037702a2e8e54056b | commits: 8 | themes: 9
 findings: P0=0 P1=8 P2=21 suggestion=1 | carryover: 0 | overdue: 0
+closed_this_round: P1=8 P2=7 | remaining_open: P0=0 P1=0 P2=14 suggestion=1
 ref: origin/cursor/share-link-fullchain-8a38 @ 9b6eb8072fe73c93518e872037702a2e8e54056b
 completion: silent>=10h (latest 2026-08-26T09:02:08Z) · PR #4 OPEN
 skipped: cursor/git-e148 identical-to-main; main/origin/main empty --since=yesterday; origin/cursor/mailbox-share-capability-dcb6 pr-merged unique=0; origin/cursor/mailbox-share-capability-spec-4743 pr-merged unique=0; origin/cursor/setup-cloud-agent-env-3558 squash leftover
@@ -56,125 +57,7 @@ why-together: 同根因/同文件/同契约，拆开修会互相绕过
 
 ## OPEN-P1
 
-### F-0001 · P1 · open · age 0d · seen 1x · batch B1
-anchor:  mail-vue/src/views/share/index.vue:789
-symbols: handleShareGone, clearMailboxView, clearShareSession, markShareGone
-rule:    docs/specs/mailbox-share-capability/requirements.md AC-SEC-07 amended · p4-destroyed-entrypoints.md #10
-theme:   T1 · gone→原生 404
-commits: d602ec6, e309ad4
-report:  reviewer:T1
-related: F-0022
-risk:    none
-failure: sessionStorage SecurityError 时 clearMailboxView 在 markShareGone/reload 之前抛出，已打开 SPA 停在业务壳
-trigger: 访客页已 ready，Owner 销毁分享，浏览器拒绝 sessionStorage 写入/删除
-impact:  持链访客继续看到本站业务 HTML，P4 成功状态（浏览器原生 404）未兑现
-fix:     session 清理函数吞 SecurityError；handleShareGone 用 try/finally 保证 markShareGone+reload/blank 必跑
-verify:  cd mail-vue && pnpm exec vitest run src/views/share/session.spec.js src/views/share/index.spec.js → EXIT=0
-
-### F-0002 · P1 · open · age 0d · seen 1x · batch B2
-anchor:  mail-worker/src/service/mailbox-provision.js:147
-symbols: planMailboxProvision, roleRow
-rule:    production-antipatterns 异常类 fail-open · 决策卡共享不变量（配额/域名权限）
-theme:   T2 · mailbox-provision SSOT
-commits: fabe6e8
-report:  reviewer:T2, reviewer:high-risk-T2
-related: -
-risk:    account 写路径的授权与配额闸门 · origin mailbox-provision.js:planMailboxProvision → hops 1 · stop: deny 分支已钉测试
-failure: 非管理员且 role 行缺失时跳过配额与 availDomain 权限（fail-open）
-trigger: user.type 指向不存在的 role，走设置页 add 或分享 emails[] 建号
-impact:  无角色约束的用户可开出任意数量/域名邮箱
-fix:     非 admin 且 !roleRow 时 deny QUOTA_EXCEEDED（fail-closed）
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
-
-### F-0003 · P1 · open · age 0d · seen 1x · batch B4
-anchor:  mail-worker/src/service/mail-share-service.js:1256
-symbols: accountGuardSql, prepareAccountInsert, createFromEmails
-rule:    docs/specs/mail-share/requirements.md AC-SHARE-12 活跃上限不得两步 COUNT+INSERT
-theme:   T3 · emails[] 创建分享
-commits: fabe6e8
-report:  reviewer:T3, reviewer:high-risk-T3, reviewer:cross-contract
-related: F-0004, F-0030
-risk:    account 写路径的授权与配额闸门 · origin createFromEmails → hops 1 · stop: guard SQL 含 account COUNT
-failure: account 配额只在 plan 预检，batch 内 guard 只数 mail_share ACTIVE
-trigger: 两个并发 createFromEmails 同时为 missing 地址建号，且 owned+N 越过 role.accountCount
-impact:  用户邮箱数顶穿角色配额
-fix:     prepareAccountInsert 注入 account COUNT+N<=accountCount 谓词，与 share 限额折算同形
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
-
-### F-0004 · P1 · open · age 0d · seen 1x · batch B5
-anchor:  mail-worker/src/service/mail-share-service.js:1342
-symbols: createFromEmails, prepareShareInsertByEmails
-rule:    docs/specs/mail-share/requirements.md AC-SHARE-12 / AC-CAP-13 整单拒绝 SHALL NOT 部分写入
-theme:   T3 · emails[] 创建分享
-commits: fabe6e8
-report:  reviewer:T3
-related: F-0003, F-0030
-risk:    none
-failure: 条件 INSERT 零命中不报错；shareRows.every 在 db.batch 已提交后才检查
-trigger: batch 内部分 share INSERT 因归属计数/限额谓词 0 行，其余语句成功
-impact:  部分分享/账号落库，整单拒绝语义被打破
-fix:     batch 末加 RAISE(ABORT) 完整性哨兵，使零命中变成语句错误从而回滚整批
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
-
-### F-0005 · P1 · open · age 0d · seen 1x · batch B3
-anchor:  mail-vue/src/views/share-admin/ShareCreateWizard.vue:615
-symbols: onOpenChange, closeNow, openDialog, unknownResult, rotateIdempotencyKey
-rule:    docs/specs/mailbox-share-capability/requirements.md AC-CAP-14
-theme:   T4 · 向导关窗去确认
-commits: fabe6e8
-report:  reviewer:T4
-related: -
-risk:    none
-failure: unknownResult 时关窗走 closeNow 清 unknownResult，下次 openDialog 轮换幂等键
-trigger: 创建请求运输层失败后 Owner 关掉向导再打开
-impact:  盲建第二条分享，丢失的首次响应无法按同 Key 重放
-fix:     关窗保留 unknownResult；再次打开不 rotateIdempotencyKey
-verify:  cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0
-
-### F-0006 · P1 · open · age 0d · seen 1x · batch B8
-anchor:  docs/specs/mail-share/design.md:578
-symbols: P-AUTH-01, AC-VISIT-04
-rule:    docs/specs/mail-share/requirements.md AC-VISIT-04 revised（gone 切族）vs design 性质段未改
-theme:   T7 · spec 回写
-commits: 82f330e
-report:  reviewer:T7, reviewer:cross-contract
-related: F-0007, F-0018, F-0019
-risk:    spec 内部一致性 · origin AC-VISIT-04 → hops 1 · stop: 性质段/矩阵/注册表已对齐
-failure: requirements 已把 gone 切成 404，design P-AUTH-01 与 Traceability AC-VISIT-04 仍写逐字节相同 SHARE_UNAVAILABLE
-trigger: 下一轮 reviewer 以 design 性质段/矩阵为判据
-impact:  把有意推翻判成实现漂移，或放过真正的回归
-fix:     同步 P-AUTH-01、Traceability AC-VISIT-04/AC-LIFE-03、错误码注册表
-verify:  python3 -c "import pathlib; t=pathlib.Path('docs/specs/mail-share/design.md').read_text(); assert 'SHARE_DESTROYED' in t; assert 'views/share-admin/status.js' in t" → EXIT=0
-
-### F-0007 · P1 · open · age 0d · seen 1x · batch B8
-anchor:  docs/specs/mailbox-share-capability/requirements.md:55
-symbols: AC-CAP-01
-rule:    capability design create 契约表已写 emails[]，requirements AC-CAP-01 仍只写 accountId
-theme:   T7 · spec 回写
-commits: 82f330e
-report:  reviewer:T7
-related: F-0006, F-0018, F-0019
-risk:    none
-failure: AC-CAP-01 未收录 emails[] 创建与新错误码
-trigger: 后续 agent 只读 requirements 实现/审查 create
-impact:  emails[] 路径被视为无 AC 的野能力
-fix:     AC-CAP-01 行内 amended 补 emails[] 与 SHARE_EMAIL_INVALID / SHARE_DOMAIN_NOT_CONFIGURED
-verify:  python3 -c "assert 'emails' in pathlib.Path('docs/specs/mailbox-share-capability/requirements.md').read_text()" → EXIT=0
-
-### F-0028 · P1 · open · age 0d · seen 1x · batch B10
-anchor:  mail-vue/src/views/share/index.vue:1425
-symbols: share-list-from, share-from, share-detail, share-atts
-rule:    visitor-share-ui-design.md 卡片不得被外部文本撑破视口
-theme:   T6 · 访客收码页视觉
-commits: e309ad4
-report:  reviewer:ui-T6
-related: -
-risk:    none
-failure: 无空格超长主题/发件人/附件名把页面拉到约 983px
-trigger: 邮件主题或附件名为超长 token
-impact:  移动端横向滚动，收码主任务被挤出
-fix:     外部文本 overflow-wrap:anywhere；容器 overflow-x:hidden
-verify:  cd mail-vue && pnpm exec vitest run src/views/share/index.spec.js → EXIT=0
+(none)
 
 ## OPEN-P2
 
@@ -223,21 +106,6 @@ impact:  建号路径运行时崩
 fix:     切断 user-service 对 account-service 的边或改为延迟加载；本轮不改无关模块
 verify:  unverified: 环未在本轮跑冷启动复现，留 OPEN
 
-### F-0011 · P2 · open · age 0d · seen 1x · batch B7
-anchor:  mail-worker/src/service/mail-share-service.js:672
-symbols: replayBatchFromLids
-rule:    docs/specs/mail-share/requirements.md AC-SHARE-11 重放须同一组 lid
-theme:   T3 · emails[] 创建分享
-commits: fabe6e8
-report:  reviewer:T3, reviewer:high-risk-T3
-related: -
-risk:    none
-failure: replayBatchFromLids 只判 !rows.length，残缺批次仍 idempotentReplay:true
-trigger: 幂等行 lids=[a,b] 但 b 已被保留期清理
-impact:  Owner 以为重放完整批量，实际少一条且无 NOT_FOUND
-fix:     回读 lid 集合必须与请求 lids 精确相等，否则 SHARE_NOT_FOUND
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
-
 ### F-0012 · P2 · open · age 0d · seen 1x · batch -
 anchor:  mail-vue/src/views/share-admin/index.vue:1
 symbols: liveEffectiveStatus, fetchList
@@ -283,81 +151,6 @@ impact:  监听累加，一次 focus 多次 refresh
 fix:     onDeactivated 对称 removeEventListener
 verify:  unverified: 本轮不改 Indicator 钩子，留 OPEN
 
-### F-0015 · P2 · open · age 0d · seen 1x · batch B9
-anchor:  .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md:1
-symbols: handleShareGone
-rule:    决策卡任务清单 Evidence 必须覆盖真实落地提交
-theme:   T9 · 决策卡 Evidence
-commits: 1288ac8, 9b6eb80
-report:  reviewer:T9, reviewer:cross-contract
-related: F-0016, F-0017
-risk:    none
-failure: P4 SPA 出口在 e309ad4，Evidence 只记 d602ec6
-trigger: 后续 agent 按账本认定 P4 已在 d602ec6 闭合
-impact:  回滚视觉提交会静默摘掉 gone 接线
-fix:     Evidence 补 files/commit: views/share/index.vue @ e309ad4
-verify:  python3 -c "t=open('.agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md').read(); assert 'e309ad4' in t or 'index.vue' in t.split('P4')[1][:2000]" → EXIT=0
-
-### F-0016 · P2 · open · age 0d · seen 1x · batch -
-anchor:  .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md:1
-symbols: visitor-share-ui-design
-rule:    决策卡 P5 Evidence 要求 1280/390 截图路径
-theme:   T9 · 决策卡 Evidence
-commits: 1288ac8, 9b6eb80, e309ad4
-report:  reviewer:T9, reviewer:T6
-related: F-0015, F-0017
-risk:    none
-failure: P5 勾选截图但未给产物路径；T6 reviewer 亦缺截图
-trigger: 验收账本声称视觉已验
-impact:  P5 无可复现视觉证据
-fix:     补截图路径或把 Evidence 改为 unverified: 无产物
-verify:  unverified: 本环境无既有截图可挂，留 OPEN
-
-### F-0017 · P2 · open · age 0d · seen 1x · batch B9
-anchor:  .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md:1
-symbols: commit: pending
-rule:    engineering-agent 任务清单 Evidence commit 字段
-theme:   T9 · 决策卡 Evidence
-commits: 1288ac8, 9b6eb80
-report:  reviewer:T9
-related: F-0015, F-0016
-risk:    none
-failure: DOC/REV 条目 commit: pending
-trigger: 任务清单勾 [x] 但 commit 未回写
-impact:  无法从账本跳到落地 sha
-fix:     DOC→82f330e REV/VERIFY 按实际 sha 回写
-verify:  grep -n 'commit: pending' .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md ；期望无匹配
-
-### F-0018 · P2 · open · age 0d · seen 1x · batch B8
-anchor:  docs/specs/mail-share/design.md:197
-symbols: SHARE_DESTROYED, SHARE_EMAIL_INVALID, SHARE_DOMAIN_NOT_CONFIGURED
-rule:    mail-share/design.md 错误码稳定注册表即全集
-theme:   T7 · spec 回写
-commits: 82f330e
-report:  reviewer:T7, reviewer:cross-contract
-related: F-0006, F-0007, F-0019
-risk:    none
-failure: 三个新对外码未进稳定注册表
-trigger: 下一轮以注册表判野码
-impact:  合法码被判未注册，或前端 default 分支无依据
-fix:     注册表增收 SHARE_DESTROYED（不入响应体）与两个 Owner 码
-verify:  python3 -c "t=open('docs/specs/mail-share/design.md').read(); assert 'SHARE_EMAIL_INVALID' in t" → EXIT=0
-
-### F-0019 · P2 · open · age 0d · seen 1x · batch B8
-anchor:  docs/specs/mail-share/design.md:754
-symbols: liveEffectiveStatus
-rule:    文档锚点必须指向真实文件
-theme:   T7 · spec 回写
-commits: 82f330e
-report:  reviewer:T7
-related: F-0006, F-0007, F-0018
-risk:    文档锚点 ↔ 真实文件路径 · origin Update Log → hops 1 · stop: 路径已改
-failure: Update Log 写成 views/share/status.js，实际是 views/share-admin/status.js
-trigger: 按错误路径搜文件
-impact:  agent 以为展示 SSOT 在访客页目录
-fix:     更正路径锚点
-verify:  grep -n 'views/share/status.js' docs/specs/mail-share/design.md ；期望无匹配
-
 ### F-0020 · P2 · open · age 0d · seen 1x · batch -
 anchor:  docs/specs/mail-share/design.md:6
 symbols: status, shipped_commit
@@ -387,21 +180,6 @@ trigger: 只读 ADR 的后续设计
 impact:  ADR 与 shipped 行为长期分叉
 fix:     另开 ADR amend 轮；本轮不改 Accepted ADR 正文
 verify:  unverified: ADR 修订需独立决策，留 OPEN
-
-### F-0022 · P2 · open · age 0d · seen 1x · batch B6
-anchor:  mail-worker/src/security/share-document-gone.js:10
-symbols: SHARE_DOC_PATH, parseShareLidPath
-rule:    p4-destroyed-entrypoints.md #1/#2 文档入口全量收口
-theme:   T1 · gone→原生 404
-commits: d602ec6, e309ad4
-report:  reviewer:high-risk-T1
-related: F-0001
-risk:    文档拦截面 vs SPA 可达路径 · origin SHARE_DOC_PATH → hops 1 · stop: /S/ 已拦截或重定向
-failure: Vue 可匹配大小写不敏感历史 URL 形态；Worker SHARE_DOC_PATH 仅 /s/ 小写
-trigger: 访客打开 /S/<lid>（销毁链接）
-impact:  gone 检查跳过，SPA fallback 出 200 业务壳
-fix:     parseShareLidPath 对 /s/ 前缀大小写不敏感；Vue 增加 /S/:lid → /s/:lid 重定向
-verify:  cd mail-worker && pnpm exec vitest run test/share-document-gone.spec.js → EXIT=0
 
 ### F-0023 · P2 · open · age 0d · seen 1x · batch -
 anchor:  mail-vue/src/views/share-admin/ShareCreateWizard.vue:1
@@ -512,7 +290,245 @@ verify:  unverified: 无 remote D1 对照实验
 
 ## RESOLVED
 
-(none this round at merge time; FIX-BATCHES applied in follow-up commits on cursor/git-e148)
+### F-0001 · P1 · resolved · age 0d · seen 1x · batch B1
+anchor:  mail-vue/src/views/share/index.vue:789
+symbols: handleShareGone, clearMailboxView, clearShareSession, markShareGone
+rule:    docs/specs/mailbox-share-capability/requirements.md AC-SEC-07 amended · p4-destroyed-entrypoints.md #10
+theme:   T1 · gone→原生 404
+commits: d602ec6, e309ad4
+report:  reviewer:T1
+related: F-0022
+risk:    none
+failure: sessionStorage SecurityError 时 clearMailboxView 在 markShareGone/reload 之前抛出，已打开 SPA 停在业务壳
+trigger: 访客页已 ready，Owner 销毁分享，浏览器拒绝 sessionStorage 写入/删除
+impact:  持链访客继续看到本站业务 HTML，P4 成功状态（浏览器原生 404）未兑现
+fix:     session 清理函数吞 SecurityError；handleShareGone 用 try/finally 保证 markShareGone+reload/blank 必跑
+verify:  cd mail-vue && pnpm exec vitest run src/views/share/session.spec.js src/views/share/index.spec.js → EXIT=0
+close:   commit 0f4f52c · cd mail-vue && pnpm exec vitest run src/views/share/session.spec.js src/views/share/index.spec.js → EXIT=0
+
+### F-0002 · P1 · resolved · age 0d · seen 1x · batch B2
+anchor:  mail-worker/src/service/mailbox-provision.js:147
+symbols: planMailboxProvision, roleRow
+rule:    production-antipatterns 异常类 fail-open · 决策卡共享不变量（配额/域名权限）
+theme:   T2 · mailbox-provision SSOT
+commits: fabe6e8
+report:  reviewer:T2, reviewer:high-risk-T2
+related: -
+risk:    account 写路径的授权与配额闸门 · origin mailbox-provision.js:planMailboxProvision → hops 1 · stop: deny 分支已钉测试
+failure: 非管理员且 role 行缺失时跳过配额与 availDomain 权限（fail-open）
+trigger: user.type 指向不存在的 role，走设置页 add 或分享 emails[] 建号
+impact:  无角色约束的用户可开出任意数量/域名邮箱
+fix:     非 admin 且 !roleRow 时 deny QUOTA_EXCEEDED（fail-closed）
+verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
+close:   commit 0f4f52c · cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0 (27 passed)
+
+### F-0003 · P1 · resolved · age 0d · seen 1x · batch B4
+anchor:  mail-worker/src/service/mail-share-service.js:1256
+symbols: accountGuardSql, prepareAccountInsert, createFromEmails
+rule:    docs/specs/mail-share/requirements.md AC-SHARE-12 活跃上限不得两步 COUNT+INSERT
+theme:   T3 · emails[] 创建分享
+commits: fabe6e8
+report:  reviewer:T3, reviewer:high-risk-T3, reviewer:cross-contract
+related: F-0004, F-0030
+risk:    account 写路径的授权与配额闸门 · origin createFromEmails → hops 1 · stop: guard SQL 含 account COUNT
+failure: account 配额只在 plan 预检，batch 内 guard 只数 mail_share ACTIVE
+trigger: 两个并发 createFromEmails 同时为 missing 地址建号，且 owned+N 越过 role.accountCount
+impact:  用户邮箱数顶穿角色配额
+fix:     prepareAccountInsert 注入 account COUNT+N<=accountCount 谓词，与 share 限额折算同形
+verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
+close:   commit 0f4f52c · cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
+
+### F-0004 · P1 · resolved · age 0d · seen 1x · batch B5
+anchor:  mail-worker/src/service/mail-share-service.js:1342
+symbols: createFromEmails, prepareShareInsertByEmails
+rule:    docs/specs/mail-share/requirements.md AC-SHARE-12 / AC-CAP-13 整单拒绝 SHALL NOT 部分写入
+theme:   T3 · emails[] 创建分享
+commits: fabe6e8
+report:  reviewer:T3
+related: F-0003, F-0030
+risk:    none
+failure: 条件 INSERT 零命中不报错；shareRows.every 在 db.batch 已提交后才检查
+trigger: batch 内部分 share INSERT 因归属计数/限额谓词 0 行，其余语句成功
+impact:  部分分享/账号落库，整单拒绝语义被打破
+fix:     batch 末加 RAISE(ABORT) 完整性哨兵，使零命中变成语句错误从而回滚整批
+verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
+close:   commit 0f4f52c + 8a80014 · D1 禁止触发器外 RAISE，哨兵改为 SELECT 1/0；test/mail-share-emails.spec.js 27 passed → EXIT=0
+
+### F-0005 · P1 · resolved · age 0d · seen 1x · batch B3
+anchor:  mail-vue/src/views/share-admin/ShareCreateWizard.vue:615
+symbols: onOpenChange, closeNow, openDialog, unknownResult, rotateIdempotencyKey
+rule:    docs/specs/mailbox-share-capability/requirements.md AC-CAP-14
+theme:   T4 · 向导关窗去确认
+commits: fabe6e8
+report:  reviewer:T4
+related: -
+risk:    none
+failure: unknownResult 时关窗走 closeNow 清 unknownResult，下次 openDialog 轮换幂等键
+trigger: 创建请求运输层失败后 Owner 关掉向导再打开
+impact:  盲建第二条分享，丢失的首次响应无法按同 Key 重放
+fix:     关窗保留 unknownResult；再次打开不 rotateIdempotencyKey
+verify:  cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0
+close:   commit 0f4f52c · cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0
+
+### F-0006 · P1 · resolved · age 0d · seen 1x · batch B8
+anchor:  docs/specs/mail-share/design.md:578
+symbols: P-AUTH-01, AC-VISIT-04
+rule:    docs/specs/mail-share/requirements.md AC-VISIT-04 revised（gone 切族）vs design 性质段未改
+theme:   T7 · spec 回写
+commits: 82f330e
+report:  reviewer:T7, reviewer:cross-contract
+related: F-0007, F-0018, F-0019
+risk:    spec 内部一致性 · origin AC-VISIT-04 → hops 1 · stop: 性质段/矩阵/注册表已对齐
+failure: requirements 已把 gone 切成 404，design P-AUTH-01 与 Traceability AC-VISIT-04 仍写逐字节相同 SHARE_UNAVAILABLE
+trigger: 下一轮 reviewer 以 design 性质段/矩阵为判据
+impact:  把有意推翻判成实现漂移，或放过真正的回归
+fix:     同步 P-AUTH-01、Traceability AC-VISIT-04/AC-LIFE-03、错误码注册表
+verify:  python3 -c "import pathlib; t=pathlib.Path('docs/specs/mail-share/design.md').read_text(); assert 'SHARE_DESTROYED' in t; assert 'views/share-admin/status.js' in t" → EXIT=0
+close:   commit 0f4f52c · design.md P-AUTH-01/注册表含 SHARE_DESTROYED 且路径 views/share-admin/status.js
+
+### F-0007 · P1 · resolved · age 0d · seen 1x · batch B8
+anchor:  docs/specs/mailbox-share-capability/requirements.md:55
+symbols: AC-CAP-01
+rule:    capability design create 契约表已写 emails[]，requirements AC-CAP-01 仍只写 accountId
+theme:   T7 · spec 回写
+commits: 82f330e
+report:  reviewer:T7
+related: F-0006, F-0018, F-0019
+risk:    none
+failure: AC-CAP-01 未收录 emails[] 创建与新错误码
+trigger: 后续 agent 只读 requirements 实现/审查 create
+impact:  emails[] 路径被视为无 AC 的野能力
+fix:     AC-CAP-01 行内 amended 补 emails[] 与 SHARE_EMAIL_INVALID / SHARE_DOMAIN_NOT_CONFIGURED
+verify:  python3 -c "assert 'emails' in pathlib.Path('docs/specs/mailbox-share-capability/requirements.md').read_text()" → EXIT=0
+close:   commit 0f4f52c · AC-CAP-01 amended 收录 emails[] + SHARE_EMAIL_INVALID / SHARE_DOMAIN_NOT_CONFIGURED
+
+### F-0011 · P2 · resolved · age 0d · seen 1x · batch B7
+anchor:  mail-worker/src/service/mail-share-service.js:672
+symbols: replayBatchFromLids
+rule:    docs/specs/mail-share/requirements.md AC-SHARE-11 重放须同一组 lid
+theme:   T3 · emails[] 创建分享
+commits: fabe6e8
+report:  reviewer:T3, reviewer:high-risk-T3
+related: -
+risk:    none
+failure: replayBatchFromLids 只判 !rows.length，残缺批次仍 idempotentReplay:true
+trigger: 幂等行 lids=[a,b] 但 b 已被保留期清理
+impact:  Owner 以为重放完整批量，实际少一条且无 NOT_FOUND
+fix:     回读 lid 集合必须与请求 lids 精确相等，否则 SHARE_NOT_FOUND
+verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
+close:   commit 0f4f52c · replayBatchFromLids lid 集合精确相等；test/mail-share-emails.spec.js → EXIT=0
+
+### F-0015 · P2 · resolved · age 0d · seen 1x · batch B9
+anchor:  .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md:1
+symbols: handleShareGone
+rule:    决策卡任务清单 Evidence 必须覆盖真实落地提交
+theme:   T9 · 决策卡 Evidence
+commits: 1288ac8, 9b6eb80
+report:  reviewer:T9, reviewer:cross-contract
+related: F-0016, F-0017
+risk:    none
+failure: P4 SPA 出口在 e309ad4，Evidence 只记 d602ec6
+trigger: 后续 agent 按账本认定 P4 已在 d602ec6 闭合
+impact:  回滚视觉提交会静默摘掉 gone 接线
+fix:     Evidence 补 files/commit: views/share/index.vue @ e309ad4
+verify:  python3 -c "t=open('.agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md').read(); assert 'e309ad4' in t or 'index.vue' in t.split('P4')[1][:2000]" → EXIT=0
+close:   commit 0f4f52c · 决策卡 P4 Evidence 补 e309ad4 SPA 接线
+
+### F-0016 · P2 · resolved · age 0d · seen 1x · batch -
+anchor:  .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md:1
+symbols: visitor-share-ui-design
+rule:    决策卡 P5 Evidence 要求 1280/390 截图路径
+theme:   T9 · 决策卡 Evidence
+commits: 1288ac8, 9b6eb80, e309ad4
+report:  reviewer:T9, reviewer:T6
+related: F-0015, F-0017
+risk:    none
+failure: P5 勾选截图但未给产物路径；T6 reviewer 亦缺截图
+trigger: 验收账本声称视觉已验
+impact:  P5 无可复现视觉证据
+fix:     补截图路径或把 Evidence 改为 unverified: 无产物
+verify:  unverified: 本环境无既有截图可挂，留 OPEN
+close:   commit 0f4f52c · P5 截图 artifacts/ui-t6-desktop-1280.webp / ui-t6-mobile-390.webp
+
+### F-0017 · P2 · resolved · age 0d · seen 1x · batch B9
+anchor:  .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md:1
+symbols: commit: pending
+rule:    engineering-agent 任务清单 Evidence commit 字段
+theme:   T9 · 决策卡 Evidence
+commits: 1288ac8, 9b6eb80
+report:  reviewer:T9
+related: F-0015, F-0016
+risk:    none
+failure: DOC/REV 条目 commit: pending
+trigger: 任务清单勾 [x] 但 commit 未回写
+impact:  无法从账本跳到落地 sha
+fix:     DOC→82f330e REV/VERIFY 按实际 sha 回写
+verify:  grep -n 'commit: pending' .agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md ；期望无匹配
+close:   commit 0f4f52c · 决策卡 DOC/REV 无 commit: pending（已回写 1288ac8）
+
+### F-0018 · P2 · resolved · age 0d · seen 1x · batch B8
+anchor:  docs/specs/mail-share/design.md:197
+symbols: SHARE_DESTROYED, SHARE_EMAIL_INVALID, SHARE_DOMAIN_NOT_CONFIGURED
+rule:    mail-share/design.md 错误码稳定注册表即全集
+theme:   T7 · spec 回写
+commits: 82f330e
+report:  reviewer:T7, reviewer:cross-contract
+related: F-0006, F-0007, F-0019
+risk:    none
+failure: 三个新对外码未进稳定注册表
+trigger: 下一轮以注册表判野码
+impact:  合法码被判未注册，或前端 default 分支无依据
+fix:     注册表增收 SHARE_DESTROYED（不入响应体）与两个 Owner 码
+verify:  python3 -c "t=open('docs/specs/mail-share/design.md').read(); assert 'SHARE_EMAIL_INVALID' in t" → EXIT=0
+close:   commit 0f4f52c · design.md 错误码注册表含 SHARE_DESTROYED / SHARE_EMAIL_INVALID / SHARE_DOMAIN_NOT_CONFIGURED
+
+### F-0019 · P2 · resolved · age 0d · seen 1x · batch B8
+anchor:  docs/specs/mail-share/design.md:754
+symbols: liveEffectiveStatus
+rule:    文档锚点必须指向真实文件
+theme:   T7 · spec 回写
+commits: 82f330e
+report:  reviewer:T7
+related: F-0006, F-0007, F-0018
+risk:    文档锚点 ↔ 真实文件路径 · origin Update Log → hops 1 · stop: 路径已改
+failure: Update Log 写成 views/share/status.js，实际是 views/share-admin/status.js
+trigger: 按错误路径搜文件
+impact:  agent 以为展示 SSOT 在访客页目录
+fix:     更正路径锚点
+verify:  grep -n 'views/share/status.js' docs/specs/mail-share/design.md ；期望无匹配
+close:   commit 0f4f52c · design.md Update Log 路径改为 views/share-admin/status.js
+
+### F-0022 · P2 · resolved · age 0d · seen 1x · batch B6
+anchor:  mail-worker/src/security/share-document-gone.js:10
+symbols: SHARE_DOC_PATH, parseShareLidPath
+rule:    p4-destroyed-entrypoints.md #1/#2 文档入口全量收口
+theme:   T1 · gone→原生 404
+commits: d602ec6, e309ad4
+report:  reviewer:high-risk-T1
+related: F-0001
+risk:    文档拦截面 vs SPA 可达路径 · origin SHARE_DOC_PATH → hops 1 · stop: /S/ 已拦截或重定向
+failure: Vue 可匹配大小写不敏感历史 URL 形态；Worker SHARE_DOC_PATH 仅 /s/ 小写
+trigger: 访客打开 /S/<lid>（销毁链接）
+impact:  gone 检查跳过，SPA fallback 出 200 业务壳
+fix:     parseShareLidPath 对 /s/ 前缀大小写不敏感；Vue 增加 /S/:lid → /s/:lid 重定向
+verify:  cd mail-worker && pnpm exec vitest run test/share-document-gone.spec.js → EXIT=0
+close:   commit 0f4f52c · SHARE_DOC_PATH 加 i + Vue alias /S/:lid；test/share-document-gone.spec.js 16 passed → EXIT=0
+
+### F-0028 · P1 · resolved · age 0d · seen 1x · batch B10
+anchor:  mail-vue/src/views/share/index.vue:1425
+symbols: share-list-from, share-from, share-detail, share-atts
+rule:    visitor-share-ui-design.md 卡片不得被外部文本撑破视口
+theme:   T6 · 访客收码页视觉
+commits: e309ad4
+report:  reviewer:ui-T6
+related: -
+risk:    none
+failure: 无空格超长主题/发件人/附件名把页面拉到约 983px
+trigger: 邮件主题或附件名为超长 token
+impact:  移动端横向滚动，收码主任务被挤出
+fix:     外部文本 overflow-wrap:anywhere；容器 overflow-x:hidden
+verify:  cd mail-vue && pnpm exec vitest run src/views/share/index.spec.js → EXIT=0
+close:   commit 0f4f52c · overflow-wrap:anywhere + .share-shell overflow-x:hidden；index.spec.js → EXIT=0
 
 ## WAIVED
 
