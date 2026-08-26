@@ -4,6 +4,7 @@ import { SEC_CIPHER_FAILURE, decryptShareSec, encryptShareSec, probeKek } from '
 import { toUtc } from '../utils/date-uitil';
 import { SHARE_EVENT, logShareEvent } from './share-event';
 import shareAuthService from './share-auth-service';
+import { PROVISION_DENIED, planMailboxProvision, prepareAccountInsert } from './mailbox-provision';
 
 const CREATE_OP = 'create';
 // `share_idempotency` 的唯一键含 `operation`,所以两个写入口可以共用同一把 Idempotency-Key
@@ -180,12 +181,36 @@ function toAccountIdSet(params) {
 	return toIdSet(params && params.accountIds != null ? params.accountIds : (params && params.accountId));
 }
 
+// P2:向导侧的完整地址清单。trim + 小写 + 去重 + 升序 —— 排序进指纹
+// (「同一批地址换个粘贴顺序」必须是同一个请求),也让 N 条单分享的落库顺序确定。
+// 格式校验不在这里:归一化阶段把非法值折成合法值是本文件反复吃过的亏
+// (FLAG_TOKENS:131),脏地址原样保留,由 provision 预校验以稳定码整单拒绝。
+function toEmailList(value) {
+	const raw = value == null ? [] : (Array.isArray(value) ? value : [value]);
+	const seen = new Set();
+	const emails = [];
+	for (const item of raw) {
+		const email = String(item).trim().toLowerCase();
+		if (!email || seen.has(email)) {
+			continue;
+		}
+		seen.add(email);
+		emails.push(email);
+	}
+	return emails.sort();
+}
+
 // 字段顺序是指纹的一部分:JSON.stringify 按插入顺序序列化,所以这里必须一次性构造整个字面量,
 // 不能 `{...defaults, ...params}` —— 后者的键顺序随调用方传了哪些字段而变,同一语义两个指纹。
 // 默认值逐个对齐 init.js v3_2DB 的 DDL DEFAULT(max_sessions / message_limit 无 DEFAULT 即 NULL)。
+// `emails` 只在非空时挂键(恒在末位):空 `emails: []` 一旦进指纹,滚动发布窗口内
+// 新旧 Worker 对同一个旧载荷会算出两个指纹,重试全部变成 CONFLICT(P2 硬约束)。
+// emails 非空时 accountIds 强制空集 —— 「emails 优先,忽略本次请求里的 accountIds」,
+// 忽略必须发生在指纹之前,否则同一批地址带不带残余 accountId 会是两个请求。
 function normalizeCreateBody(params) {
-	return {
-		accountIds: toAccountIdSet(params),
+	const emails = toEmailList(params && params.emails);
+	const body = {
+		accountIds: emails.length ? [] : toAccountIdSet(params),
 		durationSeconds: Number(params && params.durationSeconds),
 		name: params && params.name == null ? '' : String(params.name),
 		remark: params && params.remark == null ? '' : String(params.remark),
@@ -200,6 +225,10 @@ function normalizeCreateBody(params) {
 		showFullAddress: toFlag(params && params.showFullAddress, 0),
 		authKeyEnabled: toFlag(params && params.authKeyEnabled, 0)
 	};
+	if (emails.length) {
+		body.emails = emails;
+	}
+	return body;
 }
 
 async function sha256Hex(text) {
@@ -216,24 +245,31 @@ function requestFingerprint(body) {
 // 所以两边必须算出同一个指纹。字段顺序照抄旧 `normalizeCreateBody`,它也是指纹的一部分。
 // 非兼容载荷(multi / AuthKey / 有限配额 / 非默认 flag)返回 null:旧 Worker 根本执行不了这些策略,
 // 让它重放出来比 CONFLICT 更糟。
-function legacyCompatibleBody(body) {
-	if (body.accountIds.length !== 1
-		|| body.maxSessions != null
-		|| body.messageLimit != null
-		|| body.onlyMessagesAfterCreated !== 1
-		|| body.otpExtractionEnabled !== 1
-		|| body.autoRefresh !== 1
-		|| body.refreshIntervalMs !== MIN_REFRESH_INTERVAL_MS
-		|| body.showFullAddress !== 0
-		|| body.authKeyEnabled !== 0) {
-		return null;
-	}
+function hasLegacyDefaults(body) {
+	return body.maxSessions == null
+		&& body.messageLimit == null
+		&& body.onlyMessagesAfterCreated === 1
+		&& body.otpExtractionEnabled === 1
+		&& body.autoRefresh === 1
+		&& body.refreshIntervalMs === MIN_REFRESH_INTERVAL_MS
+		&& body.showFullAddress === 0
+		&& body.authKeyEnabled === 0;
+}
+
+function legacyBodyOf(accountId, body) {
 	return {
-		accountId: body.accountIds[0],
+		accountId,
 		durationSeconds: body.durationSeconds,
 		name: body.name,
 		remark: body.remark
 	};
+}
+
+function legacyCompatibleBody(body) {
+	if (body.emails || body.accountIds.length !== 1 || !hasLegacyDefaults(body)) {
+		return null;
+	}
+	return legacyBodyOf(body.accountIds[0], body);
 }
 
 // `stored` 是要落库的那一个:兼容载荷落旧 hash,旧 Worker 才能重放新 Worker 建出的分享。
@@ -246,6 +282,19 @@ async function createFingerprints(body) {
 		return { stored: modern, accepted: [modern] };
 	}
 	const legacyHash = await requestFingerprint(legacy);
+	return { stored: legacyHash, accepted: [modern, legacyHash] };
+}
+
+// emails 路径的指纹。单地址 + 默认配置且地址已解析到自己的存量账号时,附带旧四字段
+// 指纹(resolve 后的 accountId):同一个语义从 ShareDialog(accountId)或向导(emails)
+// 提交,重试互认为重放而不是 CONFLICT。地址尚未建号时不产旧指纹 —— 首次请求以 modern
+// 落库,重试时 accepted 仍含 modern,照样命中重放。
+async function emailCreateFingerprints(body, plan) {
+	const modern = await requestFingerprint(body);
+	if (body.emails.length !== 1 || !hasLegacyDefaults(body) || plan.reused.length !== 1) {
+		return { stored: modern, accepted: [modern] };
+	}
+	const legacyHash = await requestFingerprint(legacyBodyOf(plan.reused[0].accountId, body));
 	return { stored: legacyHash, accepted: [modern, legacyHash] };
 }
 
@@ -327,15 +376,20 @@ async function assertOwnedAccounts(c, accountIds, userId) {
 
 // 顺序即语义:域校验 → 上限 → 栅栏。上限排在栅栏前,51 个 accountId 在 V2=false 下也返回
 // SHARE_BINDING_LIMIT_EXCEEDED —— 「51 > 50」是永久领域错误,栅栏只是暂时的发布态。
+// emails 模式(P2)的关键差异:**地址个数不过 MULTI_CREATE 栅栏**。V2=false 的批量
+// 会在 create 里分流成 N 条单分享(旧 Worker 完全执行得了),用栅栏吞掉它就是把
+// 用户的批量目标挡死在一个与他无关的发布开关上(DC-P0-1)。AuthKey / 配额栅栏照旧:
+// 它们对单分享同样是旧 Worker 执行不了的策略写入。
 function assertCreateBody(c, body) {
-	if (!body.accountIds.length || !body.accountIds.every(isRowId)) {
+	const emailMode = Boolean(body.emails);
+	if (!emailMode && (!body.accountIds.length || !body.accountIds.every(isRowId))) {
 		throw new BizError('SHARE_ACCOUNT_FORBIDDEN');
 	}
 	if (!Number.isFinite(body.durationSeconds) || body.durationSeconds <= 0
 		|| body.durationSeconds > maxDurationSeconds(c)) {
 		throw new BizError('SHARE_DURATION_EXCEEDED');
 	}
-	if (body.accountIds.length > SHARE_BINDING_LIMIT) {
+	if ((emailMode ? body.emails.length : body.accountIds.length) > SHARE_BINDING_LIMIT) {
 		throw new BizError('SHARE_BINDING_LIMIT_EXCEEDED');
 	}
 	if (!Number.isSafeInteger(body.refreshIntervalMs) || body.refreshIntervalMs < MIN_REFRESH_INTERVAL_MS) {
@@ -348,6 +402,11 @@ function assertCreateBody(c, body) {
 		throw new BizError('SHARE_INVALID_CONFIG');
 	}
 	if (body.accountIds.length > 1) {
+		assertCapabilityV2(c, SHARE_V2_INTENT.MULTI_CREATE);
+	}
+	if (emailMode && body.emails.length > 1 && isCapabilityV2Enabled(c)) {
+		// 走到多 Binding 一条分享的路径(AC-LIFE-11 语义)。栅栏此刻恒放行,
+		// 这行只为「多 Binding 写入必过栅栏」这条不变量保留自述。
 		assertCapabilityV2(c, SHARE_V2_INTENT.MULTI_CREATE);
 	}
 	if (body.authKeyEnabled) {
@@ -558,6 +617,11 @@ async function readIdempotency(c, userId, idempotencyKey, operation) {
 // AC-CAP-14:重放补齐 shareType/bindings,但 sec 与 AuthKey 明文一个字符都不给。
 // Binding 计数用 LEFT JOIN 顺带取回,不比原来多一次往返。
 async function replayFromIdempotency(c, row) {
+	// P2 批量重放:response_fingerprint 里存的是当初那一批的 lid 清单。
+	const lids = batchReplayLids(row);
+	if (lids) {
+		return replayBatchFromLids(c, lids);
+	}
 	const found = await c.env.db.prepare(`
 		SELECT ms.share_id, ms.lid, ms.expires_at, b.binding_id, b.account_id
 		FROM mail_share ms
@@ -580,6 +644,53 @@ async function replayFromIdempotency(c, row) {
 		bindings,
 		idempotentReplay: true
 	};
+}
+
+function batchReplayLids(row) {
+	try {
+		const parsed = JSON.parse(row.response_fingerprint);
+		if (parsed && Array.isArray(parsed.lids) && parsed.lids.length > 1) {
+			return parsed.lids;
+		}
+	} catch (err) {
+		// response_fingerprint 不是 JSON(不可能的旧数据形状)→ 按单条重放处置。
+	}
+	return null;
+}
+
+// 与单条重放同一契约:sec/shareUrl 一个字符都不给,行没了(保留期清理)就整单 NOT_FOUND。
+async function replayBatchFromLids(c, lids) {
+	const found = await c.env.db.prepare(`
+		SELECT ms.share_id, ms.lid, ms.expires_at, a.email AS mailbox, b.binding_id, b.account_id
+		FROM mail_share ms
+		LEFT JOIN mail_share_binding b ON b.share_id = ms.share_id
+		LEFT JOIN account a ON a.account_id = ms.account_id
+		WHERE ms.lid IN (SELECT value FROM json_each(?))
+		ORDER BY ms.share_id ASC, b.binding_id ASC
+	`).bind(JSON.stringify(lids)).all();
+	const rows = found.results || [];
+	if (!rows.length) {
+		throw new BizError('SHARE_NOT_FOUND');
+	}
+	const byShare = new Map();
+	for (const item of rows) {
+		const entry = byShare.get(item.share_id) || {
+			shareId: item.share_id,
+			lid: item.lid,
+			expiresAt: item.expires_at,
+			mailbox: item.mailbox || '',
+			bindings: []
+		};
+		if (item.binding_id != null) {
+			entry.bindings.push({ bindingId: item.binding_id, accountId: item.account_id });
+		}
+		byShare.set(item.share_id, entry);
+	}
+	const shares = [...byShare.values()].map((entry) => ({
+		...entry,
+		shareType: shareTypeOf(entry.bindings)
+	}));
+	return { shares, idempotentReplay: true };
 }
 
 async function replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, operation) {
@@ -698,6 +809,116 @@ function prepareBindingInsert(c, values) {
 		values.snapshotIds,
 		values.snapshotCount,
 		values.accountIds.length
+	);
+}
+
+// P2 emails 路径的 share INSERT:`prepareShareInsert` 的孪生,唯一差别是 account 以
+// **邮箱集合**而不是 id 集合定位 —— 缺失的 account 行由同一个 batch 里更早的
+// `prepareAccountInsert` 落下,D1 batch 是一个事务、语句顺序可见,所以子查询解析得到
+// 刚插入的行。主表 `account_id` 取集合内最小 id(与 Binding `ORDER BY account_id` 的
+// 主 Binding 恒等),同批随后的 `syncPrimaryAccountId` 再按主 Binding 收口一次。
+// 归属谓词按邮箱计数:任何一枚地址在预校验与 batch 之间易主/被删,计数就对不上,
+// 本语句零行(batch 内状态冻结,同批 N 条会得出同一个判定 —— 全有或全无)。
+// 限额谓词的余量由调用方按批内位次折算进 `limit` 绑定值,见 `createFromEmails`。
+function prepareShareInsertByEmails(c, values) {
+	const primaryAccountSql = `SELECT MIN(pa.account_id) FROM account pa
+				WHERE lower(pa.email) IN (SELECT value FROM json_each(?))
+					AND pa.user_id = ? AND pa.is_del = ${isDel.NORMAL}`;
+	return c.env.db.prepare(`
+		INSERT INTO mail_share (
+			lid, sec_hmac, pepper_kid, user_id, account_id, name, remark, status,
+			window_start_email_id, expires_at, delete_at, create_time,
+			max_sessions, message_limit, only_messages_after_created, otp_extraction_enabled,
+			auto_refresh, refresh_interval_ms, show_full_address,
+			auth_key_enabled, auth_key_hash, auth_key_kid,
+			sec_cipher, kek_kid
+		)
+		SELECT
+			?, ?, ?, ?,
+			(${primaryAccountSql}),
+			?, ?, 'ACTIVE',
+			CASE WHEN ? = 1
+				THEN (SELECT COALESCE(MAX(e.email_id), 0) FROM email e
+					WHERE e.account_id = (${primaryAccountSql}))
+				ELSE 0 END,
+			?, ?, ?,
+			?, ?, ?, ?,
+			?, ?, ?,
+			?, ?, ?,
+			?, ?
+		WHERE (
+			SELECT COUNT(*) FROM mail_share
+			WHERE user_id = ? AND status = 'ACTIVE' AND expires_at > ?
+		) < ?
+		AND (
+			SELECT COUNT(*) FROM account
+			WHERE lower(email) IN (SELECT value FROM json_each(?))
+				AND user_id = ? AND is_del = ${isDel.NORMAL}
+		) = ?
+		RETURNING share_id, lid, window_start_email_id, expires_at, delete_at, create_time
+	`).bind(
+		values.lid,
+		values.secHmac,
+		values.pepperKid,
+		values.userId,
+		values.emailsJson,
+		values.userId,
+		values.name,
+		values.remark,
+		values.onlyMessagesAfterCreated,
+		values.emailsJson,
+		values.userId,
+		values.expiresAt,
+		values.deleteAt,
+		values.createdAt,
+		values.maxSessions,
+		values.messageLimit,
+		values.onlyMessagesAfterCreated,
+		values.otpExtractionEnabled,
+		values.autoRefresh,
+		values.refreshIntervalMs,
+		values.showFullAddress,
+		values.authKeyEnabled,
+		values.authKeyHash,
+		values.authKeyKid,
+		values.secCipher,
+		values.kekKid,
+		values.userId,
+		values.now,
+		values.limit,
+		values.emailsJson,
+		values.userId,
+		values.emailCount
+	);
+}
+
+// `prepareBindingInsert` 的邮箱定位孪生,谓词结构(matched 全有或全无 + 空快照 +
+// ORDER BY account_id)逐字保留;share 未插入 → `ms.lid = ?` 零行 → binding 零行。
+function prepareBindingInsertByEmails(c, values) {
+	return c.env.db.prepare(`
+		INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id)
+		SELECT share_id, account_id, window_start_email_id FROM (
+			SELECT ms.share_id AS share_id, a.account_id AS account_id,
+				CASE WHEN ? = 1
+					THEN (SELECT COALESCE(MAX(e.email_id), 0) FROM email e WHERE e.account_id = a.account_id)
+					ELSE 0 END AS window_start_email_id,
+				COUNT(*) OVER () AS matched
+			FROM mail_share ms
+			JOIN account a ON lower(a.email) IN (SELECT value FROM json_each(?))
+				AND a.user_id = ? AND a.is_del = ${isDel.NORMAL}
+			WHERE ms.lid = ?
+			AND ${snapshotPredicate('ms.share_id', false)}
+		)
+		WHERE matched = ?
+		ORDER BY account_id ASC
+	`).bind(
+		values.onlyMessagesAfterCreated,
+		values.emailsJson,
+		values.userId,
+		values.lid,
+		'[]',
+		0,
+		values.emailCount
 	);
 }
 
@@ -836,6 +1057,8 @@ function prepareStaleIdempotencyDelete(c, values) {
 	`).bind(values.userId, values.idempotencyKey, values.operation, values.cutoff);
 }
 
+// `responseFingerprint` 缺省 `{ lid }`;P2 的 V2=false 批量写 `{ lids: [...] }` ——
+// 一把幂等键只有一行,N 条单分享的重放靠这份 lid 清单回读(share_id 只能记第一条)。
 function prepareIdempotencyInsert(c, values) {
 	return c.env.db.prepare(`
 		INSERT INTO share_idempotency (
@@ -849,7 +1072,7 @@ function prepareIdempotencyInsert(c, values) {
 		values.idempotencyKey,
 		values.operation,
 		values.fingerprint,
-		JSON.stringify({ lid: values.lid }),
+		values.responseFingerprint || JSON.stringify({ lid: values.lid }),
 		values.createdAt,
 		values.lid
 	);
@@ -903,6 +1126,234 @@ async function insertShareAndIdempotency(c, values) {
 	}
 	await assertOwnedAccounts(c, values.accountIds, values.userId);
 	throw new BizError('SHARE_LIMIT_EXCEEDED');
+}
+
+// P2:建号拒绝原因 → 分享域稳定码。地址本身的问题(格式/前缀规则)归 SHARE_EMAIL_INVALID,
+// 域名没配归 SHARE_DOMAIN_NOT_CONFIGURED(注册清单钦定的两个新码);账号侧的不可用
+// (已删/他人/配额/角色域名权限)一律折进既有的 SHARE_ACCOUNT_FORBIDDEN ——
+// 与 accountId 路径同码,不为新入口扩大可探测面。
+const PROVISION_TO_SHARE_ERROR = {
+	[PROVISION_DENIED.EMAIL_INVALID]: 'SHARE_EMAIL_INVALID',
+	[PROVISION_DENIED.PREFIX_TOO_SHORT]: 'SHARE_EMAIL_INVALID',
+	[PROVISION_DENIED.PREFIX_FORBIDDEN]: 'SHARE_EMAIL_INVALID',
+	[PROVISION_DENIED.DOMAIN_NOT_CONFIGURED]: 'SHARE_DOMAIN_NOT_CONFIGURED',
+	[PROVISION_DENIED.ACCOUNT_DELETED]: 'SHARE_ACCOUNT_FORBIDDEN',
+	[PROVISION_DENIED.ACCOUNT_TAKEN]: 'SHARE_ACCOUNT_FORBIDDEN',
+	[PROVISION_DENIED.ACCOUNT_EXISTS]: 'SHARE_ACCOUNT_FORBIDDEN',
+	[PROVISION_DENIED.QUOTA_EXCEEDED]: 'SHARE_ACCOUNT_FORBIDDEN',
+	[PROVISION_DENIED.DOMAIN_NOT_PERMITTED]: 'SHARE_ACCOUNT_FORBIDDEN'
+};
+
+// 全量预校验、零写入(P2 多步写入契约第 1 条):任一枚地址不过,整单一个稳定码收场。
+async function planShareMailboxes(c, emails, userId) {
+	try {
+		return await planMailboxProvision(c, { emails, userId });
+	} catch (err) {
+		if (err && err.name === 'ProvisionDenied') {
+			throw new BizError(PROVISION_TO_SHARE_ERROR[err.reason] || 'SHARE_ACCOUNT_FORBIDDEN');
+		}
+		throw err;
+	}
+}
+
+async function buildEmailCreateResponse(c, minted, shareRows) {
+	const shares = [];
+	for (let index = 0; index < minted.length; index += 1) {
+		const row = shareRows[index].results[0];
+		const item = minted[index];
+		const share = firstCreateResponse(c, row, item.sec, item.authKey, await loadBindings(c, row.share_id));
+		// 结果区要给每条链接标上它属于哪只邮箱;multi 分享的成员明细仍走 bindings。
+		share.mailbox = item.group.length === 1 ? item.group[0] : '';
+		shares.push(share);
+	}
+	// 单地址保持旧的单对象形状(向导与 ShareDialog 消费同一形状);
+	// 只有 V2=false 批量才升维成 { shares: [...] }。
+	return shares.length === 1 ? shares[0] : { shares };
+}
+
+// P2 主链路:emails[] → find-or-create 建号 → 分享落库,全部写入进同一个
+// `c.env.db.batch()`(D1 batch 是一个事务,语句报错才回滚,batch 内状态冻结)。
+// 批量分流(DC-P0-1):V2 开 → 一条 multi(AC-LIFE-11 语义);V2 关 → 每个地址
+// 一条单分享,同批同一把幂等键 —— 禁止 V2=false 写多 Binding,也禁止用栅栏吞掉批量。
+async function createFromEmails(c, body, params, userId) {
+	const pepper = c.env.SHARE_SEC_PEPPER;
+	if (!pepper) {
+		console.error('share create sec pepper missing');
+		throw new Error('share create pepper missing');
+	}
+	assertKekConfigured(c, 'create');
+
+	let plan = await planShareMailboxes(c, body.emails, userId);
+
+	const idempotencyKey = params && params.idempotencyKey != null && String(params.idempotencyKey) !== ''
+		? String(params.idempotencyKey)
+		: '';
+	const { stored: fingerprint, accepted } = await emailCreateFingerprints(body, plan);
+	const cutoff = idempotencyCutoff();
+	if (idempotencyKey) {
+		const replay = await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, CREATE_OP);
+		if (replay) {
+			return replay;
+		}
+	}
+
+	const groups = body.emails.length > 1 && isCapabilityV2Enabled(c)
+		? [body.emails]
+		: body.emails.map((email) => [email]);
+
+	const now = toUtc();
+	const createdAt = now.format('YYYY-MM-DD HH:mm:ss');
+	const expiresAt = now.clone().add(body.durationSeconds, 'second').format('YYYY-MM-DD HH:mm:ss');
+	const deleteAt = now.clone().add(body.durationSeconds + retentionSeconds(c), 'second').format('YYYY-MM-DD HH:mm:ss');
+	const limit = activeLimit(c);
+
+	// 限额预检只为「整单稳定码、零写入」;真正的防线仍是每条写入语句自带的余量谓词。
+	const active = await c.env.db.prepare(`
+		SELECT COUNT(*) AS n FROM mail_share
+		WHERE user_id = ? AND status = 'ACTIVE' AND expires_at > ?
+	`).bind(userId, createdAt).first();
+	if (active.n + groups.length > limit) {
+		throw new BizError('SHARE_LIMIT_EXCEEDED');
+	}
+
+	// 每条分享各自铸凭据。UNIQUE 撞车重试**不再铸**:首批一行都没落库(整批回滚),
+	// 同一批凭据重放一次写入即可,重铸只会让重试与幂等行对不上。
+	const minted = [];
+	for (const group of groups) {
+		const lid = randomToken(16);
+		const creds = await mintShareCredentials(c, lid, 'create');
+		const authKey = body.authKeyEnabled ? randomToken(16) : '';
+		minted.push({
+			group,
+			lid,
+			sec: creds.sec,
+			secHmac: creds.secHmac,
+			pepperKid: creds.pepperKid,
+			secCipher: creds.secCipher,
+			kekKid: creds.kekKid,
+			authKey,
+			authKeyHash: authKey ? await shareAuthService.digestShareSecret(authKey, pepper) : null,
+			authKeyKid: authKey ? creds.pepperKid : null
+		});
+	}
+	const idemValues = {
+		userId,
+		idempotencyKey,
+		operation: CREATE_OP,
+		fingerprint,
+		accepted,
+		cutoff,
+		lid: minted[0].lid,
+		responseFingerprint: groups.length > 1
+			? JSON.stringify({ lids: minted.map((item) => item.lid) })
+			: JSON.stringify({ lid: minted[0].lid }),
+		createdAt
+	};
+
+	// batch 内状态冻结,所以第 i 条 share 看到 base+i 条活跃行;把余量折进各自的绑定值,
+	// 「base + N ≤ limit」对所有语句是同一个判定 —— 全有或全无,不会插一半。
+	// account INSERT 同带这条余量守卫:限额竞态下 share 零行时 account 也零行,不留孤儿。
+	const accountGuardSql = ` AND (
+			SELECT COUNT(*) FROM mail_share
+			WHERE user_id = ? AND status = 'ACTIVE' AND expires_at > ?
+		) < ?`;
+	for (let attempt = 0; ; attempt += 1) {
+		const statements = [];
+		if (idempotencyKey) {
+			statements.push(prepareStaleIdempotencyDelete(c, idemValues));
+		}
+		for (const email of plan.missing) {
+			statements.push(prepareAccountInsert(c, {
+				email,
+				userId,
+				guardSql: accountGuardSql,
+				guardBinds: [userId, createdAt, limit - (groups.length - 1)]
+			}));
+		}
+		const shareIndexes = [];
+		minted.forEach((item, index) => {
+			const emailsJson = JSON.stringify(item.group);
+			shareIndexes.push(statements.length);
+			statements.push(prepareShareInsertByEmails(c, {
+				lid: item.lid,
+				secHmac: item.secHmac,
+				pepperKid: item.pepperKid,
+				secCipher: item.secCipher,
+				kekKid: item.kekKid,
+				userId,
+				emailsJson,
+				emailCount: item.group.length,
+				name: body.name,
+				remark: body.remark,
+				maxSessions: body.maxSessions,
+				messageLimit: body.messageLimit,
+				onlyMessagesAfterCreated: body.onlyMessagesAfterCreated,
+				otpExtractionEnabled: body.otpExtractionEnabled,
+				autoRefresh: body.autoRefresh,
+				refreshIntervalMs: body.refreshIntervalMs,
+				showFullAddress: body.showFullAddress,
+				authKeyEnabled: body.authKeyEnabled,
+				authKeyHash: item.authKeyHash,
+				authKeyKid: item.authKeyKid,
+				expiresAt,
+				deleteAt,
+				createdAt,
+				now: createdAt,
+				limit: limit - (groups.length - 1 - index)
+			}));
+			statements.push(prepareBindingInsertByEmails(c, {
+				onlyMessagesAfterCreated: body.onlyMessagesAfterCreated,
+				emailsJson,
+				emailCount: item.group.length,
+				userId,
+				lid: item.lid
+			}));
+			statements.push(syncPrimaryAccountId(c, { lid: item.lid }));
+		});
+		if (idempotencyKey) {
+			statements.push(prepareIdempotencyInsert(c, idemValues));
+		}
+
+		let results;
+		try {
+			results = await c.env.db.batch(statements);
+		} catch (err) {
+			if (err instanceof BizError) {
+				throw err;
+			}
+			if (isUniqueConflict(err)) {
+				// 撞车有两个来源,顺序即消歧:同一把幂等键并发 → 回读幂等行按重放收场;
+				// 邮箱被并发抢注 → 整批已回滚,再读一次现状(属自己转 reused,属他人/已删
+				// 由 plan 以 FORBIDDEN 收场),整批重试至多一次(P2 多步写入契约第 4/5 条)。
+				const replay = idempotencyKey
+					? await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, CREATE_OP)
+					: null;
+				if (replay) {
+					return replay;
+				}
+				if (attempt === 0) {
+					plan = await planShareMailboxes(c, body.emails, userId);
+					continue;
+				}
+			}
+			throw err;
+		}
+
+		const shareRows = shareIndexes.map((index) => results[index]);
+		if (shareRows.every((row) => row.meta.changes)) {
+			return buildEmailCreateResponse(c, minted, shareRows);
+		}
+		// 零变更消歧与 insertShareAndIdempotency 同序:幂等重放 → 归属(plan 重读,
+		// 易主/被删以 FORBIDDEN 收场)→ 剩下的只有限额。
+		const replay = idempotencyKey
+			? await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, CREATE_OP)
+			: null;
+		if (replay) {
+			return replay;
+		}
+		await planShareMailboxes(c, body.emails, userId);
+		throw new BizError('SHARE_LIMIT_EXCEEDED');
+	}
 }
 
 // patch 语义与 create 归一化恰好相反,所以**不能**复用 `normalizeCreateBody`:
@@ -1334,6 +1785,11 @@ const mailShareService = {
 
 		const body = normalizeCreateBody(params);
 		assertCreateBody(c, body);
+		// P2:向导只说完整地址。emails 在场即忽略 accountIds(归一化已清空),
+		// 旧 `accountId(s)` 形状(ShareDialog / AC-CAP-10)原样走下面的既有链路。
+		if (body.emails) {
+			return createFromEmails(c, body, params, userId);
+		}
 		await assertOwnedAccounts(c, body.accountIds, userId);
 
 		const pepper = c.env.SHARE_SEC_PEPPER;

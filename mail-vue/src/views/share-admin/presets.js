@@ -6,6 +6,7 @@ import {ref} from "vue"
 // share. The spec diffs the request keys against this list for exactly that reason.
 export const CREATE_BODY_KEYS = Object.freeze([
     'accountIds',
+    'emails',
     'durationSeconds',
     'name',
     'remark',
@@ -41,6 +42,11 @@ export function recheckCapabilityV2() {
 // though the task brief lists only three: without it the owner sets a message cap on a
 // V2=false platform, gets SHARE_CAPABILITY_NOT_ENABLED, and reads a screen that says the other three
 // are the restricted ones.
+//
+// emails deliberately do NOT count, however many there are (P2 批量分流): the fence only
+// guards writes an old worker cannot execute, and a multi-address batch on V2=false is served
+// as N single shares — SHARE_CAPABILITY_NOT_ENABLED can never be the fault of the address
+// list, so degrading over it must never shrink that list either.
 export function hasFenceIntent(body) {
     if (!body) {
         return false
@@ -49,6 +55,35 @@ export function hasFenceIntent(body) {
         || Boolean(body.authKeyEnabled)
         || body.maxSessions != null
         || body.messageLimit != null
+}
+
+// Mirror of the worker's verifyUtils.isEmail: what fails here would come back as
+// SHARE_EMAIL_INVALID after the round trip, minus the name of the offending token.
+const SHARE_EMAIL_PATTERN = /^[a-zA-Z0-9!#$%&'*+/=?^_`{|}~.-]+@([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$/
+
+// P2: the paste grammar the decision card fixes — [\s,;]+ separators, then trim + lowercase +
+// dedupe. Order is first appearance so the tag list reads back in the order pasted; the worker
+// re-normalizes (and sorts for the fingerprint) on its side. `invalid` carries the first
+// malformed token verbatim so the error can name it.
+export function parseShareEmails(text) {
+    const tokens = String(text == null ? '' : text).split(/[\s,;]+/).filter(Boolean)
+    const emails = []
+    const seen = new Set()
+    let invalid = ''
+    for (const token of tokens) {
+        if (!SHARE_EMAIL_PATTERN.test(token)) {
+            if (!invalid) {
+                invalid = token
+            }
+            continue
+        }
+        const email = token.toLowerCase()
+        if (!seen.has(email)) {
+            seen.add(email)
+            emails.push(email)
+        }
+    }
+    return { emails, invalid }
 }
 
 // The rungs both create entries offer. Shared rather than duplicated because the wizard and
@@ -124,6 +159,16 @@ export function createErrorKey(err) {
             return 'shareDurationServerRejected'
         case 'SHARE_INVALID_CONFIG':
             return 'shareConfigRejected'
+        // P2 的两个新码 + 账号侧不可用。DOMAIN_NOT_CONFIGURED 是决策卡点名的「友好提示」;
+        // EMAIL_INVALID 正常到不了这里(浏览器先按同一正则拦),留着接住新旧正则漂移;
+        // ACCOUNT_FORBIDDEN 在 emails 路径承载「已删/他人/配额/角色域名权限」四种拒绝,
+        // 文案只能说「不可用」—— 说得更细就是替后端扩大可探测面。
+        case 'SHARE_DOMAIN_NOT_CONFIGURED':
+            return 'shareDomainNotConfigured'
+        case 'SHARE_EMAIL_INVALID':
+            return 'shareEmailRejected'
+        case 'SHARE_ACCOUNT_FORBIDDEN':
+            return 'shareEmailUnavailable'
         default:
             return 'shareCreateFailed'
     }

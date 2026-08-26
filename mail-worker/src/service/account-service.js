@@ -1,6 +1,4 @@
 import BizError from '../error/biz-error';
-import verifyUtils from '../utils/verify-utils';
-import emailUtils from '../utils/email-utils';
 import userService from './user-service';
 import emailService from './email-service';
 import orm from '../entity/orm';
@@ -9,16 +7,42 @@ import { and, asc, eq, gt, inArray, count, sql, ne, or, lt, desc } from 'drizzle
 import {accountConst, isDel, settingConst} from '../const/entity-const';
 import settingService from './setting-service';
 import turnstileService from './turnstile-service';
-import roleService from './role-service';
 import { t } from '../i18n/i18n';
 import verifyRecordService from './verify-record-service';
 import mailShareService from './mail-share-service';
+import { PROVISION_DENIED, planMailboxProvision, provisionMailbox } from './mailbox-provision';
+
+// 建号不变量(格式/域名/前缀/归属/配额/角色域名权限)的唯一居所是
+// `mailbox-provision.js`(share-fullchain P2);本文件只保留设置页入口的包装 ——
+// addEmail/manyEmail 产品开关与 Turnstile。拒绝原因是机器码,这里映射回设置页
+// 沿用至今的本地化文案,对老前端逐字不变。
+const PROVISION_TO_ADD_ERROR = {
+	[PROVISION_DENIED.EMAIL_INVALID]: () => new BizError(t('notEmail')),
+	[PROVISION_DENIED.DOMAIN_NOT_CONFIGURED]: () => new BizError(t('notExistDomain')),
+	[PROVISION_DENIED.PREFIX_TOO_SHORT]: (meta) => new BizError(t('minEmailPrefix', { msg: meta.minEmailPrefix })),
+	[PROVISION_DENIED.PREFIX_FORBIDDEN]: () => new BizError(t('banEmailPrefix')),
+	[PROVISION_DENIED.ACCOUNT_DELETED]: () => new BizError(t('isDelAccount')),
+	[PROVISION_DENIED.ACCOUNT_TAKEN]: () => new BizError(t('isRegAccount')),
+	[PROVISION_DENIED.ACCOUNT_EXISTS]: () => new BizError(t('isRegAccount')),
+	[PROVISION_DENIED.QUOTA_EXCEEDED]: () => new BizError(t('accountLimit'), 403),
+	[PROVISION_DENIED.DOMAIN_NOT_PERMITTED]: () => new BizError(t('noDomainPermAdd'), 403)
+};
+
+function toAddError(err) {
+	if (err && err.name === 'ProvisionDenied') {
+		const build = PROVISION_TO_ADD_ERROR[err.reason];
+		if (build) {
+			return build(err.meta || {});
+		}
+	}
+	return err;
+}
 
 const accountService = {
 
 	async add(c, params, userId) {
 
-		const { addEmailVerify , addEmail, manyEmail, addVerifyCount, minEmailPrefix, emailPrefixFilter } = await settingService.query(c);
+		const { addEmailVerify , addEmail, manyEmail, addVerifyCount } = await settingService.query(c);
 
 		let { email, token } = params;
 
@@ -32,46 +56,12 @@ const accountService = {
 			throw new BizError(t('emptyEmail'));
 		}
 
-		if (!verifyUtils.isEmail(email)) {
-			throw new BizError(t('notEmail'));
-		}
-
-		if (!c.env.domain.includes(emailUtils.getDomain(email))) {
-			throw new BizError(t('notExistDomain'));
-		}
-
-		if (emailUtils.getName(email).length < minEmailPrefix) {
-			throw new BizError(t('minEmailPrefix', { msg: minEmailPrefix } ));
-		}
-
-		if (emailPrefixFilter.some(content => emailUtils.getName(email).includes(content))) {
-			throw new BizError(t('banEmailPrefix'));
-		}
-
-		let accountRow = await this.selectByEmailIncludeDel(c, email);
-
-		if (accountRow && accountRow.isDel === isDel.DELETE) {
-			throw new BizError(t('isDelAccount'));
-		}
-
-		if (accountRow) {
-			throw new BizError(t('isRegAccount'));
-		}
-
-		const userRow = await userService.selectById(c, userId);
-		const roleRow = await roleService.selectById(c, userRow.type);
-
-		if (userRow.email !== c.env.admin) {
-
-			if (roleRow.accountCount > 0) {
-				const userAccountCount = await accountService.countUserAccount(c, userId)
-				if(userAccountCount >= roleRow.accountCount) throw new BizError(t('accountLimit'), 403);
-			}
-
-			if(!roleService.hasAvailDomainPerm(roleRow.availDomain, email)) {
-				throw new BizError(t('noDomainPermAdd'),403)
-			}
-
+		// 先零写入预校验再走人机验证:校验不过的请求不该消耗 Turnstile 配额,
+		// 这也是旧实现的检查顺序(格式/域名/前缀/已注册/配额/域名权限 → Turnstile → 写入)。
+		try {
+			await planMailboxProvision(c, { emails: [email], userId, requireNew: true });
+		} catch (err) {
+			throw toAddError(err);
 		}
 
 		let addVerifyOpen = false
@@ -89,7 +79,12 @@ const accountService = {
 		}
 
 
-		accountRow = await orm(c).insert(account).values({ email: email, userId: userId, name: emailUtils.getName(email) }).returning().get();
+		let accountRow;
+		try {
+			accountRow = await provisionMailbox(c, { email, userId });
+		} catch (err) {
+			throw toAddError(err);
+		}
 
 		if (addEmailVerify === settingConst.addEmailVerify.COUNT && !addVerifyOpen) {
 			const row = await verifyRecordService.increaseAddCount(c);
