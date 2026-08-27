@@ -1,0 +1,299 @@
+{
+  "run_id": "2026-08-27-r1",
+  "repo": "/workspace",
+  "mode": "cursor",
+  "range": "multi-ref cursor + completion-signal (empty)",
+  "range_note": "无新提交 · 已完成 ref 游标..HEAD 均为空；in-progress 跳过且游标冻结",
+  "feature_note": "",
+  "effective_since": null,
+  "effective_until": null,
+  "ref": "multi",
+  "resolved_ref_sha": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+  "merge_policy": "include-first-parent-churn",
+  "cursor_eligible": false,
+  "head_sha": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+  "resolved_at": "2026-08-27T02:08:00+00:00",
+  "external_requested": false,
+  "dry_run": false,
+  "bootstrapped": false,
+  "form": "B",
+  "commit_count": 0,
+  "totals": {
+    "insertions": 0,
+    "deletions": 0,
+    "files": 0,
+    "merges": 0
+  },
+  "commits": [],
+  "dir_rollup": [],
+  "stack_fingerprint": {
+    "extensions": [],
+    "top_level_segments": []
+  },
+  "risk_signals": [],
+  "criteria_sources": [
+    {
+      "path": "docs/specs/mail-share/design.md",
+      "why": "仓库存在的 design 规范"
+    },
+    {
+      "path": "docs/specs/mailbox-share-capability/design.md",
+      "why": "仓库存在的 design 规范"
+    },
+    {
+      "path": "docs/architecture/ADR-mail-share-capability-boundary.md",
+      "why": "ADR"
+    },
+    {
+      "path": "docs/architecture/ADR-mailbox-share-capability-extension.md",
+      "why": "ADR"
+    },
+    {
+      "path": "docs/architecture/ADR-share-credential-recoverability.md",
+      "why": "ADR"
+    }
+  ],
+  "adrs": [
+    {
+      "path": "docs/architecture/ADR-mail-share-capability-boundary.md",
+      "title": "mail-share capability boundary"
+    },
+    {
+      "path": "docs/architecture/ADR-mailbox-share-capability-extension.md",
+      "title": "mailbox-share capability extension"
+    },
+    {
+      "path": "docs/architecture/ADR-share-credential-recoverability.md",
+      "title": "share credential recoverability"
+    }
+  ],
+  "mechanical_gates": [
+    "ci-workflow: deploy-cloudflare.yml"
+  ],
+  "ledger_carryover": [
+    {
+      "id": "F-0008",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:52",
+      "symbols": [
+        "configuredDomains"
+      ],
+      "failure_mode": "其他入口仍可能对 c.env.domain 做 includes 子串匹配",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0009",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:102",
+      "symbols": [
+        "emailPrefixFilter"
+      ],
+      "failure_mode": "前缀黑名单改为大小写不敏感，设置页拒绝集收严且无 AC",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0010",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:5",
+      "symbols": [
+        "userService",
+        "roleService"
+      ],
+      "failure_mode": "mailbox-provision → user-service → account-service 间接环风险",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0012",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/index.vue:1",
+      "symbols": [
+        "liveEffectiveStatus",
+        "fetchList"
+      ],
+      "failure_mode": "列表 status=ACTIVE 服务端筛选 vs 本地翻 EXPIRED 卡片同屏",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0013",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/use-share-clock.js:1",
+      "symbols": [
+        "useShareClock",
+        "ShareRowActions"
+      ],
+      "failure_mode": "每行 ShareRowActions 各自 useShareClock → N 个 setInterval + 监听",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0014",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/email/ShareIndicator.vue:1",
+      "symbols": [
+        "ShareIndicator",
+        "onDeactivated"
+      ],
+      "failure_mode": "ShareIndicator 自建 visibility/focus 监听只在 onUnmounted 摘，keep-alive deactivate 残留",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0020",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "docs/specs/mail-share/design.md:6",
+      "symbols": [
+        "status",
+        "shipped_commit"
+      ],
+      "failure_mode": "front-matter 仍 converged / shipped_commit null，正文已记 shipped 后整改",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0021",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "docs/architecture/ADR-mail-share-capability-boundary.md:1",
+      "symbols": [
+        "P-AUTH-01"
+      ],
+      "failure_mode": "P4 推翻三轮安全性质未 amend Accepted ADR",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0023",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:1",
+      "symbols": [
+        "acknowledgeSecret"
+      ],
+      "failure_mode": "「我已保存」按钮语义像确认已复制，实际再走创建/清结果",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0024",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:1",
+      "symbols": [
+        "formError"
+      ],
+      "failure_mode": "创建错误提示远离 emails 输入",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0025",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/email/ShareDialog.vue:1",
+      "symbols": [
+        "ShareDialog",
+        "liveEffectiveStatus"
+      ],
+      "failure_mode": "ShareDialog 状态非徽章，与管理列表不一致",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0026",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/ShareDetailDrawer.vue:1",
+      "symbols": [
+        "ShareDetailDrawer",
+        "ShareRowActions"
+      ],
+      "failure_mode": "EXPIRED 抽屉与行操作可做动作不一致",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0027",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share/index.vue:1",
+      "symbols": [
+        "share-shell"
+      ],
+      "failure_mode": "390 视口 header 横向溢出约 8px",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0029",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share/index.vue:1",
+      "symbols": [
+        "share-card"
+      ],
+      "failure_mode": "终态卡只 text-align 未在视口垂直居中",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    },
+    {
+      "id": "F-0030",
+      "status": "open",
+      "severity": "suggestion",
+      "anchor": "mail-worker/src/service/mail-share-service.js:817",
+      "symbols": [
+        "prepareShareInsertByEmails",
+        "db.batch"
+      ],
+      "failure_mode": "注释声称同 batch 可见刚插入的 account；T-02 只证回滚与不得消费前序结果",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 1
+    }
+  ],
+  "skipped_in_progress": [
+    "origin/cursor/git-5c8a",
+    "origin/cursor/git-e148"
+  ],
+  "empty_complete_refs": [
+    "cursor/git-7d43",
+    "main",
+    "origin",
+    "origin/cursor/mailbox-share-capability-dcb6",
+    "origin/cursor/mailbox-share-capability-spec-4743",
+    "origin/cursor/setup-cloud-agent-env-3558",
+    "origin/cursor/share-link-fullchain-8a38",
+    "origin/main"
+  ],
+  "ledger_dir": "/workspace/.agent-workspace/review-ledger",
+  "run_dir": "/workspace/.agent-workspace/review-ledger/runs/2026-08-27-r1",
+  "model_slugs": {
+    "recon": "not-dispatched (empty round)",
+    "reviewer": "not-dispatched (empty round)",
+    "converge": "claude-opus-5-thinking-high-fast (main; empty-round no SUB)"
+  }
+}

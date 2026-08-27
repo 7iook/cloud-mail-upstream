@@ -44,3 +44,6 @@ wrangler.*.local.toml
 .agent-workspace/**
 !.agent-workspace/.archive/
 !.agent-workspace/.archive/**
+# git-review-sweep 台账必须入库，否则游标与 open findings 跨会话丢失
+!.agent-workspace/review-ledger/
+!.agent-workspace/review-ledger/**

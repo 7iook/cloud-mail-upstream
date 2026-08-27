@@ -1,0 +1,19 @@
+{
+  "last_reviewed_sha": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+  "last_run_id": "2026-08-27-r1",
+  "run_seq": 1,
+  "last_gc_at": "",
+  "created_at": "2026-08-26",
+  "updated_at": "2026-08-27",
+  "cursor_advanced": false,
+  "cursor_advance_reason": "empty round · Phase 1-4 not run · skill forbids cursor bump",
+  "refs": {
+    "origin/cursor/share-link-fullchain-8a38": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+    "origin/main": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "main": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "origin": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "origin/cursor/mailbox-share-capability-dcb6": "f99459d699043f513fc4c9b97504aa087d355c15",
+    "origin/cursor/mailbox-share-capability-spec-4743": "e120a040387214b2bad73b12eb4a69420bf84de0",
+    "origin/cursor/setup-cloud-agent-env-3558": "6985f0ef09421798c6cac2495bc2f501dcf7c7e7"
+  }
+}
