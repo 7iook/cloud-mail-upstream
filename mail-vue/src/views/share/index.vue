@@ -124,6 +124,17 @@
         @click="manualRefresh"
       >{{ refreshing ? tx('shareVisitRefreshing', 'Checking...') : tx('shareVisitRefresh', 'Check for new mail') }}</button>
 
+      <!-- Keyed by arrival, not by text: aria-live only speaks when the region changes, and
+           the second arrival carries the same sentence as the first. A fresh node per
+           arrival is what the toast did, and it is what a screen reader hears again. -->
+      <p
+        v-if="newMailNotice"
+        :key="newMailArrival"
+        class="share-new-mail"
+        :data-share-new-mail="newMailArrival"
+        role="status"
+      >{{ newMailNotice }}</p>
+
       <div
         id="share-tabpanel"
         :role="isMulti ? 'tabpanel' : undefined"
@@ -194,9 +205,15 @@
               :value="fullMailText"
               :aria-label="tx('shareVisitCopyAll', 'Copy full email')"
             ></textarea>
+            <!-- role=status, same reason as the code card's: this line is the only
+                 confirmation a screen reader has that the copy went through, and it is
+                 keyed by attempt for the same reason — a repeated copy must be heard again. -->
             <p
               v-if="copyAllResult"
+              :key="copyAllAttempt"
               :data-share-copy-all-result="copyAllResult"
+              :data-share-copy-all-attempt="copyAllAttempt"
+              role="status"
             >{{ copyAllResult === 'copied' ? tx('shareVisitCopiedAll', 'Full email copied') : tx('shareVisitCopyManual', 'Select the code and copy it yourself') }}</p>
           </div>
           <p
@@ -273,6 +290,9 @@ defineOptions({
 
 const PAGE_LIMIT = 50
 const MAX_CATCHUP_PAGES = 40
+// Longer than one poll tick, so a visitor who looked away still catches it, and short
+// enough that it is gone before it can be mistaken for the next arrival.
+const NEW_MAIL_NOTICE_MS = 6000
 // Same placeholder the projection uses for an address it cannot parse, so a Binding that
 // only the status frame knows about still gets a label instead of a bare dot.
 const MASKED_ADDRESS = '***'
@@ -288,6 +308,8 @@ const pageSecret = ref('')
 const mails = ref([])
 const selectedId = ref('')
 const rateLimited = ref(false)
+const newMailNotice = ref('')
+const newMailArrival = ref(0)
 const otpEnabled = ref(true)
 const shareType = ref('single')
 const mailboxes = ref([])
@@ -306,9 +328,10 @@ const authError = ref(false)
 const authSubmitting = ref(false)
 let justRecovered = false
 // The watermarks drive Tab badges, which are deliberately blind to the Tab in front of
-// the visitor. This flag is the other half: it arms the toast for that Tab only after the
-// first page has landed, so the initial load is not announced as an arrival.
+// the visitor. This flag is the other half: it arms the arrival notice for that Tab only
+// after the first page has landed, so the initial load is not announced as an arrival.
 let newMailToastArmed = false
+let newMailNoticeTimer = null
 // useRoute() no longer answers once teardown starts, and by then the router may already
 // have moved on, so the lid this page owns is remembered while it is still alive.
 let ownedLid = ''
@@ -380,18 +403,34 @@ function maxVisibleMailId() {
     return ids.length ? Math.max(...ids) : -1
 }
 
-// One toast per arrival, not per mail: a catch-up tick can bring back several at once and
+function clearNewMailNotice() {
+    if (newMailNoticeTimer) {
+        clearTimeout(newMailNoticeTimer)
+        newMailNoticeTimer = null
+    }
+    newMailNotice.value = ''
+}
+
+// The notice withdraws itself: it reports one moment, and a bar that never leaves would
+// still be claiming "new mail" over a mailbox the visitor finished reading minutes ago.
+function announceNewMail() {
+    if (newMailNoticeTimer) {
+        clearTimeout(newMailNoticeTimer)
+    }
+    newMailArrival.value += 1
+    newMailNotice.value = tx('shareVisitNewMailToast', 'New mail received')
+    newMailNoticeTimer = setTimeout(clearNewMailNotice, NEW_MAIL_NOTICE_MS)
+}
+
+// One notice per arrival, not per mail: a catch-up tick can bring back several at once and
 // a stack of identical notices tells the visitor nothing the list does not already show.
 // Only armed once the first page has settled, so opening a full mailbox stays quiet.
 function onPolledMails(list) {
     rateLimited.value = false
     const before = maxVisibleMailId()
     mergeMails(list)
-    if (newMailToastArmed && maxVisibleMailId() > before && typeof ElMessage === 'function') {
-        ElMessage({
-            message: tx('shareVisitNewMailToast', 'New mail received'),
-            type: 'info'
-        })
+    if (newMailToastArmed && maxVisibleMailId() > before) {
+        announceNewMail()
     }
 }
 
@@ -522,6 +561,7 @@ const fullMailText = computed(() => {
 })
 
 const copyAllResult = ref('')
+const copyAllAttempt = ref(0)
 
 function bindBodySelectable(el) {
     bodySelectableRef.value = el
@@ -532,13 +572,8 @@ async function copyFullMail() {
         return
     }
     const result = await copyBody(fullMailText.value)
+    copyAllAttempt.value += 1
     copyAllResult.value = result.copied ? 'copied' : 'manual'
-    if (result.copied && typeof ElMessage === 'function') {
-        ElMessage({
-            message: tx('shareVisitCopiedAll', 'Full email copied'),
-            type: 'success'
-        })
-    }
 }
 
 // The confirmation belongs to one mail's body, exactly as the code card's does.
@@ -949,6 +984,7 @@ function exitShare() {
     pageSecret.value = ''
     justRecovered = false
     newMailToastArmed = false
+    clearNewMailNotice()
     const lid = currentLid()
     if (lid) {
         clearShareSession(lid)
@@ -967,6 +1003,7 @@ function resetMailbox() {
     polling.stop()
     polling.unavailable.value = false
     newMailToastArmed = false
+    clearNewMailNotice()
     mails.value = []
     selectedId.value = ''
     rateLimited.value = false
@@ -1109,6 +1146,7 @@ const clockTimer = setInterval(() => {
 
 onUnmounted(() => {
     clearInterval(clockTimer)
+    clearNewMailNotice()
     pageSecret.value = ''
     justRecovered = false
     // The router already drops share:session on a real navigation; doing both here keeps
@@ -1359,6 +1397,32 @@ defineExpose({
 
 .share-refresh {
     margin: 16px 0 0;
+}
+
+/* Same banner shape as the rate-limit notice, in accent rather than warn: it is news,
+   not a problem. It sits above the code card and withdraws on its own. */
+.share-new-mail {
+    margin: 12px 0 0;
+    padding: 10px 14px;
+    color: var(--sh-text);
+    background: var(--sh-accent-soft);
+    border: 1px solid rgba(59, 91, 219, 0.35);
+    border-radius: calc(var(--sh-radius) - 8px);
+}
+
+/* Replays on every arrival, because the node is rebuilt each time: the visual cue and the
+   screen-reader announcement are then the same event. */
+@media (prefers-reduced-motion: no-preference) {
+    .share-new-mail {
+        animation: share-notice-in 0.2s ease-out;
+    }
+
+    @keyframes share-notice-in {
+        from {
+            opacity: 0;
+            transform: translateY(-4px);
+        }
+    }
 }
 
 .share-tabs {

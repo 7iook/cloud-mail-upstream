@@ -1658,24 +1658,40 @@ describe('share view arrival notice and full-body copy', () => {
                 ],
                 nextCursor: null
             })
+            .mockResolvedValueOnce({ list: [mail({ mailId: 4, subject: 'Arrived C' })], nextCursor: null })
             .mockResolvedValue({ list: [], nextCursor: null })
 
-        await mountShare('lid-a', 'sec-a')
-        // 首屏那封不是"新到",不该弹。
+        const wrapper = await mountShare('lid-a', 'sec-a')
+        // 首屏那封不是"新到",不该说话。
+        expect(wrapper.find('[data-share-new-mail]').exists()).toBe(false)
+
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        // 一拍回来两封 = 一条页内提示,不是一串;role=status 才有读屏播报。
+        const first = wrapper.get('[data-share-new-mail]')
+        expect(wrapper.findAll('[data-share-new-mail]').length).toBe(1)
+        expect(first.text()).toBe(en.shareVisitNewMailToast)
+        expect(first.attributes('role')).toBe('status')
+        const firstNotice = first.attributes('data-share-new-mail')
+
+        // 第二封在上一条提示还挂着时到达:同一句话原地不动 = aria-live 不播报,
+        // 所以这一条必须是一个新的 live region,不是复用旧节点。
+        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+        await flushPromises()
+
+        const second = wrapper.get('[data-share-new-mail]')
+        expect(wrapper.findAll('[data-share-new-mail]').length).toBe(1)
+        expect(second.text()).toBe(en.shareVisitNewMailToast)
+        expect(second.attributes('data-share-new-mail')).not.toBe(firstNotice)
+
+        // 没有新邮件之后提示自行消散,不永久粘在页面上。
+        await vi.advanceTimersByTimeAsync(30000)
+        await flushPromises()
+        expect(wrapper.find('[data-share-new-mail]').exists()).toBe(false)
+
+        // 访客页不许再碰 Element Plus(设计卡硬约束)。
         expect(toast).not.toHaveBeenCalled()
-
-        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
-        await flushPromises()
-
-        // 一拍回来两封 = 一条 toast,不是一串。
-        expect(toast).toHaveBeenCalledTimes(1)
-        expect(toast).toHaveBeenCalledWith(expect.objectContaining({
-            message: en.shareVisitNewMailToast
-        }))
-
-        await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
-        await flushPromises()
-        expect(toast).toHaveBeenCalledTimes(1)
     })
 
     it('copies the whole body of the selected mail, not just the code', async () => {
@@ -1696,7 +1712,38 @@ describe('share view arrival notice and full-body copy', () => {
         await flushPromises()
 
         expect(writeText).toHaveBeenCalledWith(expect.stringContaining('ada@example.com'))
-        expect(wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-result')).toBe('copied')
+        const result = wrapper.get('[data-share-copy-all-result]')
+        expect(result.attributes('data-share-copy-all-result')).toBe('copied')
+        // 页内确认取代了自带 role 的 toast,所以它自己得能被读屏播报。
+        expect(result.attributes('role')).toBe('status')
+        expect(result.text()).toBe(en.shareVisitCopiedAll)
+        expect(toast).not.toHaveBeenCalled()
+    })
+
+    // 同 ShareOtpCard:aria-live 只在内容变化时播报,而两次复制的文案一模一样,
+    // 所以确认行按次重建 —— 否则连点两次读屏只说一次,比旧 toast 退步。
+    it('announces every full-body copy, not just the first', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined)
+        vi.stubGlobal('navigator', { ...navigator, language: 'en', clipboard: { writeText } })
+        createShareSession.mockResolvedValue({ sessionToken: 'sess-a', mailbox: 'otp@example.com' })
+        listShareMails.mockResolvedValue({
+            list: [mail({ mailId: 7, code: '482917', text: 'Your code is 482917.' })],
+            nextCursor: null
+        })
+
+        const wrapper = await mountShare('lid-a', 'sec-a')
+
+        await wrapper.get('[data-share-copy-all]').trigger('click')
+        await flushPromises()
+        const first = wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-attempt')
+
+        await wrapper.get('[data-share-copy-all]').trigger('click')
+        await flushPromises()
+        const second = wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-attempt')
+
+        expect(first).toBeTruthy()
+        expect(second).not.toBe(first)
+        expect(toast).not.toHaveBeenCalled()
     })
 
     it('offers a selectable body instead of claiming success when the clipboard is unusable', async () => {
@@ -1712,8 +1759,11 @@ describe('share view arrival notice and full-body copy', () => {
         await wrapper.get('[data-share-copy-all]').trigger('click')
         await flushPromises()
 
-        expect(wrapper.get('[data-share-copy-all-result]').attributes('data-share-copy-all-result')).toBe('manual')
+        const result = wrapper.get('[data-share-copy-all-result]')
+        expect(result.attributes('data-share-copy-all-result')).toBe('manual')
+        expect(result.attributes('role')).toBe('status')
         expect(wrapper.get('.share-copy-all-select').classes()).toContain('is-visible')
+        expect(toast).not.toHaveBeenCalled()
     })
 })
 

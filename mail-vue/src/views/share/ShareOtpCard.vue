@@ -28,9 +28,16 @@
           :value="code"
           :aria-label="tx('shareVisitCode', 'Verification code')"
         >
+        <!-- role=status, because this line is the whole confirmation: a visitor on a screen
+             reader would otherwise press Copy and hear nothing at all. Keyed by attempt so
+             copying twice is heard twice — aria-live only speaks when the region changes,
+             and the second confirmation carries the same sentence as the first. -->
         <p
           v-if="copyResult"
+          :key="copyAttempt"
           :data-share-copy-result="copyResult"
+          :data-share-copy-attempt="copyAttempt"
+          role="status"
         >{{ copyResult === 'copied' ? tx('shareVisitCopied', 'Copied') : tx('shareVisitCopyManual', 'Select the code and copy it yourself') }}</p>
       </div>
 
@@ -89,6 +96,7 @@ const { t, te } = useI18n()
 const { copy, selectableRef } = useCopyWithFallback()
 
 const copyResult = ref('')
+const copyAttempt = ref(0)
 
 function tx(key, fallback) {
     return te(key) ? t(key) : fallback
@@ -132,13 +140,8 @@ async function copyCode() {
         return
     }
     const result = await copy(code.value)
+    copyAttempt.value += 1
     copyResult.value = result.copied ? 'copied' : 'manual'
-    if (result.copied && typeof ElMessage === 'function') {
-        ElMessage({
-            message: tx('shareVisitCopied', 'Copied'),
-            type: 'success'
-        })
-    }
 }
 </script>
 

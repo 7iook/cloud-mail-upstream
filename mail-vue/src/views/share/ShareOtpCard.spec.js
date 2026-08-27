@@ -5,6 +5,15 @@ import en from '@/i18n/en.js'
 import zh from '@/i18n/zh.js'
 import ShareOtpCard from './ShareOtpCard.vue'
 
+const { elMessage } = vi.hoisted(() => ({ elMessage: vi.fn() }))
+
+// unplugin-auto-import 会把裸 ElMessage 改写成真实的 element-plus import,所以这里
+// 拦到的调用就是访客页真的碰了 Element Plus(设计卡硬约束禁止)。
+vi.mock('element-plus', async (importOriginal) => {
+    const actual = await importOriginal()
+    return { ...actual, ElMessage: elMessage }
+})
+
 const wrappers = []
 
 function mail(overrides = {}) {
@@ -153,6 +162,38 @@ describe('ShareOtpCard', () => {
         const text = wrapper.get('[data-share-link]').text()
         expect(text).toContain(en.shareVisitLink)
         expect(text).not.toMatch(/safe|trusted|secure|official/i)
+    })
+
+    // ElMessage 自带 role=alert,换成页内文字后这一处必须自己带上可播报的 role,
+    // 否则读屏用户点了复制什么也听不到。
+    it('announces the copy confirmation in the page instead of through Element Plus', async () => {
+        const wrapper = mountCard({ selected: mail({ code: '482917' }) })
+
+        await wrapper.get('[data-share-copy]').trigger('click')
+        await flushPromises()
+
+        const notice = wrapper.get('[data-share-copy-result]')
+        expect(notice.attributes('role')).toBe('status')
+        expect(notice.text()).toBe(en.shareVisitCopied)
+        expect(elMessage).not.toHaveBeenCalled()
+    })
+
+    // 旧的 toast 每点必播。换成页内文字后,同一句文案不重建节点就不会再播 ——
+    // 连点两次只听到一次是相对旧行为的退步,所以按次重建节点。
+    it('announces every copy, not just the first, when the visitor copies twice', async () => {
+        const wrapper = mountCard({ selected: mail({ code: '482917' }) })
+
+        await wrapper.get('[data-share-copy]').trigger('click')
+        await flushPromises()
+        const first = wrapper.get('[data-share-copy-result]').attributes('data-share-copy-attempt')
+
+        await wrapper.get('[data-share-copy]').trigger('click')
+        await flushPromises()
+        const second = wrapper.get('[data-share-copy-result]').attributes('data-share-copy-attempt')
+
+        expect(first).toBeTruthy()
+        expect(second).not.toBe(first)
+        expect(elMessage).not.toHaveBeenCalled()
     })
 
     it('copies the selected mail code and falls back to a selectable input when the clipboard is unusable', async () => {
