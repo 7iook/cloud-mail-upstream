@@ -5,6 +5,7 @@
 import { env, SELF } from 'cloudflare:test';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { isDel } from '../src/const/entity-const';
+import worker from '../src/index.js';
 import {
 	nativeGoneResponse,
 	parseShareLidPath,
@@ -49,6 +50,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+	delete env.SHARE_READ_RATE_LIMITER;
 	await env.db.prepare("DELETE FROM mail_share WHERE lid LIKE 'p4-%'").run();
 });
 
@@ -140,6 +142,22 @@ describe('P4 · shareDocumentIfGone unit contract', () => {
 		expect(response.headers.get('Cache-Control')).toBe('no-store');
 	});
 
+	// lid 就在 URL 路径里,所以「这一跳不许把 URL 交给第三方、不许进索引」是这条 404 的
+	// 本职,不是装饰。反过来,任何「这是一条被销毁的分享」的自述头都会破坏同貌。
+	it('keeps the referrer off the wire and the URL out of search indexes', async () => {
+		const response = nativeGoneResponse();
+		expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+		expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+	});
+
+	it('never announces on the wire that the 404 came from a destroyed share', async () => {
+		const response = await SELF.fetch('http://example.com/s/p4-never-existed');
+		expect(response.status).toBe(404);
+		expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+		expect(response.headers.get('X-Robots-Tag')).toBe('noindex, nofollow');
+		expect(response.headers.get('X-CloudMail-Share-Gone')).toBeNull();
+	});
+
 	it('never touches the database for a non-GET/HEAD or non-/s/ request', async () => {
 		const prepare = vi.fn(() => {
 			throw new Error('must not be called');
@@ -179,6 +197,71 @@ describe('P4 · shareDocumentIfGone unit contract', () => {
 		} finally {
 			log.mockRestore();
 		}
+	});
+});
+
+// 这条路径在 P4 之前是「免费的存在性预言机」:每次探测都换来一次 D1 查询,配额为零。
+// 限流的目的是让 DB 不被高频探测打爆,所以它必须落在查询之前 —— 落在之后,DB 已经挨过打了。
+describe('P4 · the /s/:lid document entry is rate limited', () => {
+	it('answers a rate-limited probe with an empty 429 without ever querying the database', async () => {
+		const prepare = vi.fn(() => {
+			throw new Error('must not be called');
+		});
+		const response = await shareDocumentIfGone(new Request('http://x/s/p4-any'), {
+			db: { prepare },
+			SHARE_READ_RATE_LIMITER: {
+				async limit() {
+					return { success: false };
+				}
+			}
+		});
+		expect(response.status).toBe(429);
+		expect(await response.text()).toBe('');
+		expect(response.headers.get('Retry-After')).toBe('60');
+		expect(response.headers.get('Cache-Control')).toBe('no-store');
+		expect(prepare).not.toHaveBeenCalled();
+	});
+
+	it('serves that 429 at the document entry so a prober cannot walk /s/ for free', async () => {
+		env.SHARE_READ_RATE_LIMITER = {
+			async limit() {
+				return { success: false };
+			}
+		};
+		const response = await worker.fetch(new Request('http://example.com/s/p4-never-existed', {
+			headers: { 'CF-Connecting-IP': '198.51.100.40' }
+		}), env, {});
+		expect(response.status).toBe(429);
+		expect(await response.text()).toBe('');
+	});
+
+	it('still hands a live share to the SPA while the limiter allows', async () => {
+		env.SHARE_READ_RATE_LIMITER = {
+			async limit() {
+				return { success: true };
+			}
+		};
+		const share = await seedShare();
+		const response = await worker.fetch(new Request(`http://example.com/s/${share.lid}`, {
+			headers: { 'CF-Connecting-IP': '198.51.100.41' }
+		}), env, {});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('<html');
+	});
+
+	it('spends no quota on requests that are not share documents', async () => {
+		const keys = [];
+		const fakeEnv = {
+			SHARE_READ_RATE_LIMITER: {
+				async limit({ key }) {
+					keys.push(key);
+					return { success: true };
+				}
+			}
+		};
+		expect(await shareDocumentIfGone(new Request('http://x/other'), fakeEnv)).toBeNull();
+		expect(await shareDocumentIfGone(new Request('http://x/s/abc', { method: 'POST' }), fakeEnv)).toBeNull();
+		expect(keys).toEqual([]);
 	});
 });
 

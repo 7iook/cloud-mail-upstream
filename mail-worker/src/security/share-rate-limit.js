@@ -34,15 +34,37 @@ export const SHARE_SESSION_RETRY_AFTER_SECONDS = 60;
 export const SHARE_READ_RETRY_AFTER_SECONDS = 60;
 export const MISSING_CONNECTING_IP_KEY = 'missing-cf-connecting-ip';
 
-export function readRateLimitKey(c) {
-	const ip = c.req.header('CF-Connecting-IP');
-	if (typeof ip === 'string') {
-		const trimmed = ip.trim();
+function connectingIpKey(rawIp) {
+	if (typeof rawIp === 'string') {
+		const trimmed = rawIp.trim();
 		if (trimmed) {
 			return trimmed;
 		}
 	}
 	return MISSING_CONNECTING_IP_KEY;
+}
+
+export function readRateLimitKey(c) {
+	return connectingIpKey(c.req.header('CF-Connecting-IP'));
+}
+
+/**
+ * 放行(含两种 fail-open:绑定缺失、平台抛错)= true,该拒 = false。
+ * 绑定缺失不打日志:那是部署配置的稳态(vitest 就一直是这个状态),每请求一行 error
+ * 只会把真正的平台故障淹掉 —— 只有 limit() 抛错才是需要有人看一眼的事。
+ */
+async function shareLimiterAllows(limiter, key) {
+	if (!limiter || typeof limiter.limit !== 'function') {
+		return true;
+	}
+	try {
+		const outcome = await limiter.limit({ key });
+		return !(outcome && outcome.success === false);
+	} catch (err) {
+		const detail = err && err.message ? err.message : String(err);
+		console.error('share rate limiter.limit failed', detail);
+		return true;
+	}
 }
 
 export function limitedShareResponse(c, retryAfterSeconds) {
@@ -53,22 +75,30 @@ export function limitedShareResponse(c, retryAfterSeconds) {
 }
 
 export async function enforceShareRateLimit(c, limiter, retryAfterSeconds) {
-	if (!limiter || typeof limiter.limit !== 'function') {
+	if (await shareLimiterAllows(limiter, readRateLimitKey(c))) {
 		return null;
 	}
-	const key = readRateLimitKey(c);
-	let outcome;
-	try {
-		outcome = await limiter.limit({ key });
-	} catch (err) {
-		const detail = err && err.message ? err.message : String(err);
-		console.error('share rate limiter.limit failed', detail);
+	return limitedShareResponse(c, retryAfterSeconds);
+}
+
+/**
+ * hono 之前的裸 fetch 入口(文档 GET /s/:lid)专用:context 还不存在,key 只能从
+ * Request headers 取,拒绝响应也只能是空 body —— 那条路径的成功状态是「与浏览器
+ * 原生错误页同貌」,回一个 JSON 信封等于把「这里是分享系统」白送给探测者。
+ * 同一个 SHARE_READ_RATE_LIMITER 配额,不另开 namespace。
+ */
+export async function enforceShareRateLimitOnRequest(req, limiter, retryAfterSeconds) {
+	const key = connectingIpKey(req.headers.get('CF-Connecting-IP'));
+	if (await shareLimiterAllows(limiter, key)) {
 		return null;
 	}
-	if (outcome && outcome.success === false) {
-		return limitedShareResponse(c, retryAfterSeconds);
-	}
-	return null;
+	return new Response(null, {
+		status: 429,
+		headers: {
+			'Retry-After': String(retryAfterSeconds),
+			'Cache-Control': 'no-store'
+		}
+	});
 }
 
 export function shareRateLimit(bindingName, retryAfterSeconds) {

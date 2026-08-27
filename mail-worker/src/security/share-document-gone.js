@@ -4,6 +4,11 @@
 // 放在 security/ 而不是 service/:它跑在 hono 之前的裸 fetch 入口,只读一列、不进业务域,
 // 和 share-rate-limit 一样属于「请求还没成为业务请求之前」的那一层。
 import { SHARE_EVENT, logShareEvent } from '../service/share-event';
+import {
+	SHARE_READ_RATE_LIMITER,
+	SHARE_READ_RETRY_AFTER_SECONDS,
+	enforceShareRateLimitOnRequest
+} from './share-rate-limit';
 
 // 恰好一段路径(可带一个尾斜杠)。/s/a/b 这类形状不是分享 URL,交回 assets ——
 // 拦截面越窄,fail-open 的敞口越小。
@@ -26,8 +31,20 @@ export function parseShareLidPath(pathname) {
 // 都会顶掉它 —— 而「销毁后是浏览器原生 404」正是 P4 的成功状态原话。
 // no-store:销毁是终态,但一条被中间缓存住的 404 会在 lid 复用(不可能)之外
 // 掩盖 fail-open 恢复 —— DB 抖动窗口里发出的 404 不该被缓存进 CDN。
+// Referrer-Policy / X-Robots-Tag:lid 就在 URL 里,所以「这一跳不把 URL 交给第三方、
+// 不让它进搜索索引」是这条 404 的本职。刻意不加 CSP:body 是空的,没有可被约束的文档 ——
+// 浏览器画的是自己的错误页,不受本响应的 CSP 管辖,收益为零,却给一个「要与原生 404 同貌」
+// 的响应加上二百多字节的应用指纹。也刻意不加任何「这是被销毁的分享」自述头:零消费方,
+// 且它主动广播的正是本模块要藏的那件事。
 export function nativeGoneResponse() {
-	return new Response(null, { status: 404, headers: { 'Cache-Control': 'no-store' } });
+	return new Response(null, {
+		status: 404,
+		headers: {
+			'Cache-Control': 'no-store',
+			'Referrer-Policy': 'no-referrer',
+			'X-Robots-Tag': 'noindex, nofollow'
+		}
+	});
 }
 
 /**
@@ -45,6 +62,17 @@ export async function shareDocumentIfGone(req, env) {
 	const lid = parseShareLidPath(new URL(req.url).pathname);
 	if (!lid) {
 		return null;
+	}
+	// 限流在 DB 查询之前:这条路径的存在性判定就是一次 D1 查询,放到查询之后等于
+	// 「DB 已经挨完打才开始计数」。窄到只算真正的 /s/:lid GET|HEAD —— assets 和别的
+	// 路径不该花这份配额。限流器缺失/抛错时 fail-open,可用性优先于限流。
+	const denied = await enforceShareRateLimitOnRequest(
+		req,
+		env[SHARE_READ_RATE_LIMITER],
+		SHARE_READ_RETRY_AFTER_SECONDS
+	);
+	if (denied) {
+		return denied;
 	}
 	try {
 		const row = await env.db.prepare('SELECT status FROM mail_share WHERE lid = ?').bind(lid).first();
