@@ -335,10 +335,6 @@ function isUniqueConflict(err) {
 	return /UNIQUE constraint failed/i.test(String(err && err.message || err));
 }
 
-function isPartialInsert(err) {
-	return /SHARE_PARTIAL_INSERT|division by zero/i.test(String(err && err.message || err));
-}
-
 function placeholders(list) {
 	return list.map(() => '?').join(', ');
 }
@@ -900,19 +896,6 @@ function prepareShareInsertByEmails(c, values) {
 	);
 }
 
-// 0 行 INSERT 在 D1 里不算失败,不会触发 batch 回滚。末尾用 1/0 把
-// 「minted lids 必须全部落库」变成语句错误(D1 禁止在触发器外 RAISE),
-// 这样缺一条就整批回滚(AC-SHARE-12)。
-function prepareShareBatchComplete(c, lids) {
-	return c.env.db.prepare(`
-		SELECT CASE
-			WHEN (SELECT COUNT(*) FROM mail_share WHERE lid IN (SELECT value FROM json_each(?))) = ?
-			THEN 1
-			ELSE 1 / 0
-		END AS ok
-	`).bind(JSON.stringify(lids), lids.length);
-}
-
 // `prepareBindingInsert` 的邮箱定位孪生,谓词结构(matched 全有或全无 + 空快照 +
 // ORDER BY account_id)逐字保留;share 未插入 → `ms.lid = ?` 零行 → binding 零行。
 function prepareBindingInsertByEmails(c, values) {
@@ -1341,11 +1324,14 @@ async function createFromEmails(c, body, params, userId) {
 			}));
 			statements.push(syncPrimaryAccountId(c, { lid: item.lid }));
 		});
-		statements.push(prepareShareBatchComplete(c, minted.map((item) => item.lid)));
 		if (idempotencyKey) {
 			statements.push(prepareIdempotencyInsert(c, idemValues));
 		}
 
+		// 这里不需要「minted 全部落库」的完整性哨兵:share INSERT 的零行只可能来自归属谓词,
+		// 而邮箱由系统按需开号、不预先存在,易主竞态不是真实场景。真实的并发抢注走 account 的
+		// UNIQUE 约束(见 `mailbox-provision.js` 的 `prepareAccountInsert`),它以报错收场,
+		// 整批真回滚。零行落到下面的 `meta.changes` 消歧,不靠 batch 内的语句错误。
 		let results;
 		try {
 			results = await c.env.db.batch(statements);
@@ -1367,16 +1353,6 @@ async function createFromEmails(c, body, params, userId) {
 					plan = await planShareMailboxes(c, body.emails, userId);
 					continue;
 				}
-			}
-			if (isPartialInsert(err)) {
-				const replay = idempotencyKey
-					? await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, CREATE_OP)
-					: null;
-				if (replay) {
-					return replay;
-				}
-				await planShareMailboxes(c, body.emails, userId);
-				throw new BizError('SHARE_LIMIT_EXCEEDED');
 			}
 			throw err;
 		}
