@@ -5,12 +5,10 @@
 追加区只增不改,历史行不要编辑;当前状态看覆盖区。
 
 <!-- SNAPSHOT:BEGIN 覆盖区 · 每轮重写 -->
-last_run: 2026-08-26-r1
-last_ref: origin/cursor/share-link-fullchain-8a38 @ 9b6eb80
-open: P0=0 P1=0 P2=14 suggestion=1
-overdue: 0
-carryover: 0
-form: B
+- 最近审查: 2026-08-27 · 空轮 2026-08-27-r1
+- 累计轮次: 3
+- 未关闭: P0=0 P1=0 P2=14 suggestion=1 · 逾期 0
+- 游标: 9b6eb8072fe7 (share-link) / 12cec61a0d4a (main) · 本轮未推进
 <!-- SNAPSHOT:END -->
 
 ## 审查记录
@@ -19,3 +17,4 @@ form: B
 |---|---|---|---|---|---|---|---|---|
 | 2026-08-26 | 2026-08-26-r1 | cursor | origin/cursor/share-link-fullchain-8a38 9b6eb80 | 8 | 30 | 0 | 0/8/21 | 首轮 bootstrap · PR#4 silent>=10h · form B |
 | 2026-08-26 | 2026-08-26-r1-fix | cursor | cursor/git-e148 FIX-BATCHES B1–B10 | 2 | 0 | 15 | 0/0/14 | 关闭 F-0001..0007,F-0011,F-0015..0019,F-0022,F-0028 · 哨兵 8a80014 |
+| 2026-08-27 | 2026-08-27-r1 | cursor | multi-ref empty / skipped git-5c8a+git-e148 in-progress | 0 | 0 | 0 | 0/0/14 | 无新提交 · form B · 游标未推进 |

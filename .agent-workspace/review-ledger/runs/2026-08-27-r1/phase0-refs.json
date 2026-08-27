@@ -1,0 +1,380 @@
+{
+  "now": "2026-08-27T02:07:05.802842+00:00",
+  "to_review": [],
+  "skipped": [
+    {
+      "ref": "origin/cursor/git-5c8a",
+      "sha": "331c92133474",
+      "iso": "2026-08-26 20:14:35 +0000",
+      "age_h": 5.88,
+      "status": "skipped_in_progress",
+      "complete_reasons": [],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe7",
+      "range": "cursor frozen (in-progress)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 6,
+        "state": "OPEN",
+        "draft": true
+      }
+    },
+    {
+      "ref": "origin/cursor/git-e148",
+      "sha": "c0a4a45dc594",
+      "iso": "2026-08-26 20:07:12 +0000",
+      "age_h": 6.0,
+      "status": "skipped_in_progress",
+      "complete_reasons": [],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "cursor frozen (in-progress)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 5,
+        "state": "OPEN",
+        "draft": true
+      }
+    }
+  ],
+  "empty_complete": [
+    {
+      "ref": "cursor/git-7d43",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "new-ref merge-base 12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "main",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a",
+      "range": "12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "origin",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a",
+      "range": "12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-dcb6",
+      "sha": "f99459d69904",
+      "iso": "2026-08-24 16:34:44 +0000",
+      "age_h": 57.54,
+      "status": "complete",
+      "complete_reasons": [
+        "PR#3 merged",
+        "silent 57.54h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "f99459d69904",
+      "range": "f99459d69904..f99459d69904",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 3,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-spec-4743",
+      "sha": "e120a0403872",
+      "iso": "2026-08-24 05:51:35 +0000",
+      "age_h": 68.26,
+      "status": "complete",
+      "complete_reasons": [
+        "PR#2 merged",
+        "silent 68.26h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "e120a0403872",
+      "range": "e120a0403872..e120a0403872",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 2,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/setup-cloud-agent-env-3558",
+      "sha": "6985f0ef0942",
+      "iso": "2026-08-24 03:03:34 +0000",
+      "age_h": 71.06,
+      "status": "complete",
+      "complete_reasons": [
+        "PR#1 merged",
+        "silent 71.06h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "6985f0ef0942",
+      "range": "6985f0ef0942..6985f0ef0942",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 1,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/share-link-fullchain-8a38",
+      "sha": "9b6eb8072fe7",
+      "iso": "2026-08-26 09:02:08 +0000",
+      "age_h": 17.08,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 17.08h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe7",
+      "range": "9b6eb8072fe7..9b6eb8072fe7",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 4,
+        "state": "OPEN",
+        "draft": false
+      }
+    },
+    {
+      "ref": "origin/main",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a",
+      "range": "12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    }
+  ],
+  "all": [
+    {
+      "ref": "cursor/git-7d43",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "new-ref merge-base 12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "main",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a",
+      "range": "12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "origin",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a",
+      "range": "12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "origin/cursor/git-5c8a",
+      "sha": "331c92133474",
+      "iso": "2026-08-26 20:14:35 +0000",
+      "age_h": 5.88,
+      "status": "skipped_in_progress",
+      "complete_reasons": [],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe7",
+      "range": "cursor frozen (in-progress)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 6,
+        "state": "OPEN",
+        "draft": true
+      }
+    },
+    {
+      "ref": "origin/cursor/git-e148",
+      "sha": "c0a4a45dc594",
+      "iso": "2026-08-26 20:07:12 +0000",
+      "age_h": 6.0,
+      "status": "skipped_in_progress",
+      "complete_reasons": [],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "cursor frozen (in-progress)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 5,
+        "state": "OPEN",
+        "draft": true
+      }
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-dcb6",
+      "sha": "f99459d69904",
+      "iso": "2026-08-24 16:34:44 +0000",
+      "age_h": 57.54,
+      "status": "complete",
+      "complete_reasons": [
+        "PR#3 merged",
+        "silent 57.54h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "f99459d69904",
+      "range": "f99459d69904..f99459d69904",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 3,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-spec-4743",
+      "sha": "e120a0403872",
+      "iso": "2026-08-24 05:51:35 +0000",
+      "age_h": 68.26,
+      "status": "complete",
+      "complete_reasons": [
+        "PR#2 merged",
+        "silent 68.26h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "e120a0403872",
+      "range": "e120a0403872..e120a0403872",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 2,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/setup-cloud-agent-env-3558",
+      "sha": "6985f0ef0942",
+      "iso": "2026-08-24 03:03:34 +0000",
+      "age_h": 71.06,
+      "status": "complete",
+      "complete_reasons": [
+        "PR#1 merged",
+        "silent 71.06h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "6985f0ef0942",
+      "range": "6985f0ef0942..6985f0ef0942",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 1,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/share-link-fullchain-8a38",
+      "sha": "9b6eb8072fe7",
+      "iso": "2026-08-26 09:02:08 +0000",
+      "age_h": 17.08,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 17.08h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe7",
+      "range": "9b6eb8072fe7..9b6eb8072fe7",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 4,
+        "state": "OPEN",
+        "draft": false
+      }
+    },
+    {
+      "ref": "origin/main",
+      "sha": "12cec61a0d4a",
+      "iso": "2026-08-25 14:38:37 +0800",
+      "age_h": 43.47,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 43.47h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a",
+      "range": "12cec61a0d4a..12cec61a0d4a",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    }
+  ],
+  "cursors": {
+    "origin/cursor/share-link-fullchain-8a38": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+    "origin/main": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "cursor/git-5c8a": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+    "main": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "origin": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "origin/cursor/mailbox-share-capability-dcb6": "f99459d699043f513fc4c9b97504aa087d355c15",
+    "origin/cursor/mailbox-share-capability-spec-4743": "e120a040387214b2bad73b12eb4a69420bf84de0",
+    "origin/cursor/setup-cloud-agent-env-3558": "6985f0ef09421798c6cac2495bc2f501dcf7c7e7"
+  }
+}
