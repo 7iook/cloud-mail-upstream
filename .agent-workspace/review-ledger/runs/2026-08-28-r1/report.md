@@ -2,7 +2,7 @@
 
 ## RUN
 run: 2026-08-28-r1 | range: 9b6eb80..083c87f (origin/main) | commits: 10 | themes: 9
-findings: P0=0 P1=5 P2=23 suggestion=1 | new=13 | persist=11 | dropped=3 | overdue: 0
+findings: P0=0 P1=0 P2=21 suggestion=1 | new=13 | persist=11 | dropped=3 | closed_fix=7 | overdue: 0
 models: recon=claude-opus-5-thinking-high-fast · reviewer=gpt-5.6-sol-xhigh-fast · converge/fix=claude-opus-5-thinking-high-fast
 form: B | skipped: cursor/git-8934 in-progress | complete: origin/main silent>=19h
 
@@ -38,80 +38,7 @@ root: components/safe-mail/index.vue
 
 ## OPEN-P1
 
-### F-0004 · P1 · persists · age 2d · seen 2x · batch B1
-anchor:  mail-worker/src/service/mail-share-service.js:1360
-symbols: createFromEmails, prepareShareInsertByEmails, prepareAccountInsert
-rule:    docs/specs/mail-share/requirements.md AC-SHARE-12 / AC-CAP-13 整单拒绝 SHALL NOT 部分写入
-theme:   T1 · 批量整单原子
-commits: 0f4f52c, 790c550, 8a80014, fabe6e8
-report:  reviewer:CROSS, reviewer:T1, reviewer:T3, reviewer:T9, reviewer:high-risk-T1
-related: F-0003, F-0030, F-570b7d4c, F-78412ce3
-risk:    d1-batch-partial-write · createFromEmails → hops 2 · stop: 零行不回滚已确认
-failure: 条件 INSERT 零命中不报错；shareRows.every 在 db.batch 已提交后才检查
-trigger: batch 内部分 share INSERT 因归属计数/限额谓词 0 行，其余语句成功
-impact:  部分分享/账号落库，整单拒绝语义被打破
-fix:     batch 末加 RAISE(ABORT) 完整性哨兵，使零命中变成语句错误从而回滚整批
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
-
-### F-420feb8d · P1 · open · age 0d · seen 1x · batch B2
-anchor:  mail-vue/src/views/share-admin/ShareCreateWizard.vue:489
-symbols: unknownResult, idempotencyKey, openDialog
-rule:    docs/specs/mailbox-share-capability/requirements.md AC-CAP-14
-theme:   T6 · 向导幂等
-commits: 0f4f52c
-report:  reviewer:T6
-related: F-0005
-risk:    wizard-idempotency-key-lifecycle · origin unknownResult → hops 1 · stop: 已枚举重建出口
-failure: unknownResult 与 idempotencyKey 只活在组件实例；刷新/卸载后重新生成 key 并轮换
-trigger: create 已达服务端但响应丢失后 Owner 刷新或离开分享管理再回来按原表单重建
-impact:  新键绕过重放，盲建第二条活动分享
-fix:     发出请求前持久化 pending create 上下文（key+body），重建后恢复；确定成功或可证未创建后才清除
-verify:  cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0
-
-### F-570b7d4c · P1 · open · age 0d · seen 1x · batch B1
-anchor:  mail-worker/src/service/mail-share-service.js:1273
-symbols: createFromEmails, accountGuardSql, planShareMailboxes
-rule:    docs/specs/mailbox-share-capability/requirements.md AC-CAP-01 配额与写入同批
-theme:   T2 · 建号配额谓词
-commits: 0f4f52c
-report:  reviewer:T2
-related: F-0004, F-78412ce3, F-89dcf76e
-risk:    none
-failure: accountGuardSql/binds 在 retry 环外按第一次 plan.missing.length 构造；UNIQUE 后只换 plan 不重建 guard
-trigger: account UNIQUE 撞车后重试，missing 集合从 3 缩成 2
-impact:  重试用过时更低阈值，后续 account INSERT 静默零行并与 F-0004 叠加
-fix:     每次 attempt 按当前 plan 重建配额 guard
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0
-
-### F-78412ce3 · P1 · open · age 0d · seen 1x · batch B1
-anchor:  mail-worker/src/service/mailbox-provision.js:242
-symbols: accountQuotaPredicateBinds, accountQuotaPredicateSql, prepareAccountInsert
-rule:    docs/specs/mailbox-share-capability/requirements.md AC-CAP-01 · mailbox-provision.js 预检 owned+missing<=accountCount
-theme:   T2 · 建号配额谓词
-commits: 0f4f52c
-report:  reviewer:T2, reviewer:high-risk-T2
-related: F-0004, F-570b7d4c, F-89dcf76e
-risk:    account-quota-predicate-equivalence · origin accountQuotaPredicateBinds → hops 1 · stop: 已找到第二条分歧
-failure: 同一 accountCount-(missingCount-1) 阈值复用于每条 account INSERT；整单刚好填满配额时第二条零行
-trigger: 非管理员 emails[] 一次提交至少两个 missing 地址且恰好填满 role.accountCount 余量
-impact:  合法请求失败且前部 account/share/binding 已提交，Owner 拿不到凭证
-fix:     整组缺失地址的配额条件只按批前状态求值一次（set-based INSERT 或共享批前 COUNT）
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0；补 owned=1 missing=2 accountCount=3 全成功用例
-
-### F-89dcf76e · P1 · open · age 0d · seen 1x · batch B1
-anchor:  mail-worker/src/service/mailbox-provision.js:189
-symbols: provisionMailbox, prepareAccountInsert
-rule:    决策卡 DC-P0-2 建号不变量唯一居所 · mailbox-provision 预检+写入须同批
-theme:   T2 · 建号配额谓词
-commits: 0f4f52c
-report:  reviewer:T2
-related: F-0004, F-570b7d4c, F-78412ce3
-risk:    none
-failure: 设置页 provisionMailbox 只预检后无条件 INSERT，新增原子配额谓词未进入第二个共享写入口
-trigger: 两次 /account/add 各自在 owned=limit-1 时通过预检后并发写入
-impact:  用户邮箱数顶穿 role.accountCount
-fix:     provisionMailbox 走与 createFromEmails 同一套 accountQuotaPredicate
-verify:  cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0；补设置页并发占满配额用例
+(none · B1/B2 已在 6ad2686 关闭)
 
 ## OPEN-P2
 
@@ -400,21 +327,6 @@ impact:  可恢复的运输层限制被体验成链接失效
 fix:     文档入口与 API 分桶，或文档 429 提供可恢复形态且配额覆盖合法轮询
 verify:  cd mail-worker && pnpm exec vitest run test/share-document-gone.spec.js test/share-rate-limit.spec.js → EXIT=0
 
-### F-92520298 · P2 · open · age 0d · seen 1x · batch B2
-anchor:  mail-vue/src/views/share-admin/ShareCreateWizard.vue:344
-symbols: unknownResult, wizard-unknown
-rule:    docs/specs/mailbox-share-capability/requirements.md AC-CAP-14 用户可见恢复流程
-theme:   T6 · 向导幂等
-commits: 0f4f52c
-report:  reviewer:ui-T6
-related: 
-risk:    none
-failure: unknown 告警在整张冻结表单之后；重开滚回顶部，首屏只见置灰新建表单
-trigger: 运输失败后关窗再开，390 视口
-impact:  Owner 看不到「可能已建好、用同一把钥匙重试」
-fix:     unknown 态把恢复说明与重试按钮放到首屏/标题区
-verify:  cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0
-
 ### F-bbdc807b · P2 · open · age 0d · seen 1x · batch B3
 anchor:  tests/e2e/wrangler-e2e.toml:17
 symbols: SHARE_READ_RATE_LIMITER, [[ratelimits]]
@@ -429,21 +341,6 @@ trigger: 跑 visitor-unavailable / visitor-revoke-live
 impact:  生产文档 429 分支无 e2e 回归
 fix:     e2e wrangler 绑定与生产同名读限流器，并覆盖放行时 gone 仍 404
 verify:  grep -n SHARE_READ_RATE_LIMITER tests/e2e/wrangler-e2e.toml → 期望有匹配
-
-### F-e87370ba · P2 · open · age 0d · seen 1x · batch B2
-anchor:  mail-vue/src/views/share-admin/ShareCreateWizard.vue:754
-symbols: isBusinessError, unknownResult, SHARE_NOT_FOUND
-rule:    docs/specs/mailbox-share-capability/requirements.md AC-CAP-14
-theme:   T6 · 向导幂等
-commits: 0f4f52c
-report:  reviewer:T6
-related: F-0004
-risk:    wizard-idempotency-key-lifecycle · origin submit catch → hops 1 · stop: 错误映射已确认
-failure: 同键恢复收到 SHARE_NOT_FOUND 被当成确定失败，清 unknownResult 并解锁表单
-trigger: 运输层失败后同 key 重试，服务端因 lid 集合不全返回 SHARE_NOT_FOUND
-impact:  Owner 按通用失败提示新建，可能再为残留邮箱建分享
-fix:     从 unknownResult 恢复时收到 SHARE_NOT_FOUND 不得转入可安全新建态
-verify:  cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0
 
 ### F-f22137e9 · P2 · open · age 0d · seen 1x · batch B4
 anchor:  mail-vue/src/views/share/index.vue:640
@@ -479,7 +376,16 @@ verify:  unverified: 无 remote D1 对照实验
 
 ## RESOLVED
 
-(none this review phase; fix batches pending)
+- F-0004 · P1 · B1 · commit 6ad2686 · `prepareBatchIntegrityFence` NOT NULL 哨兵回滚零命中整批 · mail-share-emails 35 / worker 876 EXIT=0
+- F-78412ce3 · P1 · B1 · commit 6ad2686 · 配额谓词排除本批候选 · owned=1 missing=2 accountCount=3 全成功
+- F-89dcf76e · P1 · B1 · commit 6ad2686 · `provisionMailbox` 注入同一谓词，零行 deny QUOTA_EXCEEDED
+- F-570b7d4c · P1 · B1 · commit 6ad2686 · UNIQUE 重试按当前 `plan.missing` 重建 guard
+- F-420feb8d · P1 · B2 · commit 6ad2686 · pending create 写入 sessionStorage，重建后恢复同一 key
+- F-e87370ba · P2 · B2 · commit 6ad2686 · `SHARE_NOT_FOUND` / `SHARE_IDEMPOTENCY_CONFLICT` 进 remnant，不换键
+- F-92520298 · P2 · B2 · commit 6ad2686 · unknown/remnant 恢复说明与重试提到对话框首屏
+
+executor: B1+B2 · claude-opus-5-thinking-high-fast · 主 AI 复验后关单
+
 
 ## WAIVED
 
@@ -493,14 +399,18 @@ verify:  unverified: 无 remote D1 对照实验
 
 ## THEMES
 
-T1 → F-0004 persists
-T2 → F-78412ce3, F-89dcf76e, F-570b7d4c + F-0008/0009/0010 persists
+T1 → F-0004 resolved (6ad2686)
+T2 → F-78412ce3/F-89dcf76e/F-570b7d4c resolved · F-0008/0009/0010 persists
 T3 → 文档配额 P2 + /S/ headers P2
 T4 → F-0027/0029 persists + OTP from overflow P2
 T5 → live-region P2 + EP chunk P2 + tab banner P2 + F-0027/0029
-T6 → remount P1 + NOT_FOUND P2 + first-screen P2 + F-0023/0024
+T6 → remount/NOT_FOUND/first-screen 已关 · F-0023/0024 仍 OPEN
 T7 → F-0020/0021 persists
 T8 → e2e limiter P2
 T9 → 并入 F-0004 台账 reopen
 CROSS → F-0004 + 文档配额（已去重）
 耦合边: T1--ordering-->T2 · T1--contract-change-->T6 · T3--contract-change-->T5 · T5--shared-ssot-->T3
+
+## Update Log
+
+- 2026-08-28 · B1/B2 executor 落地 `6ad2686` · 主 AI 复验 worker 876 / vue 385 EXIT=0 · 关 F-0004,F-78412ce3,F-89dcf76e,F-570b7d4c,F-420feb8d,F-e87370ba,F-92520298 · B3/B4/B5 仍 OPEN
