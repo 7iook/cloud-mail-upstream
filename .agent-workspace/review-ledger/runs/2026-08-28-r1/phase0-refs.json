@@ -1,0 +1,443 @@
+{
+  "now": "2026-08-28T02:19:40.213939+00:00",
+  "to_review": [
+    {
+      "ref": "origin/main",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "iso": "2026-08-27 15:17:31 +0800",
+      "age_h": 19.01,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 19.01h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+      "range": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3..083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "review_slice": "9b6eb8072fe73c93518e872037702a2e8e54056b..083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "review_slice_reason": "12cec61..9b6eb80 already reviewed in 2026-08-26-r1 on share-link-fullchain; do not re-review those 8 shas as new work",
+      "commit_count": 10,
+      "commits": [
+        "f6670e0fd96e",
+        "864358d5249f",
+        "0f4f52c83816",
+        "8a800146325d",
+        "c0a4a45dc594",
+        "7cafb35e75cd",
+        "c0ede67fcb4e",
+        "790c550c9b10",
+        "1da171f769fd",
+        "083c87f2d2cc"
+      ],
+      "already_reviewed_on_this_ref": [
+        "1288ac85af8d",
+        "b36581046fcf",
+        "fabe6e841109",
+        "d602ec6690e9",
+        "e309ad4a17c4",
+        "82f330e720ac",
+        "37062220afc2",
+        "9b6eb8072fe7"
+      ],
+      "pr": null
+    },
+    {
+      "ref": "main",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "status": "complete",
+      "complete_reasons": [
+        "silent 19.01h >=6h",
+        "alias of origin/main"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+      "range": "same as origin/main (deduped)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "origin",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "status": "complete",
+      "complete_reasons": [
+        "silent 19.01h >=6h",
+        "alias of origin/main"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+      "range": "same as origin/main (deduped)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    }
+  ],
+  "skipped": [
+    {
+      "ref": "cursor/git-8934",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "iso": "2026-08-27 15:17:31 +0800",
+      "age_h": 19.01,
+      "status": "skipped_in_progress",
+      "complete_reasons": [],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "cursor frozen (in-progress) · this-run delivery branch · unique vs main = 0",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null,
+      "note": "skipped: cursor/git-8934 in-progress"
+    }
+  ],
+  "empty_complete": [
+    {
+      "ref": "origin/cursor/share-link-fullchain-8a38",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#4 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+      "range": "cursor==old HEAD 9b6eb80 · no leftover after merge",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 4,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/git-e148",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#5 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "new-ref (was skipped in-progress 2026-08-27) · commits now on origin/main",
+      "commit_count": 0,
+      "note": "unique work landed as 0f4f52c/8a80014/c0a4a45 on main; reviewed via origin/main",
+      "commits": [],
+      "pr": {
+        "number": 5,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/git-5c8a",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#6 closed",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+      "range": "was skipped in-progress 2026-08-27 · closed not merged",
+      "commit_count": 0,
+      "note": "331c921 not ancestor of main; equivalent work rewritten as 790c550/1da171f/083c87f",
+      "commits": [],
+      "pr": {
+        "number": 6,
+        "state": "CLOSED"
+      }
+    },
+    {
+      "ref": "origin/cursor/git-7d43",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#7 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "empty-round ledger only · now on main as 7cafb35",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 7,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-dcb6",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#3 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "f99459d699043f513fc4c9b97504aa087d355c15",
+      "range": "cursor==old HEAD · unique=0",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 3,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-spec-4743",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#2 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "e120a040387214b2bad73b12eb4a69420bf84de0",
+      "range": "cursor==old HEAD · unique=0",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 2,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/setup-cloud-agent-env-3558",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#1 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "6985f0ef09421798c6cac2495bc2f501dcf7c7e7",
+      "range": "cursor sha missing locally (gc) · unique leftover not on main",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 1,
+        "state": "MERGED"
+      }
+    }
+  ],
+  "all": [
+    {
+      "ref": "origin/main",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "iso": "2026-08-27 15:17:31 +0800",
+      "age_h": 19.01,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 19.01h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+      "range": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3..083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "review_slice": "9b6eb8072fe73c93518e872037702a2e8e54056b..083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "review_slice_reason": "12cec61..9b6eb80 already reviewed in 2026-08-26-r1 on share-link-fullchain; do not re-review those 8 shas as new work",
+      "commit_count": 10,
+      "commits": [
+        "f6670e0fd96e",
+        "864358d5249f",
+        "0f4f52c83816",
+        "8a800146325d",
+        "c0a4a45dc594",
+        "7cafb35e75cd",
+        "c0ede67fcb4e",
+        "790c550c9b10",
+        "1da171f769fd",
+        "083c87f2d2cc"
+      ],
+      "already_reviewed_on_this_ref": [
+        "1288ac85af8d",
+        "b36581046fcf",
+        "fabe6e841109",
+        "d602ec6690e9",
+        "e309ad4a17c4",
+        "82f330e720ac",
+        "37062220afc2",
+        "9b6eb8072fe7"
+      ],
+      "pr": null
+    },
+    {
+      "ref": "main",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "status": "complete",
+      "complete_reasons": [
+        "silent 19.01h >=6h",
+        "alias of origin/main"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+      "range": "same as origin/main (deduped)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "origin",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "status": "complete",
+      "complete_reasons": [
+        "silent 19.01h >=6h",
+        "alias of origin/main"
+      ],
+      "in_ledger": true,
+      "cursor": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+      "range": "same as origin/main (deduped)",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null
+    },
+    {
+      "ref": "cursor/git-8934",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "iso": "2026-08-27 15:17:31 +0800",
+      "age_h": 19.01,
+      "status": "skipped_in_progress",
+      "complete_reasons": [],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "cursor frozen (in-progress) · this-run delivery branch · unique vs main = 0",
+      "commit_count": 0,
+      "commits": [],
+      "pr": null,
+      "note": "skipped: cursor/git-8934 in-progress"
+    },
+    {
+      "ref": "origin/cursor/share-link-fullchain-8a38",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#4 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+      "range": "cursor==old HEAD 9b6eb80 · no leftover after merge",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 4,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/git-e148",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#5 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "new-ref (was skipped in-progress 2026-08-27) · commits now on origin/main",
+      "commit_count": 0,
+      "note": "unique work landed as 0f4f52c/8a80014/c0a4a45 on main; reviewed via origin/main",
+      "commits": [],
+      "pr": {
+        "number": 5,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/git-5c8a",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#6 closed",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+      "range": "was skipped in-progress 2026-08-27 · closed not merged",
+      "commit_count": 0,
+      "note": "331c921 not ancestor of main; equivalent work rewritten as 790c550/1da171f/083c87f",
+      "commits": [],
+      "pr": {
+        "number": 6,
+        "state": "CLOSED"
+      }
+    },
+    {
+      "ref": "origin/cursor/git-7d43",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#7 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": false,
+      "cursor": "",
+      "range": "empty-round ledger only · now on main as 7cafb35",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 7,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-dcb6",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#3 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "f99459d699043f513fc4c9b97504aa087d355c15",
+      "range": "cursor==old HEAD · unique=0",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 3,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/mailbox-share-capability-spec-4743",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#2 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "e120a040387214b2bad73b12eb4a69420bf84de0",
+      "range": "cursor==old HEAD · unique=0",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 2,
+        "state": "MERGED"
+      }
+    },
+    {
+      "ref": "origin/cursor/setup-cloud-agent-env-3558",
+      "status": "complete",
+      "complete_reasons": [
+        "PR#1 merged",
+        "branch deleted after prune"
+      ],
+      "in_ledger": true,
+      "cursor": "6985f0ef09421798c6cac2495bc2f501dcf7c7e7",
+      "range": "cursor sha missing locally (gc) · unique leftover not on main",
+      "commit_count": 0,
+      "commits": [],
+      "pr": {
+        "number": 1,
+        "state": "MERGED"
+      }
+    }
+  ],
+  "cursors": {
+    "origin/cursor/share-link-fullchain-8a38": "9b6eb8072fe73c93518e872037702a2e8e54056b",
+    "origin/main": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "main": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "origin": "12cec61a0d4a1e7c99d1316b9ef9b75715c893b3",
+    "origin/cursor/mailbox-share-capability-dcb6": "f99459d699043f513fc4c9b97504aa087d355c15",
+    "origin/cursor/mailbox-share-capability-spec-4743": "e120a040387214b2bad73b12eb4a69420bf84de0",
+    "origin/cursor/setup-cloud-agent-env-3558": "6985f0ef09421798c6cac2495bc2f501dcf7c7e7",
+    "origin/cursor/git-5c8a": "9b6eb8072fe73c93518e872037702a2e8e54056b"
+  },
+  "review_commits": [
+    "f6670e0fd96e1ad3b61c760302499bdb72ac2620",
+    "864358d5249f29e8476241f8ecd9cb777f9f91cb",
+    "0f4f52c8381611cab201014b14aa5146fafd2d5c",
+    "8a800146325d047c12e25cfdb12d2c110624ca93",
+    "c0a4a45dc594868d761ed97261cbb8ad13883746",
+    "7cafb35e75cd0b3b2d2df950ff6de9c961b0c433",
+    "c0ede67fcb4ec4a47b6f6e236abc36620c80d834",
+    "790c550c9b10b4f4baf9ac45b59d266901e10bc7",
+    "1da171f769fd06dabe9c5c5588f899f03e98405a",
+    "083c87f2d2ccc8c459adfd45fc31a43afc63256f"
+  ]
+}
