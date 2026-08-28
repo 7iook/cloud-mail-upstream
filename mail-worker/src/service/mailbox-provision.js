@@ -178,20 +178,34 @@ export function prepareAccountInsert(c, { email, userId, guardSql = '', guardBin
 }
 
 /**
- * 设置页入口的立即写路径:plan(requireNew) → INSERT → 回读整行。
+ * 设置页入口的立即写路径:plan(requireNew) → 带配额谓词的 INSERT → 回读整行。
  * UNIQUE 撞车(plan 与 INSERT 之间被人抢注)时再 plan 一次 —— 它会以
  * ACCOUNT_EXISTS / ACCOUNT_TAKEN / ACCOUNT_DELETED 之一收场,与首次校验同一套话术。
+ *
+ * 配额谓词与分享创建走同一套(DC-P0-2 建号不变量唯一居所):只做预检的话,两个
+ * `/account/add` 各自在 `owned = limit - 1` 时通过预检,随后两条无条件 INSERT
+ * 把用户顶到 `limit + 1`。谓词零行在本层翻成 QUOTA_EXCEEDED,调用方沿用既有文案映射。
  */
 export async function provisionMailbox(c, { email, userId }) {
 	await planMailboxProvision(c, { emails: [email], userId, requireNew: true });
+	const accountCount = await resolveNonAdminAccountQuota(c, userId);
+	const quota = accountCount == null
+		? { guardSql: '', guardBinds: [] }
+		: {
+			guardSql: accountQuotaPredicateSql(),
+			guardBinds: accountQuotaPredicateBinds(userId, [email], accountCount)
+		};
 	let inserted;
 	try {
-		inserted = await prepareAccountInsert(c, { email, userId }).first();
+		inserted = await prepareAccountInsert(c, { email, userId, ...quota }).first();
 	} catch (err) {
 		if (isUniqueConflict(err)) {
 			await planMailboxProvision(c, { emails: [email], userId, requireNew: true });
 		}
 		throw err;
+	}
+	if (!inserted) {
+		deny(PROVISION_DENIED.QUOTA_EXCEEDED, { limit: accountCount });
 	}
 	const row = await c.env.db.prepare(`
 		SELECT * FROM account WHERE account_id = ?
@@ -232,13 +246,25 @@ export async function resolveNonAdminAccountQuota(c, userId) {
 	return roleRow.accountCount;
 }
 
+/**
+ * account 配额的原子谓词。整组缺失地址只能得到**一个**判定:同一条动态
+ * `COUNT(*) < 阈值` 逐条复用时,批内前一条 INSERT 已经把计数顶上去,后一条就静默零行
+ * (零行不是语句错误,D1 不回滚)—— 一个刚好填满配额的合法整单会被拆成半单。
+ * 做法是把本批自己的候选地址从计数里排除:排除之后这个计数在整个 batch 内恒等于批前
+ * 状态,N 条 INSERT 因此求出同一个结果,全组能进就都进,进不去一条都不进。
+ */
 export function accountQuotaPredicateSql() {
 	return ` AND (
 			SELECT COUNT(*) FROM account
 			WHERE user_id = ? AND is_del = ${isDel.NORMAL}
-		) < ?`;
+				AND lower(email) NOT IN (SELECT value FROM json_each(?))
+		) <= ?`;
 }
 
-export function accountQuotaPredicateBinds(userId, missingCount, accountCount) {
-	return [userId, accountCount - (missingCount - 1)];
+// 阈值即预检契约 `owned + missing.length <= accountCount` 的移项形态。收的是**当前**
+// 缺失地址集合而不是个数:UNIQUE 抢注后重读的 plan 会换掉这个集合,调用方每次 attempt
+// 都必须拿新集合重建谓词,不能沿用首次 plan 的旧阈值。
+export function accountQuotaPredicateBinds(userId, missingEmails, accountCount) {
+	const keys = missingEmails.map((email) => String(email).toLowerCase());
+	return [userId, JSON.stringify(keys), accountCount - keys.length];
 }

@@ -335,6 +335,15 @@ function isUniqueConflict(err) {
 	return /UNIQUE constraint failed/i.test(String(err && err.message || err));
 }
 
+// `prepareBatchIntegrityFence` 触发时 D1 抛出的那一条约束错误。它只可能来自哨兵:
+// 真正的 Binding 写入语句三列都取自 NOT NULL 来源(share_id 来自 mail_share、
+// account_id 来自 account、window 来自 COALESCE),取不出 NULL。不钉死整句文本 ——
+// 认不出来只会退化成 500,数据仍已回滚,方向是安全的。
+function isIntegrityFence(err) {
+	const text = String(err && err.message || err);
+	return /NOT NULL constraint failed/i.test(text) && /mail_share_binding/i.test(text);
+}
+
 function placeholders(list) {
 	return list.map(() => '?').join(', ');
 }
@@ -823,7 +832,9 @@ function prepareBindingInsert(c, values) {
 // 主 Binding 恒等),同批随后的 `syncPrimaryAccountId` 再按主 Binding 收口一次。
 // 归属谓词按邮箱计数:任何一枚地址在预校验与 batch 之间易主/被删,计数就对不上,
 // 本语句零行(batch 内状态冻结,同批 N 条会得出同一个判定 —— 全有或全无)。
-// 限额谓词的余量由调用方按批内位次折算进 `limit` 绑定值,见 `createFromEmails`。
+// 限额谓词把**本批自己的 lid 集合**从活跃计数里排掉,所以这个计数在 batch 内恒等于批前
+// 状态,N 条 share 求出同一个判定;换成「按批内位次折算阈值」的写法时,只要前一条因故
+// 零行没能顶高计数,后一条就会拿到一个更宽的阈值并写进去 —— 那正是半单的来路。
 function prepareShareInsertByEmails(c, values) {
 	const primaryAccountSql = `SELECT MIN(pa.account_id) FROM account pa
 				WHERE lower(pa.email) IN (SELECT value FROM json_each(?))
@@ -853,7 +864,8 @@ function prepareShareInsertByEmails(c, values) {
 		WHERE (
 			SELECT COUNT(*) FROM mail_share
 			WHERE user_id = ? AND status = 'ACTIVE' AND expires_at > ?
-		) < ?
+				AND lid NOT IN (SELECT value FROM json_each(?))
+		) <= ?
 		AND (
 			SELECT COUNT(*) FROM account
 			WHERE lower(email) IN (SELECT value FROM json_each(?))
@@ -889,7 +901,8 @@ function prepareShareInsertByEmails(c, values) {
 		values.kekKid,
 		values.userId,
 		values.now,
-		values.limit,
+		values.batchLidsJson,
+		values.limitHeadroom,
 		values.emailsJson,
 		values.userId,
 		values.emailCount
@@ -1082,6 +1095,44 @@ function prepareIdempotencyInsert(c, values) {
 	);
 }
 
+// 整单原子的真正强制点(P2 多步写入契约:整单拒绝 SHALL NOT 留部分写入)。
+// D1 的 `batch()` 只在某条语句**报错**时回滚;条件 INSERT 零行是成功语句,所以
+// 「批返回之后再看 meta.changes」只能发现部分提交,撤不掉它 —— 那时事务已经结束。
+// 本语句坐在批尾,把「预期的 account / share / Binding 没到齐」翻成一次真实的
+// NOT NULL 约束违例(`mail_share_binding.share_id` 是 NOT NULL),D1 因此回滚整批;
+// 条件不成立时它只是一条零行 INSERT,不留任何痕迹。
+// 两条已证无效的写法不得再用:`RAISE()` 在触发器之外不可用,`1/0` 在 SQLite 里求值成
+// NULL 而不是报错。三个计数分别兜住 account 配额谓词、share 限额/归属谓词与 Binding
+// 的 matched 谓词,任何一处零行都会被这里翻成回滚。
+function prepareBatchIntegrityFence(c, values) {
+	return c.env.db.prepare(`
+		INSERT INTO mail_share_binding (share_id, account_id, window_start_email_id)
+		SELECT NULL, 0, 0
+		WHERE (
+			SELECT COUNT(*) FROM mail_share WHERE lid IN (SELECT value FROM json_each(?))
+		) <> ?
+		OR (
+			SELECT COUNT(*) FROM account
+			WHERE lower(email) IN (SELECT value FROM json_each(?))
+				AND user_id = ? AND is_del = ${isDel.NORMAL}
+		) <> ?
+		OR (
+			SELECT COUNT(*) FROM mail_share_binding
+			WHERE share_id IN (
+				SELECT share_id FROM mail_share WHERE lid IN (SELECT value FROM json_each(?))
+			)
+		) <> ?
+	`).bind(
+		values.batchLidsJson,
+		values.shareCount,
+		values.allEmailsJson,
+		values.userId,
+		values.emailCount,
+		values.batchLidsJson,
+		values.emailCount
+	);
+}
+
 async function resolveReplay(c, values) {
 	if (!values.idempotencyKey) {
 		return null;
@@ -1254,24 +1305,45 @@ async function createFromEmails(c, body, params, userId) {
 		createdAt
 	};
 
-	// batch 内状态冻结,所以第 i 条 share 看到 base+i 条活跃行;把余量折进各自的绑定值,
-	// 「base + N ≤ limit」对所有语句是同一个判定 —— 全有或全无,不会插一半。
-	// account INSERT 同带这条余量守卫:限额竞态下 share 零行时 account 也零行,不留孤儿。
-	// account 配额谓词与分享限额同形:COUNT + missing.length <= role.accountCount。
-	const accountGuardParts = [` AND (
+	// 所有余量谓词共用一条规矩:把**本批自己的行**从计数里排掉。排掉之后每个计数在
+	// batch 内恒等于批前状态,N 条语句因此求出同一个判定 —— 全批可进或全批不可进,
+	// 前一条的成败不会改写后一条的阈值。account INSERT 同带活跃余量守卫:限额竞态下
+	// share 零行时 account 也零行,不留孤儿。
+	const batchLidsJson = JSON.stringify(minted.map((item) => item.lid));
+	const allEmailsJson = JSON.stringify(body.emails);
+	const limitHeadroom = limit - groups.length;
+	const activeLimitGuardSql = ` AND (
 			SELECT COUNT(*) FROM mail_share
 			WHERE user_id = ? AND status = 'ACTIVE' AND expires_at > ?
-		) < ?`];
-	const accountGuardBinds = [userId, createdAt, limit - (groups.length - 1)];
-	if (plan.missing.length) {
-		const accountCount = await resolveNonAdminAccountQuota(c, userId);
-		if (accountCount != null) {
-			accountGuardParts.push(accountQuotaPredicateSql());
-			accountGuardBinds.push(...accountQuotaPredicateBinds(userId, plan.missing.length, accountCount));
+				AND lid NOT IN (SELECT value FROM json_each(?))
+		) <= ?`;
+
+	// 整批被拒之后的稳定码。fence 保证此刻库里零残留,这里只负责翻译原因,顺序与
+	// `insertShareAndIdempotency` 同:幂等重放 → 归属/建号复检 → 剩下的只有限额。
+	const settleRejectedBatch = async () => {
+		const replay = idempotencyKey
+			? await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, CREATE_OP)
+			: null;
+		if (replay) {
+			return replay;
 		}
-	}
-	const accountGuardSql = accountGuardParts.join('');
+		await planShareMailboxes(c, body.emails, userId);
+		throw new BizError('SHARE_LIMIT_EXCEEDED');
+	};
+
 	for (let attempt = 0; ; attempt += 1) {
+		// 配额 guard 恒按**当前** plan 重建:UNIQUE 抢注后重读的 missing 集合会缩,
+		// 沿用首次 plan 的集合与阈值等于拿一条过时判定去卡重试,后续 account 静默零行。
+		const accountGuardParts = [activeLimitGuardSql];
+		const accountGuardBinds = [userId, createdAt, batchLidsJson, limitHeadroom];
+		if (plan.missing.length) {
+			const accountCount = await resolveNonAdminAccountQuota(c, userId);
+			if (accountCount != null) {
+				accountGuardParts.push(accountQuotaPredicateSql());
+				accountGuardBinds.push(...accountQuotaPredicateBinds(userId, plan.missing, accountCount));
+			}
+		}
+		const accountGuardSql = accountGuardParts.join('');
 		const statements = [];
 		if (idempotencyKey) {
 			statements.push(prepareStaleIdempotencyDelete(c, idemValues));
@@ -1285,7 +1357,7 @@ async function createFromEmails(c, body, params, userId) {
 			}));
 		}
 		const shareIndexes = [];
-		minted.forEach((item, index) => {
+		minted.forEach((item) => {
 			const emailsJson = JSON.stringify(item.group);
 			shareIndexes.push(statements.length);
 			statements.push(prepareShareInsertByEmails(c, {
@@ -1313,7 +1385,8 @@ async function createFromEmails(c, body, params, userId) {
 				deleteAt,
 				createdAt,
 				now: createdAt,
-				limit: limit - (groups.length - 1 - index)
+				batchLidsJson,
+				limitHeadroom
 			}));
 			statements.push(prepareBindingInsertByEmails(c, {
 				onlyMessagesAfterCreated: body.onlyMessagesAfterCreated,
@@ -1327,17 +1400,26 @@ async function createFromEmails(c, body, params, userId) {
 		if (idempotencyKey) {
 			statements.push(prepareIdempotencyInsert(c, idemValues));
 		}
+		// 批尾的完整性哨兵:任何一条 account / share / Binding 零行,它就以一次真实的
+		// 约束错误让 D1 回滚整批。批后的 `meta.changes` 撤不掉已提交的语句,不能当回滚用。
+		statements.push(prepareBatchIntegrityFence(c, {
+			batchLidsJson,
+			shareCount: minted.length,
+			allEmailsJson,
+			userId,
+			emailCount: body.emails.length
+		}));
 
-		// 这里不需要「minted 全部落库」的完整性哨兵:share INSERT 的零行只可能来自归属谓词,
-		// 而邮箱由系统按需开号、不预先存在,易主竞态不是真实场景。真实的并发抢注走 account 的
-		// UNIQUE 约束(见 `mailbox-provision.js` 的 `prepareAccountInsert`),它以报错收场,
-		// 整批真回滚。零行落到下面的 `meta.changes` 消歧,不靠 batch 内的语句错误。
 		let results;
 		try {
 			results = await c.env.db.batch(statements);
 		} catch (err) {
 			if (err instanceof BizError) {
 				throw err;
+			}
+			// 哨兵报错 = 整批已回滚、零残留,只差一个稳定码;不重试(重试解决不了余量不足)。
+			if (isIntegrityFence(err)) {
+				return await settleRejectedBatch();
 			}
 			if (isUniqueConflict(err)) {
 				// 撞车有两个来源,顺序即消歧:同一把幂等键并发 → 回读幂等行按重放收场;
@@ -1357,20 +1439,13 @@ async function createFromEmails(c, body, params, userId) {
 			throw err;
 		}
 
+		// 走到这里哨兵已经放行,即「全到齐」;这道检查只是读 RETURNING 之前的断言,
+		// 不再承担完整性责任 —— 真有零行的话上面早已回滚,不会落到这里。
 		const shareRows = shareIndexes.map((index) => results[index]);
 		if (shareRows.every((row) => row.meta.changes)) {
 			return buildEmailCreateResponse(c, minted, shareRows);
 		}
-		// 零变更消歧与 insertShareAndIdempotency 同序:幂等重放 → 归属(plan 重读,
-		// 易主/被删以 FORBIDDEN 收场)→ 剩下的只有限额。
-		const replay = idempotencyKey
-			? await replayOrConflict(c, userId, idempotencyKey, accepted, cutoff, CREATE_OP)
-			: null;
-		if (replay) {
-			return replay;
-		}
-		await planShareMailboxes(c, body.emails, userId);
-		throw new BizError('SHARE_LIMIT_EXCEEDED');
+		return await settleRejectedBatch();
 	}
 }
 
