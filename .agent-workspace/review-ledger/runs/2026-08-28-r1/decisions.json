@@ -1,0 +1,681 @@
+{
+  "run_id": "2026-08-28-r1",
+  "head_sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+  "new": [
+    {
+      "severity": "P1",
+      "theme": "T2 · 建号配额谓词",
+      "commits": [
+        "0f4f52c"
+      ],
+      "anchor": "mail-worker/src/service/mailbox-provision.js:242",
+      "symbols": [
+        "accountQuotaPredicateBinds",
+        "accountQuotaPredicateSql",
+        "prepareAccountInsert"
+      ],
+      "rule_source": "docs/specs/mailbox-share-capability/requirements.md AC-CAP-01 · mailbox-provision.js 预检 owned+missing<=accountCount",
+      "identity_scope": "EmailsCreate/AccountQuotaPredicateSetEquivalence",
+      "failure_mode": "同一 accountCount-(missingCount-1) 阈值复用于每条 account INSERT；整单刚好填满配额时第二条零行",
+      "trigger": "非管理员 emails[] 一次提交至少两个 missing 地址且恰好填满 role.accountCount 余量",
+      "impact": "合法请求失败且前部 account/share/binding 已提交，Owner 拿不到凭证",
+      "required_fix": "整组缺失地址的配额条件只按批前状态求值一次（set-based INSERT 或共享批前 COUNT）",
+      "verify": "cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0；补 owned=1 missing=2 accountCount=3 全成功用例",
+      "risk_spread": "account-quota-predicate-equivalence · origin accountQuotaPredicateBinds → hops 1 · stop: 已找到第二条分歧",
+      "reporters": [
+        "reviewer:T2",
+        "reviewer:high-risk-T2"
+      ],
+      "related": [
+        "F-0004",
+        "F-570b7d4c",
+        "F-89dcf76e"
+      ],
+      "batch": "B1",
+      "identity_hash": "78412ce31dee1f7ec3f58ab40c2948a6ba04aad63d86d10584bc723f1e86bb96"
+    },
+    {
+      "severity": "P1",
+      "theme": "T2 · 建号配额谓词",
+      "commits": [
+        "0f4f52c"
+      ],
+      "anchor": "mail-worker/src/service/mailbox-provision.js:189",
+      "symbols": [
+        "provisionMailbox",
+        "prepareAccountInsert"
+      ],
+      "rule_source": "决策卡 DC-P0-2 建号不变量唯一居所 · mailbox-provision 预检+写入须同批",
+      "identity_scope": "SettingsAdd/AtomicRoleAccountQuota",
+      "failure_mode": "设置页 provisionMailbox 只预检后无条件 INSERT，新增原子配额谓词未进入第二个共享写入口",
+      "trigger": "两次 /account/add 各自在 owned=limit-1 时通过预检后并发写入",
+      "impact": "用户邮箱数顶穿 role.accountCount",
+      "required_fix": "provisionMailbox 走与 createFromEmails 同一套 accountQuotaPredicate",
+      "verify": "cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0；补设置页并发占满配额用例",
+      "risk_spread": "none",
+      "reporters": [
+        "reviewer:T2"
+      ],
+      "related": [
+        "F-0004",
+        "F-570b7d4c",
+        "F-78412ce3"
+      ],
+      "batch": "B1",
+      "identity_hash": "89dcf76e9a21a092bcfd30e432acb04fff450ee2b8d7d56a4f97ef6f292ca546"
+    },
+    {
+      "severity": "P1",
+      "theme": "T2 · 建号配额谓词",
+      "commits": [
+        "0f4f52c"
+      ],
+      "anchor": "mail-worker/src/service/mail-share-service.js:1273",
+      "symbols": [
+        "createFromEmails",
+        "accountGuardSql",
+        "planShareMailboxes"
+      ],
+      "rule_source": "docs/specs/mailbox-share-capability/requirements.md AC-CAP-01 配额与写入同批",
+      "identity_scope": "EmailsCreate/RetryQuotaGuardSnapshot",
+      "failure_mode": "accountGuardSql/binds 在 retry 环外按第一次 plan.missing.length 构造；UNIQUE 后只换 plan 不重建 guard",
+      "trigger": "account UNIQUE 撞车后重试，missing 集合从 3 缩成 2",
+      "impact": "重试用过时更低阈值，后续 account INSERT 静默零行并与 F-0004 叠加",
+      "required_fix": "每次 attempt 按当前 plan 重建配额 guard",
+      "verify": "cd mail-worker && pnpm exec vitest run test/mail-share-emails.spec.js → EXIT=0",
+      "risk_spread": "none",
+      "reporters": [
+        "reviewer:T2"
+      ],
+      "related": [
+        "F-0004",
+        "F-78412ce3",
+        "F-89dcf76e"
+      ],
+      "batch": "B1",
+      "identity_hash": "570b7d4cfbcc3d6148dbeb8cddde2b12f246aa60ab8a2a7d5ebc551e191e6ea0"
+    },
+    {
+      "severity": "P1",
+      "theme": "T6 · 向导幂等",
+      "commits": [
+        "0f4f52c"
+      ],
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:489",
+      "symbols": [
+        "unknownResult",
+        "idempotencyKey",
+        "openDialog"
+      ],
+      "rule_source": "docs/specs/mailbox-share-capability/requirements.md AC-CAP-14",
+      "identity_scope": "ShareCreateWizard unknownResult across remount",
+      "failure_mode": "unknownResult 与 idempotencyKey 只活在组件实例；刷新/卸载后重新生成 key 并轮换",
+      "trigger": "create 已达服务端但响应丢失后 Owner 刷新或离开分享管理再回来按原表单重建",
+      "impact": "新键绕过重放，盲建第二条活动分享",
+      "required_fix": "发出请求前持久化 pending create 上下文（key+body），重建后恢复；确定成功或可证未创建后才清除",
+      "verify": "cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0",
+      "risk_spread": "wizard-idempotency-key-lifecycle · origin unknownResult → hops 1 · stop: 已枚举重建出口",
+      "reporters": [
+        "reviewer:T6"
+      ],
+      "related": [
+        "F-0005"
+      ],
+      "batch": "B2",
+      "identity_hash": "420feb8ddb413196b719fec62010de4e9583ae0e109bc0867f0e981d0d721e21"
+    },
+    {
+      "severity": "P2",
+      "theme": "T3 · gone 文档入口",
+      "commits": [
+        "1da171f"
+      ],
+      "anchor": "mail-worker/src/security/share-document-gone.js:69",
+      "symbols": [
+        "enforceShareRateLimitOnRequest",
+        "SHARE_READ_RATE_LIMITER"
+      ],
+      "rule_source": "docs/specs/mail-share/design.md P-TRANS-01 · AC-ABUSE-08",
+      "identity_scope": "share document navigation vs SPA read APIs shared SHARE_READ_RATE_LIMITER",
+      "failure_mode": "文档 GET 与四个访客读 API 共用 100/60s 桶；桶耗尽后刷新得到空 body 429，SPA 未加载无法退避",
+      "trigger": "多 Binding 访客页轮询+刷新，或 gone reload 撞上已耗尽的读桶",
+      "impact": "可恢复的运输层限制被体验成链接失效",
+      "required_fix": "文档入口与 API 分桶，或文档 429 提供可恢复形态且配额覆盖合法轮询",
+      "verify": "cd mail-worker && pnpm exec vitest run test/share-document-gone.spec.js test/share-rate-limit.spec.js → EXIT=0",
+      "risk_spread": "share-read-quota-contention · origin share-document-gone.js → hops 2 · stop: 最坏请求数已算出",
+      "reporters": [
+        "reviewer:T3",
+        "reviewer:high-risk-T3",
+        "reviewer:CROSS",
+        "reviewer:ui-T3"
+      ],
+      "related": [],
+      "batch": "B3",
+      "identity_hash": "6d14486f4d2ea24be54aa9e8c6882ccf3cbc22903d1d7bf0c80e6311c3d01d4d"
+    },
+    {
+      "severity": "P2",
+      "theme": "T3 · gone 文档入口",
+      "commits": [
+        "0f4f52c",
+        "1da171f"
+      ],
+      "anchor": "mail-vue/src/router/index.js:70",
+      "symbols": [
+        "alias",
+        "SHARE_DOC_PATH"
+      ],
+      "rule_source": "p4-destroyed-entrypoints.md #1/#2 · mail-vue/public/_headers /s/*",
+      "identity_scope": "live /S/:lid vs /s/:lid assets cache and leak headers",
+      "failure_mode": "Vue alias 保留地址栏 /S/；_headers 只声明 /s/*，活文档大写路径缺 no-store/no-referrer/noindex/CSP",
+      "trigger": "访客打开仍有效的 /S/<lid>",
+      "impact": "与小写路径缓存/泄露策略不一致，lid 可进 Referer",
+      "required_fix": "_headers 覆盖大小写分享路径，或把 /S/ 规范重定向到 /s/",
+      "verify": "python3 -c \"t=open('mail-vue/public/_headers').read(); assert '/S/' in t or '/s/' in t.lower()\" → EXIT=0",
+      "risk_spread": "case-insensitive-share-path · origin SHARE_DOC_PATH → hops 1 · stop: 已枚举 /s/ 判定点",
+      "reporters": [
+        "reviewer:T3"
+      ],
+      "related": [],
+      "batch": "B3",
+      "identity_hash": "0f510dbddcd30c301e48f6d300d51b58425573d133a0218920e544134cbc5c64"
+    },
+    {
+      "severity": "P2",
+      "theme": "T5 · 页内播报",
+      "commits": [
+        "083c87f"
+      ],
+      "anchor": "mail-vue/src/views/share/index.vue:130",
+      "symbols": [
+        "newMailNotice",
+        "copyAllAttempt",
+        "copyAttempt",
+        "role=status"
+      ],
+      "rule_source": "W3C WCAG 2.2 Technique ARIA22 · visitor-share-ui-design.md 可访问提示",
+      "identity_scope": "share visitor status live-region lifecycle",
+      "failure_mode": "三处 v-if 与 role=status 同节点挂载；首次前无 live region，重复靠换 key 重建",
+      "trigger": "读屏访客首次/再次复制或收到新邮件",
+      "impact": "可能听不到复制成功与新邮件到达",
+      "required_fix": "预先挂载空的稳定 role=status 容器，只更新内容",
+      "verify": "cd mail-vue && pnpm exec vitest run src/views/share/index.spec.js src/views/share/ShareOtpCard.spec.js → EXIT=0",
+      "risk_spread": "none",
+      "reporters": [
+        "reviewer:T5"
+      ],
+      "related": [],
+      "batch": "B4",
+      "identity_hash": "618c6bfaf0573e1cede919b1992883e66979f4ae4cfe94c52ff481e9e115a1fb"
+    },
+    {
+      "severity": "P2",
+      "theme": "T5 · 页内播报",
+      "commits": [
+        "083c87f"
+      ],
+      "anchor": "mail-vue/src/components/safe-mail/index.vue:5",
+      "symbols": [
+        "SafeMailRenderer",
+        "ElButton",
+        "ElAlert"
+      ],
+      "rule_source": "visitor-share-ui-design.md:45 · 决策卡:266 不引入 Element Plus 到 share chunk",
+      "identity_scope": "/s/:lid async route production chunk Element Plus closure",
+      "failure_mode": "删掉三处 ElMessage 后 share 路由仍经 SafeMailRenderer 拉取 el-button/el-alert",
+      "trigger": "访客加载 /s/:lid 异步路由",
+      "impact": "硬约束声称的去依赖未完成",
+      "required_fix": "为匿名 share 拆出无 UI 框架的邮件渲染外壳，并把 Element Plus 特征加入 assert-share-chunk FORBIDDEN",
+      "verify": "pnpm -C mail-vue build 后 share chunk 闭包无 el-* → EXIT=0",
+      "risk_spread": "element-plus-in-share-chunk · origin SafeMailRenderer → hops 2 · stop: 产物层已含 EP",
+      "reporters": [
+        "reviewer:T5"
+      ],
+      "related": [],
+      "batch": "B5",
+      "identity_hash": "1e2784c96689ffe1053738d7491b87d03ca6452961dadea543b40fa51111e6be"
+    },
+    {
+      "severity": "P2",
+      "theme": "T5 · 页内播报",
+      "commits": [
+        "083c87f"
+      ],
+      "anchor": "mail-vue/src/views/share/index.vue:640",
+      "symbols": [
+        "selectTab",
+        "announceNewMail",
+        "clearNewMailNotice"
+      ],
+      "rule_source": "index.vue:143-149 消息必须归属当前 Binding",
+      "identity_scope": "newMailNotice vs multi-mailbox tab selection",
+      "failure_mode": "selectTab 不调用 clearNewMailNotice，旧 Tab 横幅挂到新 Tab",
+      "trigger": "Binding A 到件后 6 秒内切到 Binding B",
+      "impact": "访客在错误邮箱里找新邮件",
+      "required_fix": "setActiveBinding 在 Binding 变化时清提示与计时器",
+      "verify": "cd mail-vue && pnpm exec vitest run src/views/share/index.spec.js → EXIT=0",
+      "risk_spread": "none",
+      "reporters": [
+        "reviewer:T5"
+      ],
+      "related": [],
+      "batch": "B4",
+      "identity_hash": "f22137e9f0dd08e0b89414b2d68f0a4fb8e6f44bdf874b7f3f0d93d07db33e6f"
+    },
+    {
+      "severity": "P2",
+      "theme": "T6 · 向导幂等",
+      "commits": [
+        "0f4f52c"
+      ],
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:754",
+      "symbols": [
+        "isBusinessError",
+        "unknownResult",
+        "SHARE_NOT_FOUND"
+      ],
+      "rule_source": "docs/specs/mailbox-share-capability/requirements.md AC-CAP-14",
+      "identity_scope": "ShareCreateWizard unknownResult retry SHARE_NOT_FOUND",
+      "failure_mode": "同键恢复收到 SHARE_NOT_FOUND 被当成确定失败，清 unknownResult 并解锁表单",
+      "trigger": "运输层失败后同 key 重试，服务端因 lid 集合不全返回 SHARE_NOT_FOUND",
+      "impact": "Owner 按通用失败提示新建，可能再为残留邮箱建分享",
+      "required_fix": "从 unknownResult 恢复时收到 SHARE_NOT_FOUND 不得转入可安全新建态",
+      "verify": "cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0",
+      "risk_spread": "wizard-idempotency-key-lifecycle · origin submit catch → hops 1 · stop: 错误映射已确认",
+      "reporters": [
+        "reviewer:T6"
+      ],
+      "related": [
+        "F-0004"
+      ],
+      "batch": "B2",
+      "identity_hash": "e87370ba28f14a6fe090596032b8028e598e928921d7c82ea229c969a68efd45"
+    },
+    {
+      "severity": "P2",
+      "theme": "T8 · merge 回归",
+      "commits": [
+        "1da171f"
+      ],
+      "anchor": "tests/e2e/wrangler-e2e.toml:17",
+      "symbols": [
+        "SHARE_READ_RATE_LIMITER",
+        "[[ratelimits]]"
+      ],
+      "rule_source": "mail-worker/wrangler.toml SHARE_READ_RATE_LIMITER · shareLimiterAllows 缺绑定 fail-open",
+      "identity_scope": "e2e wrangler vs production document rate limiter shape",
+      "failure_mode": "e2e 未绑定 SHARE_READ_RATE_LIMITER，gone 404 用例只覆盖 fail-open",
+      "trigger": "跑 visitor-unavailable / visitor-revoke-live",
+      "impact": "生产文档 429 分支无 e2e 回归",
+      "required_fix": "e2e wrangler 绑定与生产同名读限流器，并覆盖放行时 gone 仍 404",
+      "verify": "grep -n SHARE_READ_RATE_LIMITER tests/e2e/wrangler-e2e.toml → 期望有匹配",
+      "risk_spread": "none",
+      "reporters": [
+        "reviewer:T8"
+      ],
+      "related": [],
+      "batch": "B3",
+      "identity_hash": "bbdc807bd76a14e7699c1e70e12abb4d748e7fe6ef87258c38b6b3d990c4f473"
+    },
+    {
+      "severity": "P2",
+      "theme": "T6 · 向导幂等",
+      "commits": [
+        "0f4f52c"
+      ],
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:344",
+      "symbols": [
+        "unknownResult",
+        "wizard-unknown"
+      ],
+      "rule_source": "docs/specs/mailbox-share-capability/requirements.md AC-CAP-14 用户可见恢复流程",
+      "identity_scope": "ShareCreateWizard unknownResult first-screen hierarchy",
+      "failure_mode": "unknown 告警在整张冻结表单之后；重开滚回顶部，首屏只见置灰新建表单",
+      "trigger": "运输失败后关窗再开，390 视口",
+      "impact": "Owner 看不到「可能已建好、用同一把钥匙重试」",
+      "required_fix": "unknown 态把恢复说明与重试按钮放到首屏/标题区",
+      "verify": "cd mail-vue && pnpm exec vitest run src/views/share-admin/ShareCreateWizard.spec.js → EXIT=0",
+      "risk_spread": "none",
+      "reporters": [
+        "reviewer:ui-T6"
+      ],
+      "related": [],
+      "batch": "B2",
+      "identity_hash": "92520298f1af08c05fd2d01b139537dde006fa14fab630b3b34273eb43c1aeb3"
+    },
+    {
+      "severity": "P2",
+      "theme": "T4 · SPA 退场与溢出",
+      "commits": [
+        "0f4f52c"
+      ],
+      "anchor": "mail-vue/src/views/share/index.vue:1183",
+      "symbols": [
+        "data-share-code-from",
+        "ShareOtpCard"
+      ],
+      "rule_source": "visitor-share-ui-design.md 卡片不得被外部文本撑破视口",
+      "identity_scope": "ShareOtpCard from-line unbreakable text at 390px",
+      "failure_mode": "overflow-wrap 未覆盖 OTP 卡内无 class 的发件人行，超长 token 被 shell 裁切",
+      "trigger": "无空格超长发件人 + 390 视口",
+      "impact": "访客看不全验证码对应的来源身份",
+      "required_fix": "OTP 发件人行 overflow-wrap:anywhere",
+      "verify": "cd mail-vue && pnpm exec vitest run src/views/share/ShareOtpCard.spec.js → EXIT=0",
+      "risk_spread": "none",
+      "reporters": [
+        "reviewer:ui-T4"
+      ],
+      "related": [
+        "F-0028"
+      ],
+      "batch": "B4",
+      "identity_hash": "3e8004738976c54f7c3e66175cb6dd42088bd9d372ca2d178c8ed8592f82e996"
+    }
+  ],
+  "persists": [
+    {
+      "id": "F-0004",
+      "anchor": "mail-worker/src/service/mail-share-service.js:1360",
+      "commits": [
+        "0f4f52c",
+        "8a80014",
+        "790c550"
+      ],
+      "symbols": [
+        "createFromEmails",
+        "prepareShareInsertByEmails",
+        "prepareAccountInsert"
+      ],
+      "reporters": [
+        "reviewer:T1",
+        "reviewer:high-risk-T1",
+        "reviewer:CROSS",
+        "reviewer:T9"
+      ],
+      "severity": "P1",
+      "risk_spread": "d1-batch-partial-write · createFromEmails → hops 2 · stop: 零行不回滚已确认",
+      "note": "790c550 删除 1/0 哨兵后批后 meta.changes 无法回滚；旧 close 失效，reopen"
+    },
+    {
+      "id": "F-0008",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:52",
+      "commits": [
+        "0f4f52c"
+      ],
+      "symbols": [
+        "configuredDomains"
+      ],
+      "reporters": [
+        "reviewer:T2"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "本轮仍在"
+    },
+    {
+      "id": "F-0009",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:102",
+      "commits": [
+        "0f4f52c"
+      ],
+      "symbols": [
+        "emailPrefixFilter"
+      ],
+      "reporters": [
+        "reviewer:T2"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "本轮仍在"
+    },
+    {
+      "id": "F-0010",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:6",
+      "commits": [
+        "0f4f52c"
+      ],
+      "symbols": [
+        "userService",
+        "roleService"
+      ],
+      "reporters": [
+        "reviewer:T2"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "本轮仍在"
+    },
+    {
+      "id": "F-0020",
+      "anchor": "docs/specs/mail-share/design.md:6",
+      "commits": [
+        "0f4f52c"
+      ],
+      "symbols": [
+        "status",
+        "shipped_commit"
+      ],
+      "reporters": [
+        "reviewer:T7"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "front-matter 仍 converged/shipped_commit null"
+    },
+    {
+      "id": "F-0021",
+      "anchor": "docs/architecture/ADR-mailbox-share-capability-extension.md:26",
+      "commits": [
+        "0f4f52c"
+      ],
+      "symbols": [
+        "P-AUTH-01",
+        "Visitor failure partition"
+      ],
+      "reporters": [
+        "reviewer:T7"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "冲突锚点校正为 Accepted extension ADR，不是 boundary Proposed ADR"
+    },
+    {
+      "id": "F-0023",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:98",
+      "commits": [
+        "0f4f52c"
+      ],
+      "symbols": [
+        "acknowledgeSecret"
+      ],
+      "reporters": [
+        "reviewer:T6",
+        "reviewer:ui-T6"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "本轮仍在"
+    },
+    {
+      "id": "F-0024",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:349",
+      "commits": [
+        "0f4f52c"
+      ],
+      "symbols": [
+        "formError"
+      ],
+      "reporters": [
+        "reviewer:T6",
+        "reviewer:ui-T6"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "本轮仍在"
+    },
+    {
+      "id": "F-0027",
+      "anchor": "mail-vue/src/views/share/index.vue:1220",
+      "commits": [
+        "083c87f",
+        "0f4f52c"
+      ],
+      "symbols": [
+        ".share-top"
+      ],
+      "reporters": [
+        "reviewer:T4",
+        "reviewer:T5",
+        "reviewer:ui-T4",
+        "reviewer:ui-T5"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "本轮仍在"
+    },
+    {
+      "id": "F-0029",
+      "anchor": "mail-vue/src/views/share/index.vue:1207",
+      "commits": [
+        "083c87f",
+        "0f4f52c"
+      ],
+      "symbols": [
+        ".share-card"
+      ],
+      "reporters": [
+        "reviewer:T4",
+        "reviewer:T5",
+        "reviewer:ui-T4",
+        "reviewer:ui-T5"
+      ],
+      "severity": "P2",
+      "risk_spread": "none",
+      "note": "本轮仍在"
+    },
+    {
+      "id": "F-0030",
+      "anchor": "mail-worker/src/service/mail-share-service.js:817",
+      "commits": [
+        "790c550"
+      ],
+      "symbols": [
+        "prepareShareInsertByEmails",
+        "db.batch"
+      ],
+      "reporters": [
+        "reviewer:T1"
+      ],
+      "severity": "suggestion",
+      "risk_spread": "none",
+      "note": "D1 行可见性仍无对照实验；与 F-0004 叠加但不合并"
+    }
+  ],
+  "resolved": [],
+  "invalidated": [],
+  "superseded": [],
+  "batches": [
+    {
+      "id": "B1",
+      "title": "D1 整单原子 + 配额谓词",
+      "findings": [
+        "F-0004",
+        "F-78412ce3",
+        "F-89dcf76e",
+        "F-570b7d4c"
+      ],
+      "order": 1,
+      "depends_on": [],
+      "files": [
+        "mail-worker/src/service/mail-share-service.js",
+        "mail-worker/src/service/mailbox-provision.js",
+        "mail-worker/test/mail-share-emails.spec.js"
+      ]
+    },
+    {
+      "id": "B2",
+      "title": "向导 unknownResult 跨重建与恢复态",
+      "findings": [
+        "F-420feb8d",
+        "F-e87370ba",
+        "F-92520298"
+      ],
+      "order": 2,
+      "depends_on": [],
+      "files": [
+        "mail-vue/src/views/share-admin/ShareCreateWizard.vue",
+        "mail-vue/src/views/share-admin/ShareCreateWizard.spec.js"
+      ]
+    },
+    {
+      "id": "B3",
+      "title": "文档读配额 / 大小写头 / e2e 限流器",
+      "findings": [
+        "F-6d14486f",
+        "F-0f510dbd",
+        "F-bbdc807b"
+      ],
+      "order": 3,
+      "depends_on": [],
+      "files": [
+        "mail-worker/src/security/share-document-gone.js",
+        "mail-worker/src/security/share-rate-limit.js",
+        "mail-vue/src/router/index.js",
+        "mail-vue/public/_headers",
+        "tests/e2e/wrangler-e2e.toml"
+      ]
+    },
+    {
+      "id": "B4",
+      "title": "访客页播报/横幅/OTP 溢出",
+      "findings": [
+        "F-618c6bfa",
+        "F-f22137e9",
+        "F-3e800473"
+      ],
+      "order": 4,
+      "depends_on": [],
+      "files": [
+        "mail-vue/src/views/share/index.vue",
+        "mail-vue/src/views/share/ShareOtpCard.vue"
+      ]
+    },
+    {
+      "id": "B5",
+      "title": "share chunk 去掉 Element Plus",
+      "findings": [
+        "F-1e2784c9"
+      ],
+      "order": 5,
+      "depends_on": [],
+      "files": [
+        "mail-vue/src/components/safe-mail/index.vue",
+        "mail-vue/src/views/share/index.vue"
+      ]
+    }
+  ],
+  "dropped": [
+    {
+      "raw_title": "T2-F2 两次 role 读取间角色消失导致 QUOTA_EXCEEDED/500",
+      "reason": "deferred: 同请求内 role 被删的竞态无产品场景；稳态缺 role 已由 F-0002 resolved 覆盖",
+      "reporter": "reviewer:high-risk-T2"
+    },
+    {
+      "raw_title": "T9-F1 台账 F-0004 关闭失效",
+      "reason": "不是独立产品缺陷；并入 persists F-0004 的台账处置",
+      "reporter": "reviewer:T9"
+    },
+    {
+      "raw_title": "T5-F1 原报 P1",
+      "reason": "severity 降为 P2：影响辅助技术播报，不是数据完整性/配额穿透；仍作为新 P2 入库",
+      "reporter": "reviewer:T5"
+    }
+  ],
+  "models": {
+    "recon": "claude-opus-5-thinking-high-fast",
+    "reviewer": "gpt-5.6-sol-xhigh-fast",
+    "converge_fix": "claude-opus-5-thinking-high-fast",
+    "recon_carrier": "generalPurpose (Task 无 plan-reality-recon)",
+    "reviewer_carrier": "generalPurpose (Task 无 reviewer)"
+  }
+}
