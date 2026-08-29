@@ -248,6 +248,12 @@ function clickLogout() {
   logoutLoading.value = true
   logout().then(() => {
     localStorage.removeItem("token")
+    // 向导 AC-CAP-14 把未决创建写在 sessionStorage；不摘的话同标签换号会把上一任的邮箱列表和幂等键交给下一个人。
+    try {
+      sessionStorage.removeItem('mail-share:create-pending')
+    } catch (err) {
+      // 隐私模式读 storage 会抛；登出仍须继续。
+    }
     router.replace('/login')
   }).finally(() => {
     logoutLoading.value = false

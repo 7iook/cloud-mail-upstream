@@ -102,6 +102,39 @@
     </div>
 
     <template v-else>
+      <!-- 恢复态先于表单:告警与「同一把钥匙重试」埋在整张冻结表单之后时,关窗重开的首屏
+           只剩一张原因不明的置灰新建表单,Owner 读不到「上次可能已经建好了」。 -->
+      <section v-if="locked" class="recovery" data-test="wizard-recovery">
+        <div class="notice notice-warning" data-test="wizard-unknown" role="alert">
+          <strong>{{ tf(recoveryTitleKey) }}</strong>
+          {{ tf(recoveryHintKey) }}
+        </div>
+
+        <p v-if="remnantSuspected" class="notice notice-danger" data-test="wizard-remnant">
+          {{ tf('shareCreateRemnantGuidance') }}
+        </p>
+
+        <p v-if="pendingEmails.length" class="recovery-emails" data-test="wizard-pending-emails">
+          <span class="recovery-emails-label">{{ tf('shareCreatePendingEmails') }}</span>
+          {{ pendingEmails.join('、') }}
+        </p>
+
+        <div class="recovery-actions">
+          <el-button
+              type="primary"
+              data-test="wizard-retry"
+              :loading="submitting"
+              :disabled="submitting"
+              @click="submit"
+          >
+            {{ tf('shareCreateRetrySameKey') }}
+          </el-button>
+          <el-button text data-test="wizard-abandon" :disabled="submitting" @click="abandonPending">
+            {{ tf('shareCreateAbandonPending') }}
+          </el-button>
+        </div>
+      </section>
+
       <p class="warning" data-test="wizard-warning">{{ $t('shareCreateWarning') }}</p>
 
       <section class="section">
@@ -341,12 +374,7 @@
         </el-collapse-item>
       </el-collapse>
 
-      <div v-if="locked" class="notice notice-warning" data-test="wizard-unknown" role="alert">
-        <strong>{{ tf('shareCreateUnknownTitle') }}</strong>
-        {{ tf('shareCreateUnknownHint') }}
-      </div>
-
-      <p v-else-if="formError" class="notice notice-danger" data-test="wizard-error" role="alert">
+      <p v-if="!locked && formError" class="notice notice-danger" data-test="wizard-error" role="alert">
         {{ formError }}
       </p>
     </template>
@@ -354,17 +382,7 @@
     <template #footer>
       <el-button data-test="wizard-close" :disabled="submitting" @click="onOpenChange(false)">{{ $t('cancel') }}</el-button>
       <el-button
-          v-if="!created && locked"
-          type="primary"
-          data-test="wizard-retry"
-          :loading="submitting"
-          :disabled="submitting"
-          @click="submit"
-      >
-        {{ tf('shareCreateRetrySameKey') }}
-      </el-button>
-      <el-button
-          v-else-if="!created"
+          v-if="!created && !locked"
           type="primary"
           data-test="wizard-submit"
           :loading="submitting"
@@ -452,6 +470,11 @@ const PENDING_COPY = {
   shareCreateUnknownTitle: '没收到服务器的回应',
   shareCreateUnknownHint: '分享可能已经建好了。请用同一把钥匙重试 —— 换一把会建出第二个分享。表单已锁定，以免重试时改动了内容。',
   shareCreateRetrySameKey: '用同一把钥匙重试',
+  shareCreatePendingEmails: '这次提交的邮箱：',
+  shareCreateRemnantTitle: '这批分享可能已经建出了一部分',
+  shareCreateRemnantHint: '用同一把钥匙重试后，服务器说找不到这次创建的全部分享。这不等于什么都没建出来。',
+  shareCreateRemnantGuidance: '请先到分享列表里核对上面这些邮箱，把已经建出来的分享撤销或删除，再重新开始一次创建 —— 现在直接新建可能会给同一个邮箱建出第二条分享。',
+  shareCreateAbandonPending: '我已在列表里核对过，重新开始',
   shareReplayGuidance: '这次提交命中了之前的同一请求，链接明文不会再发放。请撤销或删除这个分享，然后重新创建一个新链接。',
   shareCreatedSaved: '我已保存',
   shareWizardCountTooSmall: '上限至少是 1；留空表示不限。',
@@ -481,12 +504,65 @@ const MIN_REFRESH_INTERVAL_MS = 3000
 
 const presetLabelId = 'share-wizard-preset-label'
 
+// AC-CAP-14 的恢复上下文必须比组件实例活得久:刷新或离开分享管理页会把 unknownResult 和
+// idempotencyKey 一起丢掉,下一次提交就换了一把新钥匙盲建第二条分享。存的只有请求体与钥匙 ——
+// 明文链接与 AuthKey 一个字符都不落盘。
+//
+// sessionStorage 而不是 localStorage:访客侧建会话的幂等键(design.md「建会话幂等」)选的就是
+// 同一个载体。它同样活过刷新与 SPA 换页,但不会跨标签页,也不会在共用浏览器上把上一个人的
+// 冻结请求交给下一个登录者 —— 这两个字段里带着他的邮箱地址。
+const PENDING_CREATE_STORAGE_KEY = 'mail-share:create-pending'
+const PENDING_STATE_UNKNOWN = 'unknown'
+const PENDING_STATE_REMNANT = 'remnant'
+
+// 同键重放返回 NOT_FOUND 只说明记录在案的 lid 无法完整回读,不说明首次请求什么都没留下;
+// CONFLICT 反过来证明这把钥匙已经落库,即首次请求确实到过服务端。两者都不是「可安全新建」。
+const UNRESOLVED_REPLAY_CODES = ['SHARE_NOT_FOUND', 'SHARE_IDEMPOTENCY_CONFLICT']
+
+function pendingStore() {
+  try {
+    return typeof window === 'undefined' ? null : window.sessionStorage
+  } catch (err) {
+    // 隐私模式或被分区的 iframe 里读 storage 直接抛错;内存副本仍能守住当前实例。
+    return null
+  }
+}
+
+function readPendingCreate() {
+  const store = pendingStore()
+  if (!store) {
+    return null
+  }
+  try {
+    const raw = store.getItem(PENDING_CREATE_STORAGE_KEY)
+    if (!raw) {
+      return null
+    }
+    const parsed = JSON.parse(raw)
+    // 钥匙和请求体缺一不可:只剩钥匙就无法重放同一指纹,重试会被判成 CONFLICT。
+    if (!parsed || typeof parsed.key !== 'string' || !parsed.key) {
+      return null
+    }
+    if (!parsed.body || typeof parsed.body !== 'object' || Array.isArray(parsed.body)) {
+      return null
+    }
+    return parsed
+  } catch (err) {
+    return null
+  }
+}
+
 const visible = ref(false)
 const submitting = ref(false)
 // The response never arrived, so the share may or may not exist. Locking the form is what
 // makes "retry with the same key" reachable: the key may only rotate when the fingerprint
 // changes, and the fingerprint can only change if the owner can edit.
 const unknownResult = ref(false)
+// 未知态里再分出一档:同键重放已经拿到确定的服务端回答,但那个回答无法证明首次请求没留下
+// 分享。表单继续冻结,引导从「重试」换成「先去列表核对」。
+const remnantSuspected = ref(false)
+// unknownResult 的持久化载体(key + body + 冻结表单快照)。
+const pendingCreate = ref(null)
 const formError = ref('')
 // The only place the plaintext link and auth key ever live. Not storage, not pinia, not the
 // URL: the list and the detail drawer never return them again.
@@ -513,6 +589,15 @@ const locked = computed(() => unknownResult.value)
 const gatedDisabled = computed(() => capabilityV2.value === 'inactive')
 const emailList = computed(() => parseShareEmails(emailsInput.value).emails)
 const overEmailLimit = computed(() => emailList.value.length > EMAIL_LIMIT)
+
+const recoveryTitleKey = computed(() => (remnantSuspected.value ? 'shareCreateRemnantTitle' : 'shareCreateUnknownTitle'))
+const recoveryHintKey = computed(() => (remnantSuspected.value ? 'shareCreateRemnantHint' : 'shareCreateUnknownHint'))
+
+// 恢复态首屏要能读到这次冻结的到底是哪几个邮箱:表单在下面,窄屏上不在同一屏。
+const pendingEmails = computed(() => {
+  const body = pendingCreate.value && pendingCreate.value.body
+  return body && Array.isArray(body.emails) ? body.emails : emailList.value
+})
 
 // The select carries either a rung's seconds or the 'custom' sentinel, while durationSeconds
 // stays the resolved number the request speaks. Keeping the sentinel out of the form is what
@@ -578,6 +663,77 @@ const replayShares = computed(() => {
 
 function rotateIdempotencyKey() {
   idempotencyKey.value = newIdempotencyKey()
+}
+
+function writePendingCreate(entry) {
+  pendingCreate.value = entry
+  const store = pendingStore()
+  if (!store) {
+    return
+  }
+  try {
+    store.setItem(PENDING_CREATE_STORAGE_KEY, JSON.stringify(entry))
+  } catch (err) {
+    // 配额满或存储被禁:这一实例仍然锁着,只是撑不过刷新。
+    console.error('mail share pending create not persisted', err)
+  }
+}
+
+function clearPendingCreate() {
+  pendingCreate.value = null
+  const store = pendingStore()
+  if (!store) {
+    return
+  }
+  try {
+    store.removeItem(PENDING_CREATE_STORAGE_KEY)
+  } catch (err) {
+    console.error('mail share pending create not cleared', err)
+  }
+}
+
+// 重建后的入口。先立锁再回填:两个 watcher 靠 unknownResult 决定要不要轮换钥匙,顺序反了
+// 恢复动作自己就会把钥匙换掉。
+function restorePendingCreate() {
+  const entry = readPendingCreate()
+  if (!entry) {
+    return
+  }
+  unknownResult.value = true
+  remnantSuspected.value = entry.state === PENDING_STATE_REMNANT
+  pendingCreate.value = entry
+  idempotencyKey.value = entry.key
+  if (typeof entry.emailsInput === 'string') {
+    emailsInput.value = entry.emailsInput
+  }
+  if (entry.form && typeof entry.form === 'object') {
+    // 只认表单已有的字段:落盘的 JSON 不该有权力往 form 里长出新键。
+    for (const key of Object.keys(form)) {
+      if (Object.prototype.hasOwnProperty.call(entry.form, key)) {
+        form[key] = entry.form[key]
+      }
+    }
+  }
+  const ui = entry.ui
+  if (ui && typeof ui === 'object') {
+    customDurationOpen.value = Boolean(ui.customDurationOpen)
+    if (ui.customDurationAmount != null) {
+      customDurationAmount.value = ui.customDurationAmount
+    }
+    if (typeof ui.customDurationUnit === 'string') {
+      customDurationUnit.value = ui.customDurationUnit
+    }
+  }
+}
+
+// 隔离态唯一的出口,而且只能由 Owner 亲手打开:前端证明不了首次请求没落地,所以引导先把人
+// 送去列表核对,这个按钮记录的是「我核对过了」。
+function abandonPending() {
+  clearPendingCreate()
+  unknownResult.value = false
+  remnantSuspected.value = false
+  formError.value = ''
+  rotateIdempotencyKey()
 }
 
 // Presets are prefill only (AC-CAP-12), and since P2 that includes the address list: every
@@ -725,22 +881,51 @@ async function submit() {
   if (submitting.value) {
     return
   }
+  const pending = pendingCreate.value
+  const replay = Boolean(locked.value && pending)
   formError.value = ''
-  const parsed = parseShareEmails(emailsInput.value)
-  const invalid = localError(parsed)
-  if (invalid) {
-    formError.value = tf(invalid, {days: MAX_DURATION_DAYS, email: parsed.invalid})
-    return
+  let body
+  let key
+  if (replay) {
+    // 落盘的那份请求体,不是重新拼出来的:服务端记下的是首次请求的指纹,重拼一份只要有一个
+    // 默认值挪过位置就会分叉成 CONFLICT,再也重放不回去。
+    body = pending.body
+    key = pending.key
+  } else {
+    const parsed = parseShareEmails(emailsInput.value)
+    const invalid = localError(parsed)
+    if (invalid) {
+      formError.value = tf(invalid, {days: MAX_DURATION_DAYS, email: parsed.invalid})
+      return
+    }
+    body = buildBody(parsed.emails)
+    key = idempotencyKey.value
+    // 在请求离开之前落盘。请求一旦上路,刷新后必须还能找回同一把钥匙和同一份请求体,否则
+    // 重建出来的向导就会换键盲建第二条分享(AC-CAP-14)。
+    writePendingCreate({
+      key,
+      body,
+      state: PENDING_STATE_UNKNOWN,
+      emailsInput: emailsInput.value,
+      form: {...form},
+      ui: {
+        customDurationOpen: customDurationOpen.value,
+        customDurationAmount: customDurationAmount.value,
+        customDurationUnit: customDurationUnit.value
+      }
+    })
   }
   created.value = null
-  const body = buildBody(parsed.emails)
   // Read before the request: degrading is only honest when this submission actually asked for
   // something the fence guards.
   const fenceIntent = hasFenceIntent(body)
   submitting.value = true
   try {
-    const data = await createMailShare(body, idempotencyKey.value)
+    const data = await createMailShare(body, key)
     unknownResult.value = false
+    remnantSuspected.value = false
+    // 确定成功(含幂等重放)才清:这是唯一能证明「这次创建有结论」的时刻。
+    clearPendingCreate()
     created.value = data || null
     // A replay means the row exists too, and the guidance sends the owner to the list to
     // revoke or delete it; refreshing behind that is the difference between advice and a
@@ -750,8 +935,16 @@ async function submit() {
       rotateIdempotencyKey()
     }
   } catch (err) {
-    if (isBusinessError(err)) {
+    if (isBusinessError(err) && replay && UNRESOLVED_REPLAY_CODES.includes(err.message)) {
+      // 从未知态恢复时收到这两个码,不得转入可安全新建态:它们证明的是「读不回来」或
+      // 「这把钥匙已经用过」,都不是「什么都没建」。表单继续冻结,引导改口成先去列表核对。
+      remnantSuspected.value = true
+      writePendingCreate({...pending, state: PENDING_STATE_REMNANT})
+    } else if (isBusinessError(err)) {
       unknownResult.value = false
+      remnantSuspected.value = false
+      // 服务端给了确定结论,这一单没有写入,恢复上下文到此为止。
+      clearPendingCreate()
       // 栅栏现在有自己的码,不必再从 SHARE_INVALID_CONFIG 里猜:那个码同时承载「取值越域」,
       // 拿它灰掉四组会把一个写错的值说成「平台没开这项能力」。`fenceIntent` 保留为一致性
       // 校验 —— 它镜像的正是后端 create 侧门控的那四项写入。
@@ -795,6 +988,10 @@ async function copyCreatedAuthKey() {
   }
 }
 
+// Before the watchers, not after: a restore writes the frozen values back into `form`, and a
+// watcher that saw that write would rotate the key the restore just recovered.
+restorePendingCreate()
+
 // ShareDialog rotates on every form edit so a changed body cannot collide with a stored
 // fingerprint. The wizard needs the same reflex plus one gate: while the result is unknown the
 // key must survive, and it does because an unknown result also freezes the form.
@@ -818,6 +1015,39 @@ watch(emailsInput, () => {
   margin: 0 0 14px;
   line-height: 1.6;
   color: var(--el-color-warning-dark-2);
+}
+
+// 恢复态是首屏的主内容,不是表单末尾的补充说明:关窗重开会把滚动位置复位到顶部。
+.recovery {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color);
+
+  .notice {
+    margin-top: 0;
+  }
+}
+
+.recovery-emails {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-all;
+  color: var(--regular-text-color);
+}
+
+.recovery-emails-label {
+  color: var(--secondary-text-color);
+}
+
+.recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .section {

@@ -183,6 +183,10 @@ function transportFailure() {
     return { isAxiosError: true, code: 'ECONNABORTED', message: 'timeout of 0ms exceeded' }
 }
 
+function businessError(message) {
+    return { code: 500, message }
+}
+
 function mountWizard() {
     const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
     return mount(ShareCreateWizard, {
@@ -235,6 +239,10 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / P2 emails)', () => 
         copySpy.mockClear()
         copyFactory.mockClear()
         copyOutcome.value = { copied: true, path: 'clipboard' }
+        // The pending create context outlives the component on purpose (AC-CAP-14), so it also
+        // outlives a test: without this every case after an unresolved create would mount into
+        // someone else's locked recovery state.
+        window.sessionStorage.clear()
         // The capability memory is module scoped on purpose (it must outlive one dialog), so
         // each case has to put it back to the pristine deployment state.
         capabilityV2.value = 'unknown'
@@ -376,6 +384,182 @@ describe('share-admin create wizard (AC-CAP-12 / AC-CAP-14 / P2 emails)', () => 
 
         expect(createMailShare).toHaveBeenCalledTimes(2)
         expect(keyAt(1)).toBe(firstKey)
+    })
+
+    // F-420feb8d — the unknown result has to survive the component, not just the dialog. A
+    // refresh or a trip out of share management used to drop unknownResult and the key
+    // together, and the next submit went out under a fresh key: a blind second share.
+    it('restores the unknown result after a remount and retries with the very same key and body (AC-CAP-14)', async () => {
+        createMailShare.mockRejectedValueOnce(transportFailure())
+        const first = await openWizard()
+        await fillEmails(first, 'box11@example.com b@example.com')
+        await first.get('[data-test="wizard-name"]').setValue('front desk')
+        await submit(first)
+        expect(first.find('[data-test="wizard-unknown"]').exists()).toBe(true)
+
+        const firstBody = createMailShare.mock.calls[0][0]
+        const firstKey = keyAt(0)
+        first.unmount()
+
+        const second = await openWizard()
+
+        expect(second.find('[data-test="wizard-unknown"]').exists()).toBe(true)
+        expect(second.find('[data-test="wizard-submit"]').exists()).toBe(false)
+        expect(second.get('[data-test="wizard-emails"]').attributes('disabled')).toBeDefined()
+        expect(second.get('[data-test="wizard-emails"]').element.value).toBe('box11@example.com b@example.com')
+        expect(second.get('[data-test="wizard-name"]').element.value).toBe('front desk')
+
+        await second.get('[data-test="wizard-retry"]').trigger('click')
+        await flushPromises()
+
+        expect(createMailShare).toHaveBeenCalledTimes(2)
+        expect(keyAt(1)).toBe(firstKey)
+        // The stored body, not a rebuilt one: a retry under the same key with a different
+        // fingerprint is refused as a conflict instead of replaying the first request.
+        expect(createMailShare.mock.calls[1][0]).toEqual(firstBody)
+    })
+
+    // The same trigger seen from the other side: the tab is lost while the request is still in
+    // flight, so the wizard never gets to observe the failure at all.
+    it('locks a fresh mount when the tab was lost with a create still in flight (AC-CAP-14)', async () => {
+        createMailShare.mockImplementationOnce(() => new Promise(() => {}))
+        const first = await openWizard()
+        await fillEmails(first)
+        await first.get('[data-test="wizard-submit"]').trigger('click')
+        await flushPromises()
+        first.unmount()
+
+        const second = await openWizard()
+
+        expect(second.find('[data-test="wizard-unknown"]').exists()).toBe(true)
+        expect(second.find('[data-test="wizard-submit"]').exists()).toBe(false)
+
+        await second.get('[data-test="wizard-retry"]').trigger('click')
+        await flushPromises()
+
+        expect(createMailShare).toHaveBeenCalledTimes(2)
+        expect(keyAt(1)).toBe(keyAt(0))
+    })
+
+    it('drops the stored context once the server answered, so the next mount creates freely', async () => {
+        const first = await openWizard()
+        await fillEmails(first)
+        await submit(first)
+        expect(first.find('[data-test="secret-once"]').exists()).toBe(true)
+        first.unmount()
+
+        const second = await openWizard()
+        expect(second.find('[data-test="wizard-unknown"]').exists()).toBe(false)
+        expect(second.find('[data-test="wizard-submit"]').exists()).toBe(true)
+        expect(second.get('[data-test="wizard-emails"]').attributes('disabled')).toBeUndefined()
+
+        await fillEmails(second)
+        await submit(second)
+        expect(createMailShare).toHaveBeenCalledTimes(2)
+        // A definite rejection is just as definite as a success: nothing was written, so the
+        // next mount must not inherit a lock either.
+        createMailShare.mockRejectedValueOnce(businessError('SHARE_DURATION_EXCEEDED'))
+        await second.get('[data-test="created-saved"]').trigger('click')
+        await submit(second)
+        second.unmount()
+
+        const third = await openWizard()
+        expect(third.find('[data-test="wizard-unknown"]').exists()).toBe(false)
+        expect(third.find('[data-test="wizard-submit"]').exists()).toBe(true)
+    })
+
+    // F-e87370ba — SHARE_NOT_FOUND on a same-key retry only says the recorded lids cannot all
+    // be read back; it does not say the first request left nothing behind. Treating it as a
+    // plain failure unlocked the form and invited a second share for the surviving mailboxes.
+    it('keeps the recovery isolated when a same-key retry answers SHARE_NOT_FOUND (AC-CAP-14)', async () => {
+        createMailShare.mockRejectedValueOnce(transportFailure())
+        createMailShare.mockRejectedValueOnce(businessError('SHARE_NOT_FOUND'))
+        const wrapper = await openWizard()
+        await fillEmails(wrapper)
+        await submit(wrapper)
+        await wrapper.get('[data-test="wizard-retry"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="wizard-remnant"]').exists()).toBe(true)
+        expect(wrapper.find('[data-test="wizard-submit"]').exists()).toBe(false)
+        expect(wrapper.find('[data-test="wizard-error"]').exists()).toBe(false)
+        expect(wrapper.get('[data-test="wizard-emails"]').attributes('disabled')).toBeDefined()
+
+        await wrapper.get('[data-test="wizard-close"]').trigger('click')
+        await flushPromises()
+        await wrapper.get('[data-test="wizard-open"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="wizard-submit"]').exists()).toBe(false)
+        expect(wrapper.find('[data-test="wizard-remnant"]').exists()).toBe(true)
+
+        await wrapper.get('[data-test="wizard-retry"]').trigger('click')
+        await flushPromises()
+        expect(keyAt(2)).toBe(keyAt(0))
+    })
+
+    it('carries the SHARE_NOT_FOUND isolation across a remount too (AC-CAP-14)', async () => {
+        createMailShare.mockRejectedValueOnce(transportFailure())
+        createMailShare.mockRejectedValueOnce(businessError('SHARE_NOT_FOUND'))
+        const first = await openWizard()
+        await fillEmails(first)
+        await submit(first)
+        await first.get('[data-test="wizard-retry"]').trigger('click')
+        await flushPromises()
+        first.unmount()
+
+        const second = await openWizard()
+        expect(second.find('[data-test="wizard-remnant"]').exists()).toBe(true)
+        expect(second.find('[data-test="wizard-submit"]').exists()).toBe(false)
+    })
+
+    // The isolated state cannot be left by accident, but it must be leavable: the owner goes to
+    // the list, sorts out whatever the first request left, and says so explicitly.
+    it('only leaves the isolated state through an explicit restart, which then rotates the key', async () => {
+        createMailShare.mockRejectedValueOnce(transportFailure())
+        createMailShare.mockRejectedValueOnce(businessError('SHARE_NOT_FOUND'))
+        const wrapper = await openWizard()
+        await fillEmails(wrapper)
+        await submit(wrapper)
+        await wrapper.get('[data-test="wizard-retry"]').trigger('click')
+        await flushPromises()
+
+        await wrapper.get('[data-test="wizard-abandon"]').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('[data-test="wizard-unknown"]').exists()).toBe(false)
+        expect(wrapper.find('[data-test="wizard-remnant"]').exists()).toBe(false)
+        expect(wrapper.get('[data-test="wizard-emails"]').attributes('disabled')).toBeUndefined()
+
+        await submit(wrapper)
+        expect(createMailShare).toHaveBeenCalledTimes(3)
+        expect(keyAt(2)).not.toBe(keyAt(0))
+
+        wrapper.unmount()
+        const second = await openWizard()
+        expect(second.find('[data-test="wizard-unknown"]').exists()).toBe(false)
+    })
+
+    // F-92520298 — the recovery used to sit after the whole frozen form, so a reopened wizard
+    // showed nothing but a greyed create form on the first screen.
+    it('puts the unknown-result explanation and its retry ahead of the frozen form (AC-CAP-14)', async () => {
+        createMailShare.mockRejectedValueOnce(transportFailure())
+        const wrapper = await openWizard()
+        await fillEmails(wrapper, 'box11@example.com b@example.com')
+        await submit(wrapper)
+
+        const panel = wrapper.get('[data-test="wizard-recovery"]')
+        expect(panel.find('[data-test="wizard-unknown"]').exists()).toBe(true)
+        expect(panel.find('[data-test="wizard-retry"]').exists()).toBe(true)
+        // The addresses the frozen request carries, restated where the decision is made: the
+        // form below may be off screen.
+        expect(panel.text()).toContain('box11@example.com')
+        expect(panel.text()).toContain('b@example.com')
+
+        const html = wrapper.get('[data-test="share-create-wizard"]').html()
+        expect(html.indexOf('wizard-recovery')).toBeLessThan(html.indexOf('wizard-warning'))
+        expect(html.indexOf('wizard-recovery')).toBeLessThan(html.indexOf('wizard-emails'))
+        expect(html.indexOf('wizard-retry')).toBeLessThan(html.indexOf('wizard-emails'))
     })
 
     // W5

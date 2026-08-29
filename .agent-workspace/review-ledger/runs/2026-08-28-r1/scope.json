@@ -1,0 +1,652 @@
+{
+  "run_id": "2026-08-28-r1",
+  "repo": "/workspace",
+  "mode": "cursor",
+  "range": "9b6eb8072fe73c93518e872037702a2e8e54056b..083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+  "range_note": "multi-ref cursor + completion-signal · origin/main silent>=19h · review slice starts at last reviewed share-link tip 9b6eb80 (2026-08-26-r1) so already-reviewed 12cec61..9b6eb80 is not re-opened as new work; origin/main ledger cursor remains 12cec61 until Phase 5",
+  "feature_note": "",
+  "effective_since": null,
+  "effective_until": null,
+  "ref": "origin/main",
+  "resolved_ref_sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+  "merge_policy": "include-first-parent-churn",
+  "cursor_eligible": true,
+  "head_sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+  "resolved_at": "2026-08-28T02:19:40.213939+00:00",
+  "external_requested": false,
+  "dry_run": false,
+  "bootstrapped": false,
+  "form": "B",
+  "instance_tag": "cursor-cursor/git-8934-4271-d83a",
+  "models": {
+    "recon": "claude-opus-5-thinking-high-fast",
+    "reviewer": "gpt-5.6-sol-xhigh-fast",
+    "converge_fix": "claude-opus-5-thinking-high-fast"
+  },
+  "commit_count": 10,
+  "totals": {
+    "insertions": 15582,
+    "deletions": 898,
+    "files": 104,
+    "merges": 2
+  },
+  "commits": [
+    {
+      "sha": "f6670e0fd96e1ad3b61c760302499bdb72ac2620",
+      "short": "f6670e0",
+      "author_date": "2026-08-26 19:57:45 +0000",
+      "author": "Cursor Agent",
+      "subject": "docs(review): bootstrap 2026-08-26-r1 git-review-sweep 台账",
+      "insertions": 3793,
+      "deletions": 0,
+      "file_count": 29,
+      "files": [
+        ".agent-workspace/review-ledger/INDEX.md",
+        ".agent-workspace/review-ledger/ledger.jsonl",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/artifacts/ui-t6-desktop-1280.webp",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/artifacts/ui-t6-mobile-390.webp",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/decisions.json",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/cross-theme.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/high-risk-t1.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/high-risk-t2.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/high-risk-t3.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t1-share-gone-404.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t2-mailbox-provision.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t3-emails-create.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t4-wizard-close-confirm.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t5-live-expired-status.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t6-visitor-otp-visual.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t7-spec-backfill.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t8-owner-e2e.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t9-decision-card.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/ui-t4.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/ui-t5.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/ui-t6.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/report.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/reviewer-l0-l1.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/scope.json",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/scope.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/themes.md",
+        ".agent-workspace/review-ledger/state.json",
+        ".agent-workspace/review-ledger/waivers.md",
+        ".gitignore"
+      ]
+    },
+    {
+      "sha": "864358d5249f29e8476241f8ecd9cb777f9f91cb",
+      "short": "864358d",
+      "author_date": "2026-08-26 19:57:54 +0000",
+      "author": "Cursor Agent",
+      "subject": "merge: 纳入 share-link-fullchain 以便落地审查修复",
+      "insertions": 4749,
+      "deletions": 511,
+      "file_count": 63,
+      "files": [
+        ".agent-workspace/.archive/2026-08-26/share-link-fullchain/p4-destroyed-entrypoints.md",
+        ".agent-workspace/.archive/2026-08-26/share-link-fullchain/prompt.round1.sub.txt",
+        ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-expired-status-rca.md",
+        ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md",
+        ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.review1.sub.md",
+        ".agent-workspace/.archive/2026-08-26/share-link-fullchain/visitor-share-ui-design.md",
+        "docs/specs/mail-share/design.md",
+        "docs/specs/mail-share/requirements.md",
+        "docs/specs/mailbox-share-capability/design.md",
+        "docs/specs/mailbox-share-capability/requirements.md",
+        "mail-vue/src/composables/useSharePolling.js",
+        "mail-vue/src/composables/useSharePolling.spec.js",
+        "mail-vue/src/i18n/en.js",
+        "mail-vue/src/i18n/zh.js",
+        "mail-vue/src/request/mail-share.js",
+        "mail-vue/src/request/share.js",
+        "mail-vue/src/request/share.spec.js",
+        "mail-vue/src/views/email/ShareDialog.spec.js",
+        "mail-vue/src/views/email/ShareDialog.vue",
+        "mail-vue/src/views/email/ShareIndicator.spec.js",
+        "mail-vue/src/views/email/ShareIndicator.vue",
+        "mail-vue/src/views/email/index.vue",
+        "mail-vue/src/views/share-admin/ShareCreateWizard.spec.js",
+        "mail-vue/src/views/share-admin/ShareCreateWizard.vue",
+        "mail-vue/src/views/share-admin/ShareDetailDrawer.spec.js",
+        "mail-vue/src/views/share-admin/ShareDetailDrawer.vue",
+        "mail-vue/src/views/share-admin/ShareRowActions.spec.js",
+        "mail-vue/src/views/share-admin/ShareRowActions.vue",
+        "mail-vue/src/views/share-admin/index.spec.js",
+        "mail-vue/src/views/share-admin/index.vue",
+        "mail-vue/src/views/share-admin/presets.js",
+        "mail-vue/src/views/share-admin/presets.spec.js",
+        "mail-vue/src/views/share-admin/status.js",
+        "mail-vue/src/views/share-admin/status.spec.js",
+        "mail-vue/src/views/share-admin/use-share-clock.js",
+        "mail-vue/src/views/share-admin/use-share-clock.spec.js",
+        "mail-vue/src/views/share/ShareOtpCard.vue",
+        "mail-vue/src/views/share/index.spec.js",
+        "mail-vue/src/views/share/index.vue",
+        "mail-vue/src/views/share/session.js",
+        "mail-vue/src/views/share/session.spec.js",
+        "mail-worker/src/api/share-api.js",
+        "mail-worker/src/index.js",
+        "mail-worker/src/security/share-document-gone.js",
+        "mail-worker/src/service/account-service.js",
+        "mail-worker/src/service/mail-share-service.js",
+        "mail-worker/src/service/mailbox-provision.js",
+        "mail-worker/src/service/share-auth-service.js",
+        "mail-worker/test/account-delete-share.spec.js",
+        "mail-worker/test/mail-share-emails.spec.js",
+        "mail-worker/test/mail-share-service.spec.js",
+        "mail-worker/test/share-api.spec.js",
+        "mail-worker/test/share-auth-service.spec.js",
+        "mail-worker/test/share-document-gone.spec.js",
+        "mail-worker/test/share-integration.spec.js",
+        "mail-worker/test/share-rate-limit.spec.js",
+        "mail-worker/test/share-status.spec.js",
+        "tests/e2e/harness/worker-entry.js",
+        "tests/e2e/specs/owner-share-lifecycle.spec.js",
+        "tests/e2e/specs/visitor-attachment.spec.js",
+        "tests/e2e/specs/visitor-headers.spec.js",
+        "tests/e2e/specs/visitor-revoke-live.spec.js",
+        "tests/e2e/specs/visitor-unavailable.spec.js"
+      ]
+    },
+    {
+      "sha": "0f4f52c8381611cab201014b14aa5146fafd2d5c",
+      "short": "0f4f52c",
+      "author_date": "2026-08-26 20:02:20 +0000",
+      "author": "Cursor Agent",
+      "subject": "fix(share): 落地 git-review-sweep 2026-08-26-r1 P1 批次",
+      "insertions": 268,
+      "deletions": 45,
+      "file_count": 18,
+      "files": [
+        ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md",
+        "docs/specs/mail-share/design.md",
+        "docs/specs/mailbox-share-capability/requirements.md",
+        "mail-vue/src/init/init.js",
+        "mail-vue/src/init/init.spec.js",
+        "mail-vue/src/router/index.js",
+        "mail-vue/src/router/index.spec.js",
+        "mail-vue/src/views/share-admin/ShareCreateWizard.spec.js",
+        "mail-vue/src/views/share-admin/ShareCreateWizard.vue",
+        "mail-vue/src/views/share/index.spec.js",
+        "mail-vue/src/views/share/index.vue",
+        "mail-vue/src/views/share/session.js",
+        "mail-vue/src/views/share/session.spec.js",
+        "mail-worker/src/security/share-document-gone.js",
+        "mail-worker/src/service/mail-share-service.js",
+        "mail-worker/src/service/mailbox-provision.js",
+        "mail-worker/test/mail-share-emails.spec.js",
+        "mail-worker/test/share-document-gone.spec.js"
+      ]
+    },
+    {
+      "sha": "8a800146325d047c12e25cfdb12d2c110624ca93",
+      "short": "8a80014",
+      "author_date": "2026-08-26 20:05:39 +0000",
+      "author": "Cursor Agent",
+      "subject": "fix(share): D1 完整性哨兵改用 1/0 替代 RAISE",
+      "insertions": 6,
+      "deletions": 5,
+      "file_count": 2,
+      "files": [
+        "mail-vue/src/views/share/session.spec.js",
+        "mail-worker/src/service/mail-share-service.js"
+      ]
+    },
+    {
+      "sha": "c0a4a45dc594868d761ed97261cbb8ad13883746",
+      "short": "c0a4a45",
+      "author_date": "2026-08-26 20:07:12 +0000",
+      "author": "Cursor Agent",
+      "subject": "docs(review): 回写 2026-08-26-r1 FIX-BATCHES 关闭台账",
+      "insertions": 320,
+      "deletions": 242,
+      "file_count": 4,
+      "files": [
+        ".agent-workspace/review-ledger/INDEX.md",
+        ".agent-workspace/review-ledger/ledger.jsonl",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/decisions.json",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/report.md"
+      ]
+    },
+    {
+      "sha": "7cafb35e75cd0b3b2d2df950ff6de9c961b0c433",
+      "short": "7cafb35",
+      "author_date": "2026-08-27 02:09:20 +0000",
+      "author": "Cursor Agent",
+      "subject": "docs(review): git-review-sweep 2026-08-27-r1 空轮台账",
+      "insertions": 4937,
+      "deletions": 0,
+      "file_count": 35,
+      "files": [
+        ".agent-workspace/review-ledger/INDEX.md",
+        ".agent-workspace/review-ledger/ledger.jsonl",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/artifacts/ui-t6-desktop-1280.webp",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/artifacts/ui-t6-mobile-390.webp",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/decisions.json",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/cross-theme.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/high-risk-t1.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/high-risk-t2.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/high-risk-t3.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t1-share-gone-404.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t2-mailbox-provision.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t3-emails-create.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t4-wizard-close-confirm.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t5-live-expired-status.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t6-visitor-otp-visual.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t7-spec-backfill.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t8-owner-e2e.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/t9-decision-card.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/ui-t4.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/ui-t5.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/raw/ui-t6.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/report.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/reviewer-l0-l1.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/scope.json",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/scope.md",
+        ".agent-workspace/review-ledger/runs/2026-08-26-r1/themes.md",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/decisions.json",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/phase0-refs.json",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/report.md",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/scope.json",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/scope.md",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/themes.md",
+        ".agent-workspace/review-ledger/state.json",
+        ".agent-workspace/review-ledger/waivers.md",
+        ".gitignore"
+      ]
+    },
+    {
+      "sha": "c0ede67fcb4ec4a47b6f6e236abc36620c80d834",
+      "short": "c0ede67",
+      "author_date": "2026-08-27 14:08:00 +0800",
+      "author": "7",
+      "subject": "merge: 纳入 2026-08-27-r1 空轮台账",
+      "insertions": 1084,
+      "deletions": 18,
+      "file_count": 8,
+      "files": [
+        ".agent-workspace/review-ledger/INDEX.md",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/decisions.json",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/phase0-refs.json",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/report.md",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/scope.json",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/scope.md",
+        ".agent-workspace/review-ledger/runs/2026-08-27-r1/themes.md",
+        ".agent-workspace/review-ledger/state.json"
+      ]
+    },
+    {
+      "sha": "790c550c9b10b4f4baf9ac45b59d266901e10bc7",
+      "short": "790c550",
+      "author_date": "2026-08-27 15:17:00 +0800",
+      "author": "7",
+      "subject": "fix(share): 删除从未生效的批量创建完整性哨兵",
+      "insertions": 4,
+      "deletions": 28,
+      "file_count": 1,
+      "files": [
+        "mail-worker/src/service/mail-share-service.js"
+      ]
+    },
+    {
+      "sha": "1da171f769fd06dabe9c5c5588f899f03e98405a",
+      "short": "1da171f",
+      "author_date": "2026-08-27 15:17:16 +0800",
+      "author": "7",
+      "subject": "fix(share): 销毁分享的文档 404 接入限流并补齐防泄露响应头",
+      "insertions": 232,
+      "deletions": 18,
+      "file_count": 4,
+      "files": [
+        "mail-worker/src/security/share-document-gone.js",
+        "mail-worker/src/security/share-rate-limit.js",
+        "mail-worker/test/share-document-gone.spec.js",
+        "mail-worker/test/share-rate-limit.spec.js"
+      ]
+    },
+    {
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "short": "083c87f",
+      "author_date": "2026-08-27 15:17:31 +0800",
+      "author": "7",
+      "subject": "refactor(share): 访客页提示改为页内可播报,去掉 Element Plus",
+      "insertions": 189,
+      "deletions": 31,
+      "file_count": 4,
+      "files": [
+        "mail-vue/src/views/share/ShareOtpCard.spec.js",
+        "mail-vue/src/views/share/ShareOtpCard.vue",
+        "mail-vue/src/views/share/index.spec.js",
+        "mail-vue/src/views/share/index.vue"
+      ]
+    }
+  ],
+  "dir_rollup": [
+    {
+      "dir": ".agent-workspace",
+      "insertions": 11522,
+      "deletions": 264,
+      "files": 40
+    },
+    {
+      "dir": "mail-worker",
+      "insertions": 2130,
+      "deletions": 184,
+      "files": 17
+    },
+    {
+      "dir": "mail-vue",
+      "insertions": 1738,
+      "deletions": 372,
+      "files": 36
+    },
+    {
+      "dir": "tests",
+      "insertions": 155,
+      "deletions": 64,
+      "files": 6
+    },
+    {
+      "dir": "docs",
+      "insertions": 31,
+      "deletions": 14,
+      "files": 4
+    },
+    {
+      "dir": ".gitignore",
+      "insertions": 6,
+      "deletions": 0,
+      "files": 1
+    }
+  ],
+  "stack_fingerprint": {
+    "extensions": {
+      ".md": 34,
+      ".jsonl": 1,
+      ".webp": 2,
+      ".json": 6,
+      "(none)": 1,
+      ".txt": 1,
+      ".js": 50,
+      ".vue": 9
+    },
+    "top_level_segments": [
+      ".agent-workspace",
+      "mail-worker",
+      "mail-vue",
+      "tests",
+      "docs",
+      ".gitignore"
+    ]
+  },
+  "risk_signals": [
+    "touches mail-worker share create / document-gone / rate-limit",
+    "touches visitor share SPA (ElMessage removal)",
+    "D1 batch integrity sentinel added then removed"
+  ],
+  "criteria_sources": [
+    {
+      "path": "docs/specs/mail-share/design.md",
+      "why": "仓库存在的 design 规范"
+    },
+    {
+      "path": "docs/specs/mail-share/requirements.md",
+      "why": "仓库存在的 AC 规范"
+    },
+    {
+      "path": "docs/specs/mailbox-share-capability/design.md",
+      "why": "仓库存在的 design 规范"
+    },
+    {
+      "path": "docs/specs/mailbox-share-capability/requirements.md",
+      "why": "仓库存在的 AC 规范"
+    },
+    {
+      "path": "docs/architecture/ADR-mail-share-capability-boundary.md",
+      "why": "ADR"
+    },
+    {
+      "path": "docs/architecture/ADR-mailbox-share-capability-extension.md",
+      "why": "ADR"
+    },
+    {
+      "path": "docs/architecture/ADR-share-credential-recoverability.md",
+      "why": "ADR"
+    },
+    {
+      "path": ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md",
+      "why": "本轮修复批次所依据的决策卡"
+    }
+  ],
+  "missing_repo_rule_files": [
+    "AGENTS.md",
+    "ARCHITECTURE_RULES.md",
+    "CLAUDE.md",
+    "lefthook.yml",
+    ".pre-commit-config.yaml",
+    ".githooks/"
+  ],
+  "adrs": [
+    {
+      "path": "docs/architecture/ADR-mail-share-capability-boundary.md",
+      "title": "mail-share capability boundary"
+    },
+    {
+      "path": "docs/architecture/ADR-mailbox-share-capability-extension.md",
+      "title": "mailbox-share capability extension"
+    },
+    {
+      "path": "docs/architecture/ADR-share-credential-recoverability.md",
+      "title": "share credential recoverability"
+    }
+  ],
+  "mechanical_gates": [
+    "ci-workflow: deploy-cloudflare.yml (deploy-only; no lint/test gate)",
+    "no lefthook / pre-commit / .githooks"
+  ],
+  "ledger_carryover": [
+    {
+      "id": "F-0008",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:52",
+      "symbols": [
+        "configuredDomains"
+      ],
+      "failure_mode": "其他入口仍可能对 c.env.domain 做 includes 子串匹配",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0009",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:102",
+      "symbols": [
+        "emailPrefixFilter"
+      ],
+      "failure_mode": "前缀黑名单改为大小写不敏感，设置页拒绝集收严且无 AC",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0010",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:5",
+      "symbols": [
+        "userService",
+        "roleService"
+      ],
+      "failure_mode": "mailbox-provision → user-service → account-service 间接环风险",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0012",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/index.vue:1",
+      "symbols": [
+        "liveEffectiveStatus",
+        "fetchList"
+      ],
+      "failure_mode": "列表 status=ACTIVE 服务端筛选 vs 本地翻 EXPIRED 卡片同屏",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0013",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/use-share-clock.js:1",
+      "symbols": [
+        "useShareClock",
+        "ShareRowActions"
+      ],
+      "failure_mode": "每行 ShareRowActions 各自 useShareClock → N 个 setInterval + 监听",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0014",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/email/ShareIndicator.vue:1",
+      "symbols": [
+        "ShareIndicator",
+        "onDeactivated"
+      ],
+      "failure_mode": "ShareIndicator 自建 visibility/focus 监听只在 onUnmounted 摘，keep-alive deactivate 残留",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0020",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "docs/specs/mail-share/design.md:6",
+      "symbols": [
+        "status",
+        "shipped_commit"
+      ],
+      "failure_mode": "front-matter 仍 converged / shipped_commit null，正文已记 shipped 后整改",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0021",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "docs/architecture/ADR-mail-share-capability-boundary.md:1",
+      "symbols": [
+        "P-AUTH-01"
+      ],
+      "failure_mode": "P4 推翻三轮安全性质未 amend Accepted ADR",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0023",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:1",
+      "symbols": [
+        "acknowledgeSecret"
+      ],
+      "failure_mode": "「我已保存」按钮语义像确认已复制，实际再走创建/清结果",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0024",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:1",
+      "symbols": [
+        "formError"
+      ],
+      "failure_mode": "创建错误提示远离 emails 输入",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0025",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/email/ShareDialog.vue:1",
+      "symbols": [
+        "ShareDialog",
+        "liveEffectiveStatus"
+      ],
+      "failure_mode": "ShareDialog 状态非徽章，与管理列表不一致",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0026",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share-admin/ShareDetailDrawer.vue:1",
+      "symbols": [
+        "ShareDetailDrawer",
+        "ShareRowActions"
+      ],
+      "failure_mode": "EXPIRED 抽屉与行操作可做动作不一致",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0027",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share/index.vue:1",
+      "symbols": [
+        "share-shell"
+      ],
+      "failure_mode": "390 视口 header 横向溢出约 8px",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0029",
+      "status": "open",
+      "severity": "P2",
+      "anchor": "mail-vue/src/views/share/index.vue:1",
+      "symbols": [
+        "share-card"
+      ],
+      "failure_mode": "终态卡只 text-align 未在视口垂直居中",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    },
+    {
+      "id": "F-0030",
+      "status": "open",
+      "severity": "suggestion",
+      "anchor": "mail-worker/src/service/mail-share-service.js:817",
+      "symbols": [
+        "prepareShareInsertByEmails",
+        "db.batch"
+      ],
+      "failure_mode": "注释声称同 batch 可见刚插入的 account；T-02 只证回滚与不得消费前序结果",
+      "disposition": null,
+      "waive_reason": null,
+      "age_days": 2
+    }
+  ],
+  "open_prs": []
+}

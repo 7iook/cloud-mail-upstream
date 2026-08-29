@@ -1,0 +1,60 @@
+{
+  "run_id": "2026-08-29-r1-04f8",
+  "head_sha": "4ea2efc1d0d385f63df322933a2154bf329f68c9",
+  "new": [
+    {
+      "severity": "P2",
+      "theme": "T2 · 向导 pending create 持久化",
+      "commits": ["6ad2686"],
+      "anchor": "mail-vue/src/i18n/en.js:459",
+      "symbols": ["shareCreateRemnantTitle", "shareCreateRemnantHint", "shareCreateRemnantGuidance", "shareCreatePendingEmails", "shareCreateAbandonPending", "tf", "PENDING_COPY"],
+      "rule_source": "ShareCreateWizard.vue §T-28/T-29 i18n SSOT",
+      "failure_mode": "remnant 恢复文案未进 zh/en 语言包，英文 te() 为假",
+      "trigger": "英文界面进入 remnant 恢复态",
+      "impact": "英文 Owner 看到中文 PENDING_COPY",
+      "required_fix": "五键写入 i18n/en.js 与 i18n/zh.js",
+      "identity_scope": "share wizard remnant i18n keys missing from locale SSOT",
+      "verify": "python3 assert keys in en.js and zh.js → EXIT=0",
+      "risk_spread": "none",
+      "reporters": ["reviewer:T2", "reviewer:ui-T2"],
+      "related": [],
+      "batch": "B1"
+    },
+    {
+      "severity": "P2",
+      "theme": "T2 · 向导 pending create 持久化",
+      "commits": ["6ad2686"],
+      "anchor": "mail-vue/src/layout/header/index.vue:253",
+      "symbols": ["clickLogout", "PENDING_CREATE_STORAGE_KEY", "restorePendingCreate"],
+      "rule_source": "ShareCreateWizard.vue §sessionStorage shared-browser isolation",
+      "failure_mode": "登出不摘未决创建键",
+      "trigger": "Owner A 运输层失败后登出，Owner B 同标签登录并打开向导",
+      "impact": "B 看到 A 的邮箱列表并以 A 的幂等键重放",
+      "required_fix": "clickLogout 在清 token 时 removeItem('mail-share:create-pending')",
+      "identity_scope": "logout vs mail-share:create-pending sessionStorage",
+      "verify": "grep removeItem mail-share:create-pending header/index.vue → 命中",
+      "risk_spread": "pending-create-storage · origin PENDING_CREATE_STORAGE_KEY → hops 1 · stop: logout 已摘键",
+      "reporters": ["reviewer:T2"],
+      "related": [],
+      "batch": "B1"
+    }
+  ],
+  "persists": [
+    {"id": "F-0008", "note": "configuredDomains 仍只服务 provision；未扫全仓"},
+    {"id": "F-0009", "note": "emailPrefixFilter 大小写不敏感，产品意图未裁"},
+    {"id": "F-0010", "note": "间接环未在本轮复现"},
+    {"id": "F-0023", "note": "结果钮文案未改"},
+    {"id": "F-0024", "note": "错误提示距离未改"},
+    {"id": "F-0030", "note": "篱笆依赖同批可见性；miniflare 绿，无 remote D1"}
+  ],
+  "resolved": [
+    {"id": "F-8386f9a1", "close_note": "本轮微修写入 i18n/en.js+zh.js 五键 · python3 assert keys → EXIT=0"},
+    {"id": "F-cb2a6d21", "close_note": "本轮微修 clickLogout 摘 sessionStorage 键 · grep removeItem → 命中"}
+  ],
+  "invalidated": [],
+  "superseded": [],
+  "batches": [
+    {"id": "B1", "title": "remnant i18n SSOT + 登出摘 pending", "findings": ["F-8386f9a1", "F-cb2a6d21"], "order": 1, "depends_on": []}
+  ],
+  "dropped": []
+}
