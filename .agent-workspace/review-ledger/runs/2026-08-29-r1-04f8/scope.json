@@ -1,0 +1,503 @@
+{
+  "run_id": "2026-08-29-r1-04f8",
+  "repo": "/workspace",
+  "worktree_for_review": "/tmp/review-git-8934",
+  "mode": "cursor",
+  "form": "B",
+  "range": "083c87f2d2ccc8c459adfd45fc31a43afc63256f..4ea2efc1d0d385f63df322933a2154bf329f68c9",
+  "ref": "origin/cursor/git-8934",
+  "head_sha": "4ea2efc1d0d385f63df322933a2154bf329f68c9",
+  "cursor_eligible": true,
+  "cursor_note": "仅推进 origin/cursor/git-8934；origin/main 已由 2026-08-28-r1 推到 083c87f",
+  "instance": "cursor-cursor/git-e2cd-1636-04f8",
+  "models": {
+    "recon": "claude-opus-5-thinking-high-fast",
+    "reviewer": "gpt-5.6-sol-xhigh-fast",
+    "converge_fix": "claude-opus-5-thinking-high-fast"
+  },
+  "commits": [
+    {
+      "sha": "4ea2efc1d0d385f63df322933a2154bf329f68c9",
+      "date": "2026-08-28T03:16:45+00:00",
+      "author": "Cursor Agent",
+      "subject": "docs(review): 关闭 2026-08-28-r1 B1/B2 七条 finding",
+      "files": [
+        {
+          "path": ".agent-workspace/review-ledger/INDEX.md",
+          "added": 4,
+          "deleted": 3
+        },
+        {
+          "path": ".agent-workspace/review-ledger/ledger.jsonl",
+          "added": 7,
+          "deleted": 7
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/report.md",
+          "added": 19,
+          "deleted": 109
+        }
+      ],
+      "added": 30,
+      "deleted": 119
+    },
+    {
+      "sha": "6ad268632641761252e213f2a1e92cd4fee38d49",
+      "date": "2026-08-28T03:15:44+00:00",
+      "author": "Cursor Agent",
+      "subject": "fix(share): 整单原子/配额谓词 + 向导 unknownResult 持久化",
+      "files": [
+        {
+          "path": "mail-vue/src/views/share-admin/ShareCreateWizard.spec.js",
+          "added": 184,
+          "deleted": 0
+        },
+        {
+          "path": "mail-vue/src/views/share-admin/ShareCreateWizard.vue",
+          "added": 255,
+          "deleted": 25
+        },
+        {
+          "path": "mail-worker/src/service/mail-share-service.js",
+          "added": 108,
+          "deleted": 33
+        },
+        {
+          "path": "mail-worker/src/service/mailbox-provision.js",
+          "added": 31,
+          "deleted": 5
+        },
+        {
+          "path": "mail-worker/test/mail-share-emails.spec.js",
+          "added": 274,
+          "deleted": 4
+        }
+      ],
+      "added": 852,
+      "deleted": 67
+    },
+    {
+      "sha": "200daa9ee06bccfc233e83fbb0797da1bf3432cb",
+      "date": "2026-08-28T02:59:21+00:00",
+      "author": "Cursor Agent",
+      "subject": "docs(review): 2026-08-28-r1 归并台账与审查报告",
+      "files": [
+        {
+          "path": ".agent-workspace/review-ledger/INDEX.md",
+          "added": 5,
+          "deleted": 4
+        },
+        {
+          "path": ".agent-workspace/review-ledger/ledger.jsonl",
+          "added": 24,
+          "deleted": 11
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/decisions.json",
+          "added": 681,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/cross-theme.md",
+          "added": 53,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/high-risk-t1.md",
+          "added": 53,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/high-risk-t2.md",
+          "added": 75,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/high-risk-t3.md",
+          "added": 85,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t1-batch-atomicity.md",
+          "added": 26,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t2-quota-predicate.md",
+          "added": 108,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t3-gone-404-ratelimit.md",
+          "added": 46,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t4-spa-gone-overflow.md",
+          "added": 45,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t5-visitor-elmessage.md",
+          "added": 86,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t6-wizard-idempotency.md",
+          "added": 65,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t7-spec-writeback.md",
+          "added": 47,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t8-merge-regression.md",
+          "added": 35,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/t9-ledger.md",
+          "added": 26,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/ui-t3.md",
+          "added": 56,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/ui-t4.md",
+          "added": 32,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/ui-t5.md",
+          "added": 66,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/raw/ui-t6.md",
+          "added": 80,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/report.md",
+          "added": 506,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/state.json",
+          "added": 10,
+          "deleted": 9
+        },
+        {
+          "path": ".gitattributes",
+          "added": 2,
+          "deleted": 0
+        }
+      ],
+      "added": 2212,
+      "deleted": 24
+    },
+    {
+      "sha": "d244fc26daac58139cd004016a081dfc76c9d61e",
+      "date": "2026-08-28T02:28:02+00:00",
+      "author": "Cursor Agent",
+      "subject": "docs(review): 2026-08-28-r1 Phase 0 范围与 L0/L1",
+      "files": [
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/phase0-refs.json",
+          "added": 443,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/reviewer-l0-l1.md",
+          "added": 70,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/scope.json",
+          "added": 652,
+          "deleted": 0
+        },
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/scope.md",
+          "added": 295,
+          "deleted": 0
+        }
+      ],
+      "added": 1460,
+      "deleted": 0
+    },
+    {
+      "sha": "ea1434cab87ca7922468eadc4c0cc659b56f1370",
+      "date": "2026-08-28T02:25:53+00:00",
+      "author": "Cursor Agent",
+      "subject": "docs(review): 2026-08-28-r1 变更聚类侦察产出 themes",
+      "files": [
+        {
+          "path": ".agent-workspace/review-ledger/runs/2026-08-28-r1/themes.md",
+          "added": 343,
+          "deleted": 0
+        }
+      ],
+      "added": 343,
+      "deleted": 0
+    }
+  ],
+  "totals": {
+    "commits": 5,
+    "files": 33,
+    "added": 4897,
+    "deleted": 210
+  },
+  "dir_rollup": {
+    ".agent-workspace/review-ledger": {
+      "added": 4043,
+      "deleted": 143,
+      "files": 27
+    },
+    "mail-vue/src": {
+      "added": 439,
+      "deleted": 25,
+      "files": 2
+    },
+    "mail-worker/src": {
+      "added": 139,
+      "deleted": 38,
+      "files": 2
+    },
+    "mail-worker/test": {
+      "added": 274,
+      "deleted": 4,
+      "files": 1
+    },
+    ".gitattributes": {
+      "added": 2,
+      "deleted": 0,
+      "files": 1
+    }
+  },
+  "criterion_sources": [
+    ".agent-workspace/.archive/2026-08-26/share-link-fullchain/p4-destroyed-entrypoints.md",
+    ".agent-workspace/.archive/2026-08-26/share-link-fullchain/share-fullchain-decision-card.md",
+    ".agent-workspace/.archive/2026-08-26/share-link-fullchain/visitor-share-ui-design.md",
+    "docs/architecture/ADR-mail-share-capability-boundary.md",
+    "docs/architecture/ADR-mailbox-share-capability-extension.md",
+    "docs/architecture/ADR-share-credential-recoverability.md",
+    "docs/specs/mail-share/design.md",
+    "docs/specs/mail-share/requirements.md",
+    "docs/specs/mailbox-share-capability/design.md",
+    "docs/specs/mailbox-share-capability/requirements.md"
+  ],
+  "mechanical_gates": [
+    "ci-workflow: .github/workflows/deploy-cloudflare.yml",
+    "(无 lefthook.yml / .pre-commit-config.yaml / .githooks/)"
+  ],
+  "carryover_open": [
+    {
+      "id": "F-0008",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:52",
+      "failure_mode": "其他入口仍可能对 c.env.domain 做 includes 子串匹配",
+      "theme": "T2 · mailbox-provision SSOT",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0009",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:102",
+      "failure_mode": "前缀黑名单改为大小写不敏感，设置页拒绝集收严且无 AC",
+      "theme": "T2 · mailbox-provision SSOT",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0010",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "mail-worker/src/service/mailbox-provision.js:6",
+      "failure_mode": "mailbox-provision → user-service → account-service 间接环风险",
+      "theme": "T2 · mailbox-provision SSOT",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0012",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/share-admin/index.vue:1",
+      "failure_mode": "列表 status=ACTIVE 服务端筛选 vs 本地翻 EXPIRED 卡片同屏",
+      "theme": "T5 · liveEffectiveStatus",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0013",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/share-admin/use-share-clock.js:1",
+      "failure_mode": "每行 ShareRowActions 各自 useShareClock → N 个 setInterval + 监听",
+      "theme": "T5 · liveEffectiveStatus",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0014",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/email/ShareIndicator.vue:1",
+      "failure_mode": "ShareIndicator 自建 visibility/focus 监听只在 onUnmounted 摘，keep-alive deactivate 残留",
+      "theme": "T5 · liveEffectiveStatus",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0020",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "docs/specs/mail-share/design.md:6",
+      "failure_mode": "front-matter 仍 converged / shipped_commit null，正文已记 shipped 后整改",
+      "theme": "T7 · spec 回写",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0021",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "docs/architecture/ADR-mailbox-share-capability-extension.md:26",
+      "failure_mode": "P4 推翻三轮安全性质未 amend Accepted ADR",
+      "theme": "T7 · spec 回写",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0023",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:98",
+      "failure_mode": "「我已保存」按钮语义像确认已复制，实际再走创建/清结果",
+      "theme": "T4 · 向导关窗去确认",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0024",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "mail-vue/src/views/share-admin/ShareCreateWizard.vue:349",
+      "failure_mode": "创建错误提示远离 emails 输入",
+      "theme": "T4 · 向导关窗去确认",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0025",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/email/ShareDialog.vue:1",
+      "failure_mode": "ShareDialog 状态非徽章，与管理列表不一致",
+      "theme": "T5 · liveEffectiveStatus",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0026",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/share-admin/ShareDetailDrawer.vue:1",
+      "failure_mode": "EXPIRED 抽屉与行操作可做动作不一致",
+      "theme": "T5 · liveEffectiveStatus",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0027",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "mail-vue/src/views/share/index.vue:1220",
+      "failure_mode": "390 视口 header 横向溢出约 8px",
+      "theme": "T6 · 访客收码页视觉",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0029",
+      "severity": "P2",
+      "status": "persists",
+      "anchor": "mail-vue/src/views/share/index.vue:1207",
+      "failure_mode": "终态卡只 text-align 未在视口垂直居中",
+      "theme": "T6 · 访客收码页视觉",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0030",
+      "severity": "suggestion",
+      "status": "persists",
+      "anchor": "mail-worker/src/service/mail-share-service.js:817",
+      "failure_mode": "注释声称同 batch 可见刚插入的 account；T-02 只证回滚与不得消费前序结果",
+      "theme": "T3 · emails[] 创建分享",
+      "opened_at": "2026-08-26"
+    },
+    {
+      "id": "F-0f510dbd",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/router/index.js:70",
+      "failure_mode": "Vue alias 保留地址栏 /S/；_headers 只声明 /s/*，活文档大写路径缺 no-store/no-referrer/noindex/CSP",
+      "theme": "T3 · gone 文档入口",
+      "opened_at": "2026-08-28"
+    },
+    {
+      "id": "F-1e2784c9",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/components/safe-mail/index.vue:5",
+      "failure_mode": "删掉三处 ElMessage 后 share 路由仍经 SafeMailRenderer 拉取 el-button/el-alert",
+      "theme": "T5 · 页内播报",
+      "opened_at": "2026-08-28"
+    },
+    {
+      "id": "F-3e800473",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/share/index.vue:1183",
+      "failure_mode": "overflow-wrap 未覆盖 OTP 卡内无 class 的发件人行，超长 token 被 shell 裁切",
+      "theme": "T4 · SPA 退场与溢出",
+      "opened_at": "2026-08-28"
+    },
+    {
+      "id": "F-618c6bfa",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/share/index.vue:130",
+      "failure_mode": "三处 v-if 与 role=status 同节点挂载；首次前无 live region，重复靠换 key 重建",
+      "theme": "T5 · 页内播报",
+      "opened_at": "2026-08-28"
+    },
+    {
+      "id": "F-6d14486f",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-worker/src/security/share-document-gone.js:69",
+      "failure_mode": "文档 GET 与四个访客读 API 共用 100/60s 桶；桶耗尽后刷新得到空 body 429，SPA 未加载无法退避",
+      "theme": "T3 · gone 文档入口",
+      "opened_at": "2026-08-28"
+    },
+    {
+      "id": "F-bbdc807b",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "tests/e2e/wrangler-e2e.toml:17",
+      "failure_mode": "e2e 未绑定 SHARE_READ_RATE_LIMITER，gone 404 用例只覆盖 fail-open",
+      "theme": "T8 · merge 回归",
+      "opened_at": "2026-08-28"
+    },
+    {
+      "id": "F-f22137e9",
+      "severity": "P2",
+      "status": "open",
+      "anchor": "mail-vue/src/views/share/index.vue:640",
+      "failure_mode": "selectTab 不调用 clearNewMailNotice，旧 Tab 横幅挂到新 Tab",
+      "theme": "T5 · 页内播报",
+      "opened_at": "2026-08-28"
+    }
+  ],
+  "already_reviewed_on_other_ref": {
+    "origin/main 9b6eb80..083c87f": "2026-08-28-r1",
+    "origin/cursor/share-link-fullchain-8a38 ..9b6eb80": "2026-08-26-r1"
+  }
+}

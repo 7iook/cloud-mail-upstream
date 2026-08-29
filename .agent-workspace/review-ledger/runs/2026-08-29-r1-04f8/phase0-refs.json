@@ -1,0 +1,56 @@
+{
+  "now": "2026-08-29T02:15:17.031754+00:00",
+  "to_review": [
+    {
+      "ref": "origin/cursor/git-8934",
+      "sha": "4ea2efc1d0d385f63df322933a2154bf329f68c9",
+      "iso": "2026-08-28 03:16:45 +0000",
+      "age_h": 22.95,
+      "status": "complete",
+      "complete_reasons": [
+        "silent 22.95h >=6h"
+      ],
+      "in_ledger": false,
+      "cursor": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "range": "new-ref merge-base 083c87f2d2cc..4ea2efc1d0d3",
+      "commit_count": 5,
+      "commits": [
+        "4ea2efc1d0d385f63df322933a2154bf329f68c9",
+        "6ad268632641761252e213f2a1e92cd4fee38d49",
+        "200daa9ee06bccfc233e83fbb0797da1bf3432cb",
+        "d244fc26daac58139cd004016a081dfc76c9d61e",
+        "ea1434cab87ca7922468eadc4c0cc659b56f1370"
+      ],
+      "pr": {
+        "number": 8,
+        "state": "OPEN",
+        "draft": true
+      }
+    }
+  ],
+  "skipped": [
+    {
+      "ref": "cursor/git-e2cd",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "status": "skipped_in_progress",
+      "complete_reasons": [],
+      "note": "本轮交付分支 · unique vs origin/main = 0 · 游标冻结"
+    }
+  ],
+  "empty_complete": [
+    {
+      "ref": "origin/main",
+      "sha": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "status": "complete",
+      "complete_reasons": [
+        "silent 42.9h >=6h"
+      ],
+      "in_ledger": true,
+      "cursor": "083c87f2d2ccc8c459adfd45fc31a43afc63256f",
+      "range": "083c87f2d2cc..083c87f2d2cc (2026-08-28-r1 already advanced)",
+      "commit_count": 0,
+      "note": "9b6eb80..083c87f 已在 2026-08-28-r1 审过；台账在 git-8934 未合入 main"
+    }
+  ],
+  "cursors_adopted_from": "origin/cursor/git-8934:.agent-workspace/review-ledger/state.json"
+}
